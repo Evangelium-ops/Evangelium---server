@@ -48,6 +48,8 @@ public final class IntraRegion {
     public static final int MIN_RANDOM_TICK_SPEED = Integer.getInteger("shreddedpaper.intraRegionMinRandomTickSpeed", 20);
     /** Fewer chunk-local block entities than this in a region: they tick on the owner alone (each one is a few microseconds). */
     public static final int MIN_BLOCK_ENTITIES = Integer.getInteger("shreddedpaper.intraRegionMinBlockEntities", 128);
+    /** Fewer items and experience orbs than this in a region: they tick on the owner alone. */
+    public static final int MIN_ENTITIES = Integer.getInteger("shreddedpaper.intraRegionMinEntities", 128);
     /** Fewer mobs with a sensor due than this: they are sensed on the owner alone. */
     public static final int MIN_READ_ONLY_ITEMS = Integer.getInteger("shreddedpaper.intraRegionMinSensing", 8);
 
@@ -81,6 +83,15 @@ public final class IntraRegion {
 
     public static boolean isChunkLocal(BlockEntityType<?> type) {
         return POOL != null && type != null && CHUNK_LOCAL.contains(type);
+    }
+
+    /**
+     * Entities that only reach a block or so: items (they merge with items next to them) and experience orbs (they reach a player who is
+     * touching them). Not when riding or ridden (the vehicle ticks its passengers).
+     */
+    public static boolean isChunkLocal(net.minecraft.world.entity.Entity entity) {
+        return POOL != null && (entity instanceof net.minecraft.world.entity.item.ItemEntity || entity instanceof net.minecraft.world.entity.ExperienceOrb)
+                && !entity.isPassenger() && !entity.isVehicle();
     }
 
     public static boolean parallelRandomTicks(int randomTickSpeed) {

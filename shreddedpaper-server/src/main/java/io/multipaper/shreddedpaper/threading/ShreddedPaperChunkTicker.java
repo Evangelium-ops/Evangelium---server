@@ -211,7 +211,23 @@ public class ShreddedPaperChunkTicker {
                 IntraRegion.forEachReadOnly(level, region, sensing, ShreddedPaperChunkTicker::presense);
             }
 
-            region.forEachTickingEntity(ShreddedPaperEntityTicker::tickEntity);
+            // Knowledge - items and experience orbs only reach a block or so (merging, being touched): they tick after the others,
+            // chunks at least three apart on several threads, when a region has many of them
+            final List<Entity> chunkLocalEntities = IntraRegion.enabled() ? new ArrayList<>() : null;
+            region.forEachTickingEntity(entity -> {
+                if (chunkLocalEntities != null && IntraRegion.isChunkLocal(entity)) {
+                    chunkLocalEntities.add(entity);
+                } else {
+                    ShreddedPaperEntityTicker.tickEntity(entity);
+                }
+            });
+            if (chunkLocalEntities != null && !chunkLocalEntities.isEmpty()) {
+                if (chunkLocalEntities.size() < IntraRegion.MIN_ENTITIES) {
+                    chunkLocalEntities.forEach(ShreddedPaperEntityTicker::tickEntity);
+                } else {
+                    IntraRegion.forEachChunkLocal(level, region, chunkLocalEntities, entity -> entity.chunkPosition().toLong(), ShreddedPaperEntityTicker::tickEntity);
+                }
+            }
 
             if (!ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
 
