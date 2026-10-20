@@ -103,8 +103,11 @@
                  }
                  // Paper end - avoid issues with certain tasks not processing during sleep
                  this.server.spark.executeMainThreadTasks(); // Paper - spark
-@@ -1789,16 +_,20 @@
+@@ -1787,18 +_,23 @@
+     public final io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList entitySchedulerTickList = new io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList(); // Paper - optimise Folia entity scheduler
+ 
      protected void tickChildren(BooleanSupplier hasTimeLeft) {
++        final long knowledgeTickStart = System.nanoTime(); // Knowledge - tick timings
          ProfilerFiller profilerFiller = Profiler.get();
          this.getPlayerList().getPlayers().forEach(serverPlayer1 -> serverPlayer1.connection.suspendFlushing());
 +        MinecraftServer.isBukkitSchedulerHearbeat = true; // ShreddedPaper
@@ -132,7 +135,7 @@
          // Paper end - optimise Folia entity scheduler
          io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.ADVENTURE_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
          io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.DIALOG_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
-@@ -1834,7 +_,23 @@
+@@ -1834,7 +_,25 @@
              }
          }
  
@@ -151,23 +154,27 @@
 +        }
 +        // ShreddedPaper end
 +
++        final long knowledgeWorldsStart = System.nanoTime(); // Knowledge - tick timings
++        io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.MAIN_BEFORE_WORLDS, knowledgeWorldsStart - knowledgeTickStart); // Knowledge - tick timings
          this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
 +        List<CompletableFuture<Void>> futures = new ArrayList<>(); // ShreddedPaper - tick worlds async
          for (ServerLevel serverLevel : this.getAllLevels()) {
              serverLevel.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
              serverLevel.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
-@@ -1853,7 +_,9 @@
+@@ -1853,7 +_,11 @@
              profilerFiller.push("tick");
  
              try {
 -                serverLevel.tick(hasTimeLeft);
++                final long knowledgeWorldStart = System.nanoTime(); // Knowledge - tick timings
 +                futures.add(CompletableFuture.supplyAsync(() -> serverLevel.tickAsync(hasTimeLeft), serverLevel.levelThread).thenCompose(v -> v).thenRun(() -> { // ShreddedPaper - tick worlds async
++                    io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.WORLD, System.nanoTime() - knowledgeWorldStart); // Knowledge - tick timings
 +                    serverLevel.explosionDensityCache.clear(); // Paper - Optimize explosions // ShreddedPaper - moved up from below
 +                })); // ShreddedPaper
              } catch (Throwable var7) {
                  CrashReport crashReport = CrashReport.forThrowable(var7, "Exception ticking world");
                  serverLevel.fillReportDetails(crashReport);
-@@ -1862,12 +_,20 @@
+@@ -1862,12 +_,22 @@
  
              profilerFiller.pop();
              profilerFiller.pop();
@@ -185,13 +192,15 @@
 +            future.join();
 +        }
 +        // ShreddedPaper end - tick worlds async
++        final long knowledgeWorldsEnd = System.nanoTime(); // Knowledge - tick timings
++        io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.WAIT_FOR_WORLDS, knowledgeWorldsEnd - knowledgeWorldsStart); // Knowledge - tick timings
 +
 +        // profilerFiller.popPush("connection"); // ShreddedPaper - move up
 +        // this.tickConnection(); // ShreddedPaper - move up
          profilerFiller.popPush("players");
          this.playerList.tick();
          profilerFiller.popPush("debugSubscribers");
-@@ -1887,6 +_,7 @@
+@@ -1887,11 +_,17 @@
  
          for (ServerPlayer serverPlayer : this.playerList.getPlayers()) {
              serverPlayer.connection.chunkSender.sendNextChunks(serverPlayer);
@@ -199,3 +208,13 @@
              serverPlayer.connection.resumeFlushing();
          }
  
+         profilerFiller.pop();
+         this.serverActivityMonitor.tick();
++        // Knowledge start - tick timings
++        final long knowledgeTickEnd = System.nanoTime();
++        io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.MAIN_AFTER_WORLDS, knowledgeTickEnd - knowledgeWorldsEnd);
++        io.multipaper.shreddedpaper.util.TickTimings.endTick(knowledgeTickEnd - knowledgeTickStart);
++        // Knowledge end - tick timings
+     }
+ 
+     // Paper start - per world respawn data - read "server global" respawn data from overworld dimension reference

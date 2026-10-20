@@ -5,6 +5,7 @@ import com.google.common.collect.Lists;
 import com.mojang.logging.LogUtils;
 import io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration;
 import io.multipaper.shreddedpaper.region.RegionPos;
+import io.multipaper.shreddedpaper.util.TickTimings;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
@@ -40,19 +41,38 @@ public class ShreddedPaperChunkTicker {
 
     public CompletableFuture<Void> tickChunks(final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         ServerLevel level = this.serverChunkCache.chunkMap.level;
+        final long timingsStart = System.nanoTime(); // Knowledge - tick timings
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        level.chunkSource.tickingRegions.forEach(
-                region -> futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState))
-        );
+        // Knowledge - start the busiest regions first: a region waits for its neighbours' locks, so a heavy region queued behind light
+        // neighbours stretches the whole tick by their time
+        List<LevelChunkRegion> regions = new ArrayList<>();
+        level.chunkSource.tickingRegions.forEach(regions::add);
+        if (!Boolean.getBoolean("shreddedpaper.knowledge.noBusiestFirst")) regions.sort((a, b) -> Long.compare(b.lastTickNanos, a.lastTickNanos)); // switch for A/B tests
+        for (LevelChunkRegion region : regions) {
+            futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState));
+        }
 
         CompletableFuture<Void> future = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+        if (TickTimings.enabled()) { // Knowledge - tick timings
+            final long regionsStart = timingsStart;
+            future = future.thenRun(() -> { TickTimings.add(TickTimings.Phase.REGIONS_WALL, System.nanoTime() - regionsStart); TickTimings.regionsDone(); });
+        }
 
-        if (ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) future = future.thenCompose(v -> this.processTrackQueueInParallel(level));
+        if (ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) future = future.thenCompose(v -> timed(TickTimings.Phase.TRACK, () -> this.processTrackQueueInParallel(level)));
 
-        if (ShreddedPaperConfiguration.get().optimizations.flushQueueInParallel) future = future.thenCompose(v -> this.flushQueueInParallel(level));
+        if (ShreddedPaperConfiguration.get().optimizations.flushQueueInParallel) future = future.thenCompose(v -> timed(TickTimings.Phase.FLUSH, () -> this.flushQueueInParallel(level)));
 
         return future;
+    }
+
+    /** Knowledge - tick timings: the time from the start of a phase until its future completes. */
+    private static CompletableFuture<Void> timed(TickTimings.Phase phase, java.util.function.Supplier<CompletableFuture<Void>> step) {
+        if (!TickTimings.enabled()) {
+            return step.get();
+        }
+        final long start = System.nanoTime();
+        return step.get().thenRun(() -> TickTimings.add(phase, System.nanoTime() - start));
     }
 
     /** processTrackQueue has been renamed to newTrackerTick */
@@ -93,7 +113,18 @@ public class ShreddedPaperChunkTicker {
     }
 
     private CompletableFuture<Void> tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
-        return level.chunkScheduler.schedule(region.getRegionPos(), () -> this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState)).exceptionally(e -> {
+        final long scheduledAt = System.nanoTime(); // Knowledge - tick timings
+        return level.chunkScheduler.schedule(region.getRegionPos(), () -> {
+            final long started = System.nanoTime();
+            TickTimings.add(TickTimings.Phase.REGION_LOCK_WAIT, started - scheduledAt);
+            try {
+                this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
+            } finally {
+                final long took = System.nanoTime() - started;
+                region.lastTickNanos = took;
+                TickTimings.region(took);
+            }
+        }).exceptionally(e -> {
             LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
             MinecraftServer.getServer().moonrise$setChunkSystemCrash(new RuntimeException("Ticking thread crash while ticking region " + region.getRegionPos(), e));
             return null;
