@@ -39,6 +39,7 @@ public class LevelChunkRegion {
     private final PrioritisedTaskQueue internalTasks = new PrioritisedTaskQueue(); // Read-only tasks
     private final ObjectOpenHashSet<ServerPlayer> players = new ObjectOpenHashSet<>();
     public final LongLinkedOpenHashSet unloadQueue = new LongLinkedOpenHashSet();
+    public volatile long lastTickNanos; // Knowledge - how long the last tick of this region took, busiest regions are started first
     public final List<TickingBlockEntity> tickingBlockEntities = new ReferenceArrayList<>();
     public final List<TickingBlockEntity> pendingBlockEntityTickers = new ReferenceArrayList<>();
     private final ObjectOpenHashSet<Mob> navigatingMobs = new ObjectOpenHashSet<>();
