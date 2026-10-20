@@ -38,6 +38,32 @@ public class ShreddedPaperRegionLocker {
     private final ThreadLocal<Set<RegionPos>> readOnlyLocks = ThreadLocal.withInitial(ObjectOpenHashSet::new);
     private final ThreadLocal<Set<RegionPos>> writeLocks = ThreadLocal.withInitial(ObjectOpenHashSet::new);
     private final ThreadLocal<Set<RegionPos>> unmodifiableLocalLocks = ThreadLocal.withInitial(() -> Collections.unmodifiableSet(localLocks.get()));
+    private final ThreadLocal<Thread> borrowedFrom = new ThreadLocal<>(); // Knowledge - intra-region helpers
+
+    // Knowledge start - intra-region helpers
+    /** The current thread's locks, to be lent to a helper thread while this thread waits for it inside the same region tick. */
+    public record Loan(Set<RegionPos> local, Set<RegionPos> write, Set<RegionPos> readOnly, Thread owner) {
+    }
+
+    public Loan lend() {
+        return new Loan(Set.copyOf(this.localLocks.get()), Set.copyOf(this.writeLocks.get()), Set.copyOf(this.readOnlyLocks.get()), Thread.currentThread());
+    }
+
+    /** The helper acts as the owner of the lent regions: ownership checks pass, and a nested lock of one of them succeeds. */
+    public void borrow(Loan loan) {
+        this.localLocks.get().addAll(loan.local());
+        this.writeLocks.get().addAll(loan.write());
+        this.readOnlyLocks.get().addAll(loan.readOnly());
+        this.borrowedFrom.set(loan.owner());
+    }
+
+    public void giveBack(Loan loan) {
+        this.localLocks.get().removeAll(loan.local());
+        this.writeLocks.get().removeAll(loan.write());
+        this.readOnlyLocks.get().removeAll(loan.readOnly());
+        this.borrowedFrom.remove();
+    }
+    // Knowledge end - intra-region helpers
 
     /**
      * Checks if the current thread holds a read lock for the given region
@@ -251,7 +277,7 @@ public class ShreddedPaperRegionLocker {
                 }
             });
 
-            return lockedRegion.owner() == this.owner();
+            return lockedRegion.owner() == this.owner() || lockedRegion.owner() == ShreddedPaperRegionLocker.this.borrowedFrom.get(); // Knowledge - a helper re-enters its lender's regions
         }
 
         public Collection<RegionPos> lockedRegions() {

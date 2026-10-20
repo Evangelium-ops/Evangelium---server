@@ -1,5 +1,15 @@
 --- a/net/minecraft/world/ticks/LevelTicks.java
 +++ b/net/minecraft/world/ticks/LevelTicks.java
+@@ -148,7 +_,9 @@
+     }
+ 
+     private void updateContainerScheduling(ScheduledTick<T> tick) {
++        synchronized (this.nextTickForContainer) { // Knowledge - region-wide map, written by intra-region helpers of different chunks
+         this.nextTickForContainer.put(ChunkPos.asLong(tick.pos()), tick.triggerTick());
++        } // Knowledge
+     }
+ 
+     private void drainFromCurrentContainer(Queue<LevelChunkTicks<T>> containersToTick, LevelChunkTicks<T> levelChunkTicks, long gameTime, int maxAllowedTicks) {
 @@ -285,4 +_,10 @@
      interface PosAndContainerConsumer<T> {
          void accept(long pos, LevelChunkTicks<T> container);

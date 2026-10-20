@@ -168,7 +168,7 @@
              if (previous != null) {
                  return previous.getHandle();
              }
-@@ -1433,15 +_,25 @@
+@@ -1433,28 +_,46 @@
      }
  
      public void addBlockEntityTicker(TickingBlockEntity ticker) {
@@ -199,8 +199,9 @@
  
          // Spigot start
          boolean runsNormally = this.tickRateManager().runsNormally();
-@@ -1449,8 +_,8 @@
+ 
          int tickedEntities = 0; // Paper - rewrite chunk system
++        java.util.List<TickingBlockEntity> knowledgePhased = null; // Knowledge - chunk-local block entities, ticked on several threads below
          var toRemove = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<TickingBlockEntity>(); // Paper - Fix MC-117075; use removeAll
          toRemove.add(null); // Paper - Fix MC-117075
 -        for (this.tileTickPosition = 0; this.tileTickPosition < this.blockEntityTickers.size(); this.tileTickPosition++) { // Paper - Disable tick limiters
@@ -210,11 +211,31 @@
              // Spigot end
              if (tickingBlockEntity.isRemoved()) {
                  toRemove.add(tickingBlockEntity); // Paper - Fix MC-117075; use removeAll
-@@ -1463,7 +_,7 @@
+             } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos())) {
++                // Knowledge start - block entities that only reach a block or two are ticked after this loop, chunks at least three apart on several threads
++                if (io.multipaper.shreddedpaper.threading.IntraRegion.isChunkLocal(tickingBlockEntity.knowledgeBlockEntityType())) {
++                    if (knowledgePhased == null) knowledgePhased = new java.util.ArrayList<>();
++                    knowledgePhased.add(tickingBlockEntity);
++                    continue;
++                }
++                // Knowledge end
+                 tickingBlockEntity.tick();
+                 // Paper start - rewrite chunk system
+                 if ((++tickedEntities & 7) == 0) {
+@@ -1463,7 +_,16 @@
                  // Paper end - rewrite chunk system
              }
          }
 -        this.blockEntityTickers.removeAll(toRemove); // Paper - Fix MC-117075
++        // Knowledge start - the chunk-local block entities, several threads at once
++        if (knowledgePhased != null && knowledgePhased.size() < io.multipaper.shreddedpaper.threading.IntraRegion.MIN_BLOCK_ENTITIES) {
++            for (TickingBlockEntity t : knowledgePhased) t.tick(); // few: not worth waking a helper
++        } else if (knowledgePhased != null) {
++            io.multipaper.shreddedpaper.threading.IntraRegion.forEachChunkLocal((net.minecraft.server.level.ServerLevel) (Object) this, io.multipaper.shreddedpaper.threading.ShreddedPaperChunkTicker.getCurrentlyTickingRegion(),
++                    knowledgePhased, t -> net.minecraft.world.level.ChunkPos.asLong(t.getPos()), TickingBlockEntity::tick);
++            ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel)(Level)(Object)this).moonrise$midTickTasks();
++        }
++        // Knowledge end
 +        blockEntityTickers.removeAll(toRemove); // Paper - Fix MC-117075 // ShreddedPaper - handle block entities ourselves
  
          this.tickingBlockEntities = false;

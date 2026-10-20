@@ -69,3 +69,27 @@
                      }
                  }
                  server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
+@@ -997,6 +_,11 @@
+         }
+ 
+         @Override
++        public BlockEntityType<?> knowledgeBlockEntityType() { // Knowledge
++            return this.blockEntity.getType();
++        }
++
++        @Override
+         public String toString() {
+             return "Level ticker for " + this.getType() + "@" + this.getPos();
+         }
+@@ -1042,6 +_,11 @@
+         @Override
+         public String getType() {
+             return this.ticker.getType();
++        }
++
++        @Override
++        public BlockEntityType<?> knowledgeBlockEntityType() { // Knowledge
++            return this.ticker.knowledgeBlockEntityType();
+         }
+ 
+         @Override
