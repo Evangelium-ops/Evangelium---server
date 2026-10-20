@@ -266,21 +266,12 @@
          }
      }
  
-@@ -821,14 +_,36 @@
-             super.doRunTask(task);
-         }
+@@ -823,12 +_,27 @@
  
-+        private volatile long knowledgeLastRegionScan; // Knowledge
-+        private static final boolean NO_POLL_THROTTLE = Boolean.getBoolean("shreddedpaper.knowledge.noPollThrottle"); // Knowledge - switch for A/B tests
-+
          @Override
          public boolean pollTask() {
 +            // ShreddedPaper start - run all region tasks cause the worker threads might be deadlocked and not get to them
-+            // Knowledge - this walks every loaded region (copying the list, a read lock each time) and waiting threads call it in a tight
-+            // loop; as a fallback for stuck region tasks once per millisecond is enough (always when shutting down)
-+            final long knowledgeNow = System.nanoTime();
-+            if ((!MinecraftServer.getServer().executingMidTickTasks.get() && TickThread.isTickThread() && (knowledgeNow - this.knowledgeLastRegionScan >= 1_000_000L || NO_POLL_THROTTLE)) || TickThread.isShutdownThread()) {
-+                this.knowledgeLastRegionScan = knowledgeNow;
++            if ((!MinecraftServer.getServer().executingMidTickTasks.get() && TickThread.isTickThread()) || TickThread.isShutdownThread()) {
 +                level.getChunkSource().tickingRegions.forEach(region -> {
 +                    if (TickThread.isShutdownThread()) {
 +                        // We're trying to shut down the server, just execute all the tasks
