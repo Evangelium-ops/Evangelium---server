@@ -18,7 +18,7 @@ public final class TickTimings {
     public static final int INTERVAL = Integer.getInteger("shreddedpaper.timings", 0);
 
     public enum Phase {
-        TICK, MAIN_BEFORE_WORLDS, WAIT_FOR_WORLDS, MAIN_AFTER_WORLDS, WORLD, REGIONS_WALL, REGION_SUM, REGION_LARGEST, REGION_LOCK_WAIT, TRACK, FLUSH
+        TICK, MAIN_BEFORE_WORLDS, WAIT_FOR_WORLDS, MAIN_AFTER_WORLDS, WORLD, REGIONS_WALL, REGION_SUM, REGION_LARGEST, REGION_LOCK_WAIT, TRACK, FLUSH, PHASED
     }
 
     private static final AtomicLong[] TOTAL = new AtomicLong[Phase.values().length];
@@ -26,6 +26,8 @@ public final class TickTimings {
     private static final AtomicLong REGIONS = new AtomicLong();
     private static final AtomicLong LARGEST_THIS_TICK = new AtomicLong();
     private static long ticks;
+    public static final AtomicLong OWNER_CHUNKS = new AtomicLong();
+    public static final AtomicLong HELPER_CHUNKS = new AtomicLong();
 
     static {
         for (int i = 0; i < TOTAL.length; i++) {
@@ -84,6 +86,7 @@ public final class TickTimings {
                     .append(String.format("%.2f/%.1f", total / 1e6 / INTERVAL, max / 1e6));
         }
         line.append(" regions/tick ").append(String.format("%.1f", REGIONS.getAndSet(0) / (double) INTERVAL));
+        line.append(" chunks by owner/helpers ").append(OWNER_CHUNKS.getAndSet(0)).append('/').append(HELPER_CHUNKS.getAndSet(0));
         LOGGER.info(line.toString());
     }
 }

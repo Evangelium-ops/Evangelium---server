@@ -1,0 +1,39 @@
+--- a/net/minecraft/world/entity/ai/Brain.java
++++ b/net/minecraft/world/entity/ai/Brain.java
+@@ -406,10 +_,36 @@
+ 
+     public void tick(ServerLevel level, E entity) {
+         this.forgetOutdatedMemories();
++        this.knowledgeLastTick = level.getGameTime(); // Knowledge
+         this.tickSensors(level, entity);
+         this.startEachNonRunningBehavior(level, entity);
+         this.tickEachRunningBehavior(level, entity);
+     }
++
++    // Knowledge start - read-only sensing ahead of the brain tick (see Sensor#knowledgePrecompute)
++    public long knowledgeLastTick = Long.MIN_VALUE;
++
++    /** Whether this brain ticked in the previous tick and has a sensor that fires on its next tick. */
++    public boolean knowledgeWantsPresensing(long gameTime) {
++        if (this.knowledgeLastTick != gameTime - 1) {
++            return false;
++        }
++        for (Sensor<? super E> sensor : this.sensors.values()) {
++            if (sensor.knowledgeDueNext()) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    public void knowledgePresense(ServerLevel level, E entity) {
++        for (Sensor<? super E> sensor : this.sensors.values()) {
++            if (sensor.knowledgeDueNext()) {
++                sensor.knowledgePrecompute(level, entity);
++            }
++        }
++    }
++    // Knowledge end
+ 
+     private void tickSensors(ServerLevel level, E brainHolder) {
+         for (Sensor<? super E> sensor : this.sensors.values()) {

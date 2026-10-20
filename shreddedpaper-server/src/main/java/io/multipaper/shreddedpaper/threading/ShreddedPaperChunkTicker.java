@@ -124,6 +124,25 @@ public class ShreddedPaperChunkTicker {
         });
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void presense(net.minecraft.world.entity.LivingEntity living) {
+        ((net.minecraft.world.entity.ai.Brain) living.getBrain()).knowledgePresense((ServerLevel) living.level(), living);
+    }
+
+    /** Knowledge - the region the current thread is ticking (null outside a region tick). */
+    public static LevelChunkRegion getCurrentlyTickingRegion() {
+        return currentlyTickingRegion.get();
+    }
+
+    /** Knowledge - intra-region helpers work for the region of the thread they help. */
+    static void setCurrentlyTickingRegion(LevelChunkRegion region) {
+        if (region == null) {
+            currentlyTickingRegion.remove();
+        } else {
+            currentlyTickingRegion.set(region);
+        }
+    }
+
     public static boolean isCurrentlyTickingRegion(Level level, RegionPos regionPos) {
         LevelChunkRegion region = currentlyTickingRegion.get();
         return region != null && level.equals(region.getLevel()) && regionPos.equals(region.getRegionPos());
@@ -158,11 +177,38 @@ public class ShreddedPaperChunkTicker {
                 level.blockTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickBlock);
                 level.fluidTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickFluid);
 
-                region.forEach(chunk -> this._tickChunk(region, level, chunk, timeInhabited, filteredSpawningCategories, spawnState));
+                // Knowledge - bookkeeping and mob spawning stay on this thread; random ticks, snow and ice reach about one chunk and run in
+                // chunks at least three apart on several threads when the random tick speed makes it worth it (IntraRegion)
+                final List<LevelChunk> randomTickChunks = new ArrayList<>();
+                region.forEach(chunk -> {
+                    if (this._tickChunk(region, level, chunk, timeInhabited, filteredSpawningCategories, spawnState)) {
+                        randomTickChunks.add(chunk);
+                    }
+                });
+                final int randomTickSpeed = level.getGameRules().get(net.minecraft.world.level.gamerules.GameRules.RANDOM_TICK_SPEED);
+                if (IntraRegion.parallelRandomTicks(randomTickSpeed)) {
+                    IntraRegion.forEachChunkLocal(level, region, randomTickChunks, chunk -> chunk.getPos().toLong(), chunk -> level.tickChunk(chunk, randomTickSpeed));
+                } else {
+                    for (LevelChunk chunk : randomTickChunks) {
+                        level.tickChunk(chunk, randomTickSpeed);
+                    }
+                }
 
                 level.runBlockEvents(region);
 
                 level.handlingTickThreadLocal.set(false);
+            }
+
+            // Knowledge - mob sensors that fire this tick run first, read-only, on several threads (see IntraRegion#forEachReadOnly)
+            if (IntraRegion.enabled()) {
+                final long gameTime = level.getGameTime();
+                final List<net.minecraft.world.entity.LivingEntity> sensing = new ArrayList<>();
+                region.forEachTickingEntity(entity -> {
+                    if (entity instanceof net.minecraft.world.entity.LivingEntity living && !living.isRemoved() && living.getBrain().knowledgeWantsPresensing(gameTime)) {
+                        sensing.add(living);
+                    }
+                });
+                IntraRegion.forEachReadOnly(level, region, sensing, ShreddedPaperChunkTicker::presense);
             }
 
             region.forEachTickingEntity(ShreddedPaperEntityTicker::tickEntity);
@@ -185,7 +231,8 @@ public class ShreddedPaperChunkTicker {
         }
     }
 
-    private void _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    /** Knowledge - returns whether the chunk gets random ticks (they run afterwards, see _tickRegion). */
+    private boolean _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         if (levelChunk.moonrise$getChunkHolder().vanillaChunkHolder.hasChangesToBroadcast())
             ShreddedPaperChangesBroadcaster.add(levelChunk.moonrise$getChunkHolder().vanillaChunkHolder); // ShreddedPaper
 
@@ -196,15 +243,14 @@ public class ShreddedPaperChunkTicker {
         // ShreddedPaper end - clear chunk packet cache
 
         if (!levelChunk.moonrise$getChunkHolder().isEntityTickingReady()) {
-            return;
+            return false;
         }
 
         if (spawnState != null && levelChunkRegion.isPlayerTickingRequested(levelChunk.getPos())) {
             this._tickSpawningChunk(world, levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
         }
 
-        final int randomTickSpeed = world.getGameRules().get(net.minecraft.world.level.gamerules.GameRules.RANDOM_TICK_SPEED);
-        world.tickChunk(levelChunk, randomTickSpeed);
+        return true;
     }
 
     private void _tickSpawningChunk(final ServerLevel world, final LevelChunk levelChunk, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
