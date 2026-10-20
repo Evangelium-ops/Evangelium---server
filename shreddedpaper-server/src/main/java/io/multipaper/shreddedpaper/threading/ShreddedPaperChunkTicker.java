@@ -44,14 +44,9 @@ public class ShreddedPaperChunkTicker {
         final long timingsStart = System.nanoTime(); // Knowledge - tick timings
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        // Knowledge - start the busiest regions first: a region waits for its neighbours' locks, so a heavy region queued behind light
-        // neighbours stretches the whole tick by their time
-        List<LevelChunkRegion> regions = new ArrayList<>();
-        level.chunkSource.tickingRegions.forEach(regions::add);
-        if (!Boolean.getBoolean("shreddedpaper.knowledge.noBusiestFirst")) regions.sort((a, b) -> Long.compare(b.lastTickNanos, a.lastTickNanos)); // switch for A/B tests
-        for (LevelChunkRegion region : regions) {
-            futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState));
-        }
+        level.chunkSource.tickingRegions.forEach(
+                region -> futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState))
+        );
 
         CompletableFuture<Void> future = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
         if (TickTimings.enabled()) { // Knowledge - tick timings
@@ -120,9 +115,7 @@ public class ShreddedPaperChunkTicker {
             try {
                 this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
             } finally {
-                final long took = System.nanoTime() - started;
-                region.lastTickNanos = took;
-                TickTimings.region(took);
+                TickTimings.region(System.nanoTime() - started);
             }
         }).exceptionally(e -> {
             LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
