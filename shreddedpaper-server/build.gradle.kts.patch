@@ -65,7 +65,7 @@
 -            "Brand-Name" to "Purpur", // Purpur
 +            "Specification-Vendor" to "ShreddedPaper Team", // Purpur // ShreddedPaper
 +            "Brand-Id" to "shreddedpaper:shreddedpaper", // Purpur // ShreddedPaper
-+            "Brand-Name" to "ShreddedPaper", // Purpur // ShreddedPaper
++            "Brand-Name" to "Project Evangelium", // Purpur // ShreddedPaper // Knowledge
              "Build-Number" to (build ?: ""),
              "Build-Time" to buildTime.toString(),
              "Git-Branch" to gitBranch,
