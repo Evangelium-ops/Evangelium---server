@@ -34,7 +34,7 @@
      private ServerPlayer.@Nullable RespawnConfig respawnConfig;
      private final TextFilter textFilter;
      private boolean textFilteringEnabled;
-@@ -405,6 +_,35 @@
+@@ -405,6 +_,49 @@
      private int containerUpdateDelay; // Paper - Configurable container update tick rate
      public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
      public int patrolSpawnDelay; // Paper - Pillager patrol spawn settings and per player options
@@ -44,6 +44,20 @@
 +    public int knowledgeWaypointTick = Integer.MIN_VALUE / 2;
 +    public boolean knowledgeWaypointPending;
 +    public int knowledgeOwnWaypointTick = Integer.MIN_VALUE / 2;
++    public int knowledgeStatTicks, knowledgeStatAlive, knowledgeStatCrouch, knowledgeStatAwake;
++
++    /** Awards the per-tick statistics counted since the last time (see tick). */
++    public void knowledgeFlushStats() {
++        int ticks = this.knowledgeStatTicks;
++        if (ticks > 0) {
++            this.awardStat(Stats.PLAY_TIME, ticks);
++            this.awardStat(Stats.TOTAL_WORLD_TIME, ticks);
++        }
++        if (this.knowledgeStatAlive > 0) this.awardStat(Stats.TIME_SINCE_DEATH, this.knowledgeStatAlive);
++        if (this.knowledgeStatCrouch > 0) this.awardStat(Stats.CROUCH_TIME, this.knowledgeStatCrouch);
++        if (this.knowledgeStatAwake > 0) this.awardStat(Stats.TIME_SINCE_REST, this.knowledgeStatAwake);
++        this.knowledgeStatTicks = this.knowledgeStatAlive = this.knowledgeStatCrouch = this.knowledgeStatAwake = 0;
++    }
 +    public boolean knowledgeOwnWaypointPending;
 +
 +    /** This player's own waypoint (where the others see them), at most every few ticks like the connections below. */
@@ -108,6 +122,36 @@
                  if (this.wantsToStopRiding()) {
                      this.setCamera(this);
                  }
+@@ -822,19 +_,16 @@
+                 }
+ 
+                 this.foodData.tick(this);
+-                this.awardStat(Stats.PLAY_TIME);
+-                this.awardStat(Stats.TOTAL_WORLD_TIME);
+-                if (this.isAlive()) {
+-                    this.awardStat(Stats.TIME_SINCE_DEATH);
+-                }
+-
+-                if (this.isDiscrete()) {
+-                    this.awardStat(Stats.CROUCH_TIME);
+-                }
+-
+-                if (!this.isSleeping()) {
+-                    this.awardStat(Stats.TIME_SINCE_REST);
+-                }
++                // Knowledge start - the per-tick statistics are counted here and awarded once a second (same totals): each award
++                // is a stat update plus a Bukkit event, five of them every tick for every player
++                this.knowledgeStatTicks++;
++                if (this.isAlive()) this.knowledgeStatAlive++;
++                if (this.isDiscrete()) this.knowledgeStatCrouch++;
++                if (!this.isSleeping()) this.knowledgeStatAwake++;
++                if (this.knowledgeStatTicks >= 20) {
++                    this.knowledgeFlushStats();
++                }
++                // Knowledge end
+             }
+ 
+             for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
 @@ -1352,39 +_,43 @@
      public record RespawnResult(TeleportTransition transition, boolean isBedSpawn, boolean isAnchorSpawn) {
      }
@@ -262,6 +306,16 @@
      }
  
      public void showEndCredits() {
+@@ -2095,6 +_,9 @@
+ 
+     @Override
+     public void resetStat(Stat<?> stat) {
++        // Knowledge - counts waiting to be awarded (see knowledgeFlushStats) must not land on top of a reset
++        if (stat == Stats.CUSTOM.get(Stats.TIME_SINCE_DEATH)) this.knowledgeStatAlive = 0;
++        if (stat == Stats.CUSTOM.get(Stats.TIME_SINCE_REST)) this.knowledgeStatAwake = 0;
+         this.stats.setValue(this, stat, 0);
+         this.level().getCraftServer().getScoreboardManager().forAllObjectives(stat, this, ScoreAccess::reset); // CraftBukkit - Get our scores instead
+     }
 @@ -2655,6 +_,7 @@
      }
  
