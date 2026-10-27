@@ -158,3 +158,17 @@
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.deltaMovement = deltaMovement;
              } // Paper - detailed watchdog information
+@@ -5116,11 +_,12 @@
+             this.levelCallback.onMove();
+             if (!this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) {
+                 if (this instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
++                    if (this instanceof ServerPlayer serverPlayer) serverPlayer.knowledgeUpdateOwnWaypoint(); else // Knowledge - see ServerPlayer
+                     serverLevel.getWaypointManager().updateWaypoint(waypointTransmitter);
+                 }
+ 
+                 if (this instanceof ServerPlayer serverPlayer && serverPlayer.isReceivingWaypoints() && serverPlayer.connection != null) {
+-                    serverLevel.getWaypointManager().updatePlayer(serverPlayer);
++                    serverPlayer.knowledgeUpdateWaypoints(); // Knowledge - at most every few ticks, see ServerPlayer
+                 }
+             }
+             // Paper start - Fix MC-44654

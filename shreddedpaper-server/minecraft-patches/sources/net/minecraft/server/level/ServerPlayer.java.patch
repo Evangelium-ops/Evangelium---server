@@ -34,7 +34,7 @@
      private ServerPlayer.@Nullable RespawnConfig respawnConfig;
      private final TextFilter textFilter;
      private boolean textFilteringEnabled;
-@@ -405,6 +_,22 @@
+@@ -405,6 +_,35 @@
      private int containerUpdateDelay; // Paper - Configurable container update tick rate
      public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
      public int patrolSpawnDelay; // Paper - Pillager patrol spawn settings and per player options
@@ -43,6 +43,19 @@
 +    public static final int KNOWLEDGE_WAYPOINT_INTERVAL = Math.max(1, Integer.getInteger("shreddedpaper.waypointInterval", 4));
 +    public int knowledgeWaypointTick = Integer.MIN_VALUE / 2;
 +    public boolean knowledgeWaypointPending;
++    public int knowledgeOwnWaypointTick = Integer.MIN_VALUE / 2;
++    public boolean knowledgeOwnWaypointPending;
++
++    /** This player's own waypoint (where the others see them), at most every few ticks like the connections below. */
++    public void knowledgeUpdateOwnWaypoint() {
++        if (this.tickCount - this.knowledgeOwnWaypointTick >= KNOWLEDGE_WAYPOINT_INTERVAL) {
++            this.knowledgeOwnWaypointTick = this.tickCount;
++            this.knowledgeOwnWaypointPending = false;
++            this.level().getWaypointManager().updateWaypoint(this);
++        } else {
++            this.knowledgeOwnWaypointPending = true;
++        }
++    }
 +
 +    public void knowledgeUpdateWaypoints() {
 +        if (this.tickCount - this.knowledgeWaypointTick >= KNOWLEDGE_WAYPOINT_INTERVAL) {
@@ -73,11 +86,12 @@
              } else {
                  LOGGER.warn("Trying to load ender pearl without level ({}) being loaded, skipping", optional.get());
              }
-@@ -723,6 +_,7 @@
+@@ -723,6 +_,8 @@
  
      @Override
      public void tick() {
 +        if (this.knowledgeWaypointPending && this.isReceivingWaypoints()) this.knowledgeUpdateWaypoints(); // Knowledge - a waypoint update that waited
++        if (this.knowledgeOwnWaypointPending && this.isTransmittingWaypoint()) this.knowledgeUpdateOwnWaypoint(); // Knowledge
          // CraftBukkit start
          if (this.joining) {
              this.joining = false;
