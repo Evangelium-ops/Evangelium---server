@@ -257,6 +257,15 @@
              }
          });
      }
+@@ -708,7 +_,7 @@
+         if (!player.isRemoved()) {
+             this.chunkMap.move(player);
+             if (player.isReceivingWaypoints()) {
+-                this.level.getWaypointManager().updatePlayer(player);
++                player.knowledgeUpdateWaypoints(); // Knowledge - at most every few ticks, see ServerPlayer
+             }
+         }
+     }
 @@ -781,7 +_,7 @@
  
      public void onChunkReadyToSend(ChunkHolder chunkHolder) {
