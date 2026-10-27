@@ -8,6 +8,27 @@
  import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
  import java.util.List;
  import java.util.Map;
+@@ -376,6 +_,10 @@
+     }
+ 
+     // Paper start - EAR 2
++    // Knowledge - a villager far from every player runs its AI only every few ticks (it was a third of a villager town's tick); the
++    // rest (trade timers, level ups, restock bookkeeping) still runs every tick, and the work it does just takes a little longer
++    private static final int KNOWLEDGE_INACTIVE_BRAIN_INTERVAL = Math.max(1, Integer.getInteger("shreddedpaper.inactiveVillagerBrainInterval", 2));
++
+     @Override
+     public void inactiveTick() {
+         // SPIGOT-3874, SPIGOT-3894, SPIGOT-3846, SPIGOT-5286 :(
+@@ -383,7 +_,8 @@
+             this.setUnhappyCounter(this.getUnhappyCounter() - 1);
+         }
+         if (this.isEffectiveAi()) {
+-            if (this.level().spigotConfig.tickInactiveVillagers) {
++            if (this.level().spigotConfig.tickInactiveVillagers
++                    && (this.level().getGameTime() + this.getId()) % KNOWLEDGE_INACTIVE_BRAIN_INTERVAL == 0) { // Knowledge - see below
+                 this.customServerAiStep(this.level().getMinecraftWorld());
+             } else {
+                 this.customServerAiStep(this.level().getMinecraftWorld(), true);
 @@ -798,13 +_,15 @@
              this.brain.getMemory(moduleType).ifPresent(pos -> {
                  ServerLevel level = server.getLevel(pos.dimension());

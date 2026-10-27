@@ -34,6 +34,29 @@
      private ServerPlayer.@Nullable RespawnConfig respawnConfig;
      private final TextFilter textFilter;
      private boolean textFilteringEnabled;
+@@ -405,6 +_,22 @@
+     private int containerUpdateDelay; // Paper - Configurable container update tick rate
+     public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
+     public int patrolSpawnDelay; // Paper - Pillager patrol spawn settings and per player options
++    // Knowledge start - the locator bar: a player's waypoint connections are updated at most every few ticks (each update walks every
++    // other player under one world-wide lock, so a crowd made it quadratic); a move inside the wait is done at the next tick after it
++    public static final int KNOWLEDGE_WAYPOINT_INTERVAL = Math.max(1, Integer.getInteger("shreddedpaper.waypointInterval", 4));
++    public int knowledgeWaypointTick = Integer.MIN_VALUE / 2;
++    public boolean knowledgeWaypointPending;
++
++    public void knowledgeUpdateWaypoints() {
++        if (this.tickCount - this.knowledgeWaypointTick >= KNOWLEDGE_WAYPOINT_INTERVAL) {
++            this.knowledgeWaypointTick = this.tickCount;
++            this.knowledgeWaypointPending = false;
++            this.level().getWaypointManager().updatePlayer(this);
++        } else {
++            this.knowledgeWaypointPending = true;
++        }
++    }
++    // Knowledge end
+     // Paper start - cancellable death event
+     public boolean queueHealthUpdatePacket;
+     public net.minecraft.network.protocol.game.@Nullable ClientboundSetHealthPacket queuedHealthUpdatePacket;
 @@ -637,12 +_,15 @@
          if (!optional.isEmpty()) {
              ServerLevel level = this.level().getServer().getLevel(optional.get());
@@ -50,6 +73,14 @@
              } else {
                  LOGGER.warn("Trying to load ender pearl without level ({}) being loaded, skipping", optional.get());
              }
+@@ -723,6 +_,7 @@
+ 
+     @Override
+     public void tick() {
++        if (this.knowledgeWaypointPending && this.isReceivingWaypoints()) this.knowledgeUpdateWaypoints(); // Knowledge - a waypoint update that waited
+         // CraftBukkit start
+         if (this.joining) {
+             this.joining = false;
 @@ -752,9 +_,11 @@
  
          Entity camera = this.getCamera();
