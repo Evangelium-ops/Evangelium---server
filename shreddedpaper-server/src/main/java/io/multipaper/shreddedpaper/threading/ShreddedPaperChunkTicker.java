@@ -233,7 +233,21 @@ public class ShreddedPaperChunkTicker {
 
             level.tickBlockEntities(region.tickingBlockEntities, region.pendingBlockEntityTickers);
 
-            region.getPlayers().forEach(ShreddedPaperPlayerTicker::tickPlayer);
+            // Knowledge - a crowd in one place: players in chunks at least three apart tick on several threads (IntraRegion#isChunkLocalPlayer)
+            final List<ServerPlayer> regionPlayers = region.getPlayers();
+            if (IntraRegion.parallelPlayers(regionPlayers.size())) {
+                final List<ServerPlayer> chunkLocalPlayers = new ArrayList<>(regionPlayers.size());
+                for (ServerPlayer player : regionPlayers) {
+                    if (IntraRegion.isChunkLocalPlayer(player)) {
+                        chunkLocalPlayers.add(player);
+                    } else {
+                        ShreddedPaperPlayerTicker.tickPlayer(player);
+                    }
+                }
+                IntraRegion.forEachChunkLocal(level, region, chunkLocalPlayers, player -> player.chunkPosition().toLong(), ShreddedPaperPlayerTicker::tickPlayer);
+            } else {
+                regionPlayers.forEach(ShreddedPaperPlayerTicker::tickPlayer);
+            }
 
             while (region.getInternalTaskQueue().executeTask()) ;
 

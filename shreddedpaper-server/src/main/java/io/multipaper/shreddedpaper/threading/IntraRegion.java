@@ -50,6 +50,8 @@ public final class IntraRegion {
     public static final int MIN_BLOCK_ENTITIES = Integer.getInteger("shreddedpaper.intraRegionMinBlockEntities", 128);
     /** Fewer items and experience orbs than this in a region: they tick on the owner alone. */
     public static final int MIN_ENTITIES = Integer.getInteger("shreddedpaper.intraRegionMinEntities", 128);
+    /** Fewer players than this in a region: they tick on the owner alone. -1 turns parallel player ticks off. */
+    public static final int MIN_PLAYERS = Integer.getInteger("shreddedpaper.intraRegionMinPlayers", 8);
     /** Fewer mobs with a sensor due than this: they are sensed on the owner alone. */
     public static final int MIN_READ_ONLY_ITEMS = Integer.getInteger("shreddedpaper.intraRegionMinSensing", 8);
 
@@ -92,6 +94,19 @@ public final class IntraRegion {
     public static boolean isChunkLocal(net.minecraft.world.entity.Entity entity) {
         return POOL != null && (entity instanceof net.minecraft.world.entity.item.ItemEntity || entity instanceof net.minecraft.world.entity.ExperienceOrb)
                 && !entity.isPassenger() && !entity.isVehicle();
+    }
+
+    /**
+     * Players reach about a block during their own tick (pushing, touching items and orbs, the blocks they stand in, the container they
+     * have open, which is at most 8 blocks away): fights and attacks come in as packets and are handled in another phase. Not when riding
+     * or ridden.
+     */
+    public static boolean parallelPlayers(int players) {
+        return POOL != null && MIN_PLAYERS >= 0 && players >= MIN_PLAYERS;
+    }
+
+    public static boolean isChunkLocalPlayer(net.minecraft.server.level.ServerPlayer player) {
+        return !player.isPassenger() && !player.isVehicle();
     }
 
     public static boolean parallelRandomTicks(int randomTickSpeed) {
