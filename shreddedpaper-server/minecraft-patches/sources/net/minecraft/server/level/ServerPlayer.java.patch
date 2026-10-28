@@ -341,3 +341,19 @@
          }
  
          if (vehicle != null) {
+@@ -2969,11 +_,14 @@
+         }
+     }
+ 
++    // Knowledge: seed crackers start from the hashed seed sent at join and respawn; the client only needs it for biome blending
++    private static final long KNOWLEDGE_SEED_MASK = new java.security.SecureRandom().nextLong();
++
+     public CommonPlayerSpawnInfo createCommonSpawnInfo(ServerLevel level) {
+         return new CommonPlayerSpawnInfo(
+             level.dimensionTypeRegistration(),
+             level.dimension(),
+-            BiomeManager.obfuscateSeed(level.getSeed()),
++            BiomeManager.obfuscateSeed(level.getSeed() ^ KNOWLEDGE_SEED_MASK),
+             this.gameMode.getGameModeForPlayer(),
+             this.gameMode.getPreviousGameModeForPlayer(),
+             level.isDebug(),
