@@ -214,13 +214,20 @@ public class ShreddedPaperChunkTicker {
             // Knowledge - items and experience orbs only reach a block or so (merging, being touched): they tick after the others,
             // chunks at least three apart on several threads, when a region has many of them
             final List<Entity> chunkLocalEntities = IntraRegion.enabled() ? new ArrayList<>() : null;
+            // Knowledge - and the entity tick of the players of a crowded region (see IntraRegion#isChunkLocalPlayer)
+            final List<Entity> playerEntities = IntraRegion.parallelPlayers(region.getPlayers().size()) ? new ArrayList<>() : null;
             region.forEachTickingEntity(entity -> {
                 if (chunkLocalEntities != null && IntraRegion.isChunkLocal(entity)) {
                     chunkLocalEntities.add(entity);
+                } else if (playerEntities != null && entity instanceof ServerPlayer player && IntraRegion.isChunkLocalPlayer(player)) {
+                    playerEntities.add(entity);
                 } else {
                     ShreddedPaperEntityTicker.tickEntity(entity);
                 }
             });
+            if (playerEntities != null && !playerEntities.isEmpty()) {
+                IntraRegion.forEachChunkLocal(level, region, playerEntities, entity -> entity.chunkPosition().toLong(), ShreddedPaperEntityTicker::tickEntity);
+            }
             if (chunkLocalEntities != null && !chunkLocalEntities.isEmpty()) {
                 if (chunkLocalEntities.size() < IntraRegion.MIN_ENTITIES) {
                     chunkLocalEntities.forEach(ShreddedPaperEntityTicker::tickEntity);

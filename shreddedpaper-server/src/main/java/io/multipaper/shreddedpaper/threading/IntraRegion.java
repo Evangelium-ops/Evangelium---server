@@ -99,14 +99,15 @@ public final class IntraRegion {
     /**
      * Players reach about a block during their own tick (pushing, touching items and orbs, the blocks they stand in, the container they
      * have open, which is at most 8 blocks away): fights and attacks come in as packets and are handled in another phase. Not when riding
-     * or ridden.
+     * or ridden, or spectating through another entity. Both the player tick and the player's entity tick (inventory sync, locator bar,
+     * advancements, block breaking progress) run this way.
      */
     public static boolean parallelPlayers(int players) {
         return POOL != null && MIN_PLAYERS >= 0 && players >= MIN_PLAYERS;
     }
 
     public static boolean isChunkLocalPlayer(net.minecraft.server.level.ServerPlayer player) {
-        return !player.isPassenger() && !player.isVehicle();
+        return !player.isPassenger() && !player.isVehicle() && player.getCamera() == player;   // a spectator's camera can be anywhere
     }
 
     public static boolean parallelRandomTicks(int randomTickSpeed) {
