@@ -47,13 +47,14 @@
          if (!connected && !this.preparing) {
              return;
          }
-@@ -448,6 +_,14 @@
+@@ -448,6 +_,15 @@
          if (this.channel.eventLoop().inEventLoop()) {
              this.doSendPacket(packet, sendListener, flush);
          } else {
 +            // ShreddedPaper start - Use lazyExecute if we aren't flushing
-+            if (ShreddedPaperConfiguration.get().optimizations.useLazyExecuteWhenNotFlushing && !flush) {
-+                ((AbstractEventExecutor) this.channel.eventLoop()).lazyExecute(() -> {
++            // Knowledge: ProtocolLib wraps the event loop in its own proxy, which is no AbstractEventExecutor; it takes the normal path below
++            if (ShreddedPaperConfiguration.get().optimizations.useLazyExecuteWhenNotFlushing && !flush && this.channel.eventLoop() instanceof AbstractEventExecutor lazy) {
++                lazy.lazyExecute(() -> {
 +                    this.doSendPacket(packet, sendListener, flush);
 +                });
 +                return;
