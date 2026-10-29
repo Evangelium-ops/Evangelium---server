@@ -18,7 +18,7 @@
      private final DataFixer fixerUpper;
      private final HolderLookup.Provider registries;
      private final Path dataFolder;
-@@ -55,24 +_,29 @@
+@@ -55,24 +_,36 @@
      }
  
      public <T extends SavedData> T computeIfAbsent(SavedDataType<T> type) {
@@ -29,7 +29,13 @@
 -            T savedData1 = (T)type.constructor().get();
 -            this.set(type, savedData1);
 -            return savedData1;
--        }
++        // Knowledge start - a value that is already there is read without a lock: compute() locks the entry on every call, and
++        // ServerLevel#getWorldBorder (asked by every ticking block entity, every tick) comes through here from every tick thread
++        Optional<? extends SavedData> present = this.cache.get(type);
++        if (present != null && present.isPresent()) {
++            return (T) present.get();
+         }
++        // Knowledge end
 +        // ShreddedPaper start - thread-safe
 +        return (T) this.cache.compute(type, (key, optional) -> {
 +            if (optional == null) {
