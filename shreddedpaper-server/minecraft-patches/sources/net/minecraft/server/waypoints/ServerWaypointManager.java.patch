@@ -51,7 +51,7 @@
 -            for (ServerPlayer serverPlayer : set) {
 -                this.createConnection(serverPlayer, waypoint);
 +            for (ServerPlayer serverPlayer : this.players) {
-+                if (!this.connections.contains(serverPlayer, waypoint)) {
++                if (!map.containsKey(serverPlayer)) {
 +                    this.createConnection(serverPlayer, waypoint);
 +                }
              }
@@ -81,17 +81,29 @@
          this.players.add(player);
  
          for (WaypointTransmitter waypointTransmitter : this.waypoints) {
-@@ -64,7 +_,7 @@
+@@ -64,41 +_,47 @@
          }
      }
  
 -    public void updatePlayer(ServerPlayer player) {
 +    public synchronized void updatePlayer(ServerPlayer player) { // ShreddedPaper - synchronized
          Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.row(player);
-         SetView<WaypointTransmitter> set = Sets.difference(this.waypoints, map.keySet());
+-        SetView<WaypointTransmitter> set = Sets.difference(this.waypoints, map.keySet());
  
-@@ -77,28 +_,31 @@
+-        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : ImmutableSet.copyOf(map.entrySet())) {
++        // Knowledge start - a plain list copy and a lookup per waypoint instead of an immutable set copy and a set difference view
++        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(map.entrySet())) {
+             this.updateConnection(player, entry.getKey(), entry.getValue());
          }
+ 
+-        for (WaypointTransmitter waypointTransmitter : set) {
+-            this.createConnection(player, waypointTransmitter);
++        for (WaypointTransmitter waypointTransmitter : this.waypoints) {
++            if (!map.containsKey(waypointTransmitter)) {
++                this.createConnection(player, waypointTransmitter);
++            }
+         }
++        // Knowledge end
      }
  
 -    public void removePlayer(ServerPlayer player) {
