@@ -116,6 +116,7 @@ public class ShreddedPaperChunkTicker {
                 this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
             } finally {
                 TickTimings.region(System.nanoTime() - started);
+                RegionBudget.end(region, System.nanoTime() - started); // Knowledge - tick budget
             }
         }).exceptionally(e -> {
             LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
@@ -151,6 +152,7 @@ public class ShreddedPaperChunkTicker {
     private void _tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         try {
             currentlyTickingRegion.set(region);
+            RegionBudget.begin(region); // Knowledge - tick budget
 
             if (!(ShreddedPaperTickThread.isShreddedPaperTickThread())) {
                 throw new IllegalStateException("Ticking region " + WorldUtil.getWorldName(level) + " " + region.getRegionPos() + " outside of ShreddedPaperTickThread!");
@@ -174,14 +176,17 @@ public class ShreddedPaperChunkTicker {
             if (level.tickRateManager().runsNormally()) {
                 level.handlingTickThreadLocal.set(true);
 
-                level.blockTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickBlock);
-                level.fluidTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickFluid);
+                // Knowledge - a region over its tick budget runs its scheduled block and fluid ticks only in its turn (slow motion)
+                if (RegionBudget.ticksRegionWork()) {
+                    level.blockTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickBlock);
+                    level.fluidTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickFluid);
+                }
 
                 // Knowledge - bookkeeping and mob spawning stay on this thread; random ticks, snow and ice reach about one chunk and run in
                 // chunks at least three apart on several threads when the random tick speed makes it worth it (IntraRegion)
                 final List<LevelChunk> randomTickChunks = new ArrayList<>();
                 region.forEach(chunk -> {
-                    if (this._tickChunk(region, level, chunk, timeInhabited, filteredSpawningCategories, spawnState)) {
+                    if (this._tickChunk(region, level, chunk, timeInhabited, filteredSpawningCategories, spawnState) && RegionBudget.ticks(chunk.getPos())) { // Knowledge - tick budget
                         randomTickChunks.add(chunk);
                     }
                 });
@@ -204,7 +209,7 @@ public class ShreddedPaperChunkTicker {
                 final long gameTime = level.getGameTime();
                 final List<net.minecraft.world.entity.LivingEntity> sensing = new ArrayList<>();
                 region.forEachTickingEntity(entity -> {
-                    if (entity instanceof net.minecraft.world.entity.LivingEntity living && !living.isRemoved() && living.getBrain().knowledgeWantsPresensing(gameTime)) {
+                    if (entity instanceof net.minecraft.world.entity.LivingEntity living && !living.isRemoved() && RegionBudget.ticks(living) && living.getBrain().knowledgeWantsPresensing(gameTime)) {
                         sensing.add(living);
                     }
                 });
@@ -217,6 +222,9 @@ public class ShreddedPaperChunkTicker {
             // Knowledge - and the entity tick of the players of a crowded region (see IntraRegion#isChunkLocalPlayer)
             final List<Entity> playerEntities = IntraRegion.parallelPlayers(region.getPlayers().size()) ? new ArrayList<>() : null;
             region.forEachTickingEntity(entity -> {
+                if (!RegionBudget.ticks(entity)) {
+                    return; // Knowledge - tick budget: not this entity's turn in a slowed region
+                }
                 if (chunkLocalEntities != null && IntraRegion.isChunkLocal(entity)) {
                     chunkLocalEntities.add(entity);
                 } else if (playerEntities != null && entity instanceof ServerPlayer player && IntraRegion.isChunkLocalPlayer(player)) {
@@ -261,6 +269,7 @@ public class ShreddedPaperChunkTicker {
             ShreddedPaperChangesBroadcaster.broadcastChanges();
 
             if (region.isEmpty()) {
+                RegionBudget.forget(region); // Knowledge - tick budget
                 level.chunkSource.tickingRegions.remove(region.getRegionPos());
             }
         } finally {

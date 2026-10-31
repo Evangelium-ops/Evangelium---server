@@ -13,6 +13,8 @@ public class ShreddedPaperCommandPermissions {
         Permission commands = DefaultPermissions.registerPermission(ROOT, "Gives the user the ability to use all ShreddedPaper commands", parent);
 
         DefaultPermissions.registerPermission(PREFIX + "mpmap", "MPMap command", PermissionDefault.TRUE, commands);
+        DefaultPermissions.registerPermission(PREFIX + "regions", "Regions command (laggy regions)", PermissionDefault.OP, commands); // Knowledge
+        DefaultPermissions.registerPermission("shreddedpaper.regions.alerts", "Told when a region lags", PermissionDefault.OP, parent); // Knowledge
 
         commands.recalculatePermissibles();
     }

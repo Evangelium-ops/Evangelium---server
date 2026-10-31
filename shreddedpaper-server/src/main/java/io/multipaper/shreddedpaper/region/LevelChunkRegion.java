@@ -40,6 +40,7 @@ public class LevelChunkRegion {
     private final ObjectOpenHashSet<ServerPlayer> players = new ObjectOpenHashSet<>();
     public final LongLinkedOpenHashSet unloadQueue = new LongLinkedOpenHashSet();
     public final List<TickingBlockEntity> tickingBlockEntities = new ReferenceArrayList<>();
+    public final io.multipaper.shreddedpaper.threading.RegionBudget.State budget = new io.multipaper.shreddedpaper.threading.RegionBudget.State(); // Knowledge - tick budget
     public final List<TickingBlockEntity> pendingBlockEntityTickers = new ReferenceArrayList<>();
     private final ObjectOpenHashSet<Mob> navigatingMobs = new ObjectOpenHashSet<>();
     private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
