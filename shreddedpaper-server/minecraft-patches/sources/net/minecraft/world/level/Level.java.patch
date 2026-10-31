@@ -211,7 +211,8 @@
              // Spigot end
              if (tickingBlockEntity.isRemoved()) {
                  toRemove.add(tickingBlockEntity); // Paper - Fix MC-117075; use removeAll
-             } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos())) {
+-            } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos())) {
++            } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos()) && io.multipaper.shreddedpaper.threading.RegionBudget.ticks(tickingBlockEntity.getPos())) { // Knowledge - tick budget
 +                // Knowledge start - block entities that only reach a block or two are ticked after this loop, chunks at least three apart on several threads
 +                if (io.multipaper.shreddedpaper.threading.IntraRegion.isChunkLocal(tickingBlockEntity.knowledgeBlockEntityType())) {
 +                    if (knowledgePhased == null) knowledgePhased = new java.util.ArrayList<>();
