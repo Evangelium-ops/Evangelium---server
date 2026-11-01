@@ -17,11 +17,23 @@
  import net.minecraft.nbt.CompoundTag;
  import net.minecraft.nbt.NbtAccounter;
  import net.minecraft.nbt.NbtIo;
-@@ -24,6 +_,8 @@
+@@ -24,6 +_,20 @@
      private final File playerDir;
      protected final DataFixer fixerUpper;
  
 +    private static final Executor IO_WORKER = Util.ioPool(); // ShreddedPaper
++    // Knowledge: the last async write per player file; saves of one player run in order and a load waits for them (a quick rejoin read the old file)
++    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Void>> PENDING_WRITES = new java.util.concurrent.ConcurrentHashMap<>();
++
++    /** Knowledge: waits for the pending async write of one player (null = all of them). */
++    public static void awaitPendingWrites(@org.jspecify.annotations.Nullable String uuid) {
++        java.util.Collection<java.util.concurrent.CompletableFuture<Void>> waits = uuid == null ? new java.util.ArrayList<>(PENDING_WRITES.values()) : java.util.Collections.singletonList(PENDING_WRITES.get(uuid));
++        for (java.util.concurrent.CompletableFuture<Void> f : waits) {
++            if (f != null) {
++                try { f.join(); } catch (Exception ignored) {} // the failure was logged by the write itself
++            }
++        }
++    }
 +
      public PlayerDataStorage(LevelStorageSource.LevelStorageAccess levelStorageAccess, DataFixer fixerUpper) {
          this.fixerUpper = fixerUpper;
@@ -34,12 +46,29 @@
              Path path = this.playerDir.toPath();
              Path path1 = Files.createTempFile(path, player.getStringUUID() + "-", ".dat");
              CompoundTag compoundTag = tagValueOutput.buildResult();
-@@ -42,6 +_,8 @@
+@@ -42,6 +_,17 @@
              Path path2 = path.resolve(player.getStringUUID() + ".dat");
              Path path3 = path.resolve(player.getStringUUID() + ".dat_old");
              Util.safeReplaceFile(path2, path1, path3);
 +            } catch (Exception e) { LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), e); throw new RuntimeException(e); }}; // ShreddedPaper - write async
-+            if (ShreddedPaperConfiguration.get().optimizations.writePlayerSavesAsync && !TickThread.isShutdownThread()) IO_WORKER.execute(r); else r.run(); // ShreddedPaper - write async
++            // Knowledge start - one player's writes in order, never two at once
++            String uuid = player.getStringUUID();
++            if (ShreddedPaperConfiguration.get().optimizations.writePlayerSavesAsync && !TickThread.isShutdownThread()) {
++                java.util.concurrent.CompletableFuture<Void> write = PENDING_WRITES.compute(uuid, (k, before) -> (before == null ? java.util.concurrent.CompletableFuture.<Void>completedFuture(null) : before.exceptionally(e -> null)).thenRunAsync(r, IO_WORKER));
++                write.whenComplete((v, e) -> PENDING_WRITES.remove(uuid, write));
++            } else {
++                awaitPendingWrites(uuid);
++                r.run();
++            }
++            // Knowledge end
          } catch (Exception var11) {
              LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), var11); // Paper - Print exception
          }
+@@ -62,6 +_,7 @@
+     }
+ 
+     private Optional<CompoundTag> load(NameAndId nameAndId, String suffix) {
++        awaitPendingWrites(nameAndId.id().toString()); // Knowledge - read what the last save wrote
+         File file = new File(this.playerDir, nameAndId.id() + suffix);
+         // Spigot start
+         boolean usingWrongFile = false;
