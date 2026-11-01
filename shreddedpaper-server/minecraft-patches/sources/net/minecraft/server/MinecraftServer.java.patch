@@ -84,6 +84,14 @@
              }
  
              this.waitUntilNextTick();
+@@ -1098,6 +_,7 @@
+         }
+         // Paper end - rewrite chunk system
+         // Paper start - Improved watchdog support - move final shutdown items here
++        net.minecraft.world.level.storage.PlayerDataStorage.awaitPendingWrites(null); // Knowledge - player saves still queued are written before the IO pool gets only 3 s
+         Util.shutdownExecutors();
+         this.onServerExit();
+         // Paper end - Improved watchdog support - move final shutdown items here
 @@ -1339,7 +_,7 @@
                          org.purpurmc.purpur.PurpurConfig.tpsCatchup ? 5 : 1 //ConfigHolder.getConfig().tickLoop.catchupTicks.getOrDefault(MoonriseConfig.TickLoop.DEFAULT_CATCHUP_TICKS).intValue() // Purpur - Configurable TPS Catchup
                      );
