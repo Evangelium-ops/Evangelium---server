@@ -178,8 +178,10 @@ public class ShreddedPaperChunkTicker {
 
                 // Knowledge - a region over its tick budget runs its scheduled block and fluid ticks only in its turn (slow motion)
                 if (RegionBudget.ticksRegionWork()) {
+                    final long sliceStart = System.nanoTime(); // Knowledge - tick budget: divided work
                     level.blockTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickBlock);
                     level.fluidTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickFluid);
+                    RegionBudget.sliced(System.nanoTime() - sliceStart);
                 }
 
                 // Knowledge - bookkeeping and mob spawning stay on this thread; random ticks, snow and ice reach about one chunk and run in
@@ -191,6 +193,7 @@ public class ShreddedPaperChunkTicker {
                     }
                 });
                 final int randomTickSpeed = level.getGameRules().get(net.minecraft.world.level.gamerules.GameRules.RANDOM_TICK_SPEED);
+                final long randomStart = System.nanoTime(); // Knowledge - tick budget: divided work
                 if (IntraRegion.parallelRandomTicks(randomTickSpeed)) {
                     IntraRegion.forEachChunkLocal(level, region, randomTickChunks, chunk -> chunk.getPos().toLong(), chunk -> level.tickChunk(chunk, randomTickSpeed));
                 } else {
@@ -198,6 +201,7 @@ public class ShreddedPaperChunkTicker {
                         level.tickChunk(chunk, randomTickSpeed);
                     }
                 }
+                RegionBudget.sliced(System.nanoTime() - randomStart);
 
                 level.runBlockEvents(region);
 
@@ -205,6 +209,7 @@ public class ShreddedPaperChunkTicker {
             }
 
             // Knowledge - mob sensors that fire this tick run first, read-only, on several threads (see IntraRegion#forEachReadOnly)
+            final long entitiesStart = System.nanoTime(); // Knowledge - tick budget: sensors, entities and block entities are divided work
             if (IntraRegion.enabled()) {
                 final long gameTime = level.getGameTime();
                 final List<net.minecraft.world.entity.LivingEntity> sensing = new ArrayList<>();
@@ -229,12 +234,18 @@ public class ShreddedPaperChunkTicker {
                     chunkLocalEntities.add(entity);
                 } else if (playerEntities != null && entity instanceof ServerPlayer player && IntraRegion.isChunkLocalPlayer(player)) {
                     playerEntities.add(entity);
+                } else if (entity instanceof ServerPlayer) {
+                    final long playerStart = System.nanoTime(); // Knowledge - tick budget: players are never divided
+                    ShreddedPaperEntityTicker.tickEntity(entity);
+                    RegionBudget.notSliced(System.nanoTime() - playerStart);
                 } else {
                     ShreddedPaperEntityTicker.tickEntity(entity);
                 }
             });
             if (playerEntities != null && !playerEntities.isEmpty()) {
+                final long playersStart = System.nanoTime();
                 IntraRegion.forEachChunkLocal(level, region, playerEntities, entity -> entity.chunkPosition().toLong(), ShreddedPaperEntityTicker::tickEntity);
+                RegionBudget.notSliced(System.nanoTime() - playersStart);
             }
             if (chunkLocalEntities != null && !chunkLocalEntities.isEmpty()) {
                 if (chunkLocalEntities.size() < IntraRegion.MIN_ENTITIES) {
@@ -247,6 +258,7 @@ public class ShreddedPaperChunkTicker {
             if (!ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
 
             level.tickBlockEntities(region.tickingBlockEntities, region.pendingBlockEntityTickers);
+            RegionBudget.sliced(System.nanoTime() - entitiesStart); // Knowledge - tick budget
 
             // Knowledge - a crowd in one place: players in chunks at least three apart tick on several threads (IntraRegion#isChunkLocalPlayer)
             final List<ServerPlayer> regionPlayers = region.getPlayers();

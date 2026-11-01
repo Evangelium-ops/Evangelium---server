@@ -69,9 +69,14 @@ public final class RegionBudget {
         int divisor = 1;
         long tick;
         long sumNanos;
+        /** of sumNanos: the work slow motion divides (mobs, items, block entities, random and scheduled ticks), see sliced() */
+        long sliceNanos;
         int ticks;
         int calm;
         int over;
+        /** cheap seconds needed before one stage faster: doubles when a region that was just sped up has to be slowed again */
+        int calmNeeded = CALM_SECONDS;
+        long fasterAt;
         volatile double lastMs;
         volatile long slowSince;
         /** shown to the players in the region while it is slowed */
@@ -92,27 +97,72 @@ public final class RegionBudget {
 
     // ------------------------------------------------------------------ the rules
 
-    /** The divisor for the next second: one step slower per second while over, one step faster after CALM_SECONDS cheap seconds. */
-    static int next(State s, double avgMs, double budgetMs, double shareMs, int maxDivisor, int calmSeconds) {
-        // a region counts as lagging above the budget; once slowed it keeps to its share of it (see end)
-        double limit = s.divisor > 1 ? shareMs : budgetMs;
-        if (avgMs > limit) {
+    /**
+     * The divisor for the next second: one step slower per second while over, one step faster after enough cheap seconds.
+     * sliceMs is the part of avgMs that slow motion divides; the rest (the players there, chunks loading and generating around
+     * them, packets, tasks) costs the same at any speed, so a region whose time is mostly that is never slowed for it.
+     */
+    static int next(State s, double avgMs, double sliceMs, double budgetMs, double shareMs, int maxDivisor, int calmSeconds) {
+        long now = System.currentTimeMillis();
+        double slice = Math.max(0, Math.min(sliceMs, avgMs));
+        double rest = avgMs - slice;
+        // slow motion is worth it only when the divided work is a real share of what the region would cost at full speed (in a
+        // slowed region it looks small exactly because it is divided)
+        double fullSlice = slice * s.divisor;
+        boolean helps = fullSlice >= (rest + fullSlice) * 0.3;
+        if (s.divisor == 1) {
+            // full speed: lagging is over the budget, and only for work slow motion can divide (a player exploring, whose time is
+            // chunk generation, is never slowed for it)
+            if (avgMs > budgetMs && helps) {
+                s.calm = 0;
+                // one slow second (chunks loading around a player who just arrived) is left alone; two in a row, or one far over, is not
+                if (++s.over < 2 && avgMs < budgetMs * 4) {
+                    return 1;
+                }
+                s.over = 0;
+                if (now - s.fasterAt < 20_000L) {
+                    s.calmNeeded = Math.min(16, s.calmNeeded * 2);   // sped up too early: wait longer before the next try
+                }
+                return 2;
+            }
+            s.over = 0;
+            if (now - s.fasterAt > 120_000L) {
+                s.calmNeeded = calmSeconds;   // two calm minutes at full speed: forgiven
+            }
+            return 1;
+        }
+        if (!helps) {
+            // slowed, but what costs is not the divided work (any more): slow motion only costs the players there, release it
+            s.over = 0;
             s.calm = 0;
-            // one slow second (chunks loading around a player who just arrived) is left alone; two in a row, or one far over, is not
-            if (++s.over < 2 && avgMs < limit * 4) {
+            return s.divisor >> 1;
+        }
+        // slowed: the divided part keeps to the region's share of the budget (regions near each other share it, see decide)
+        if (slice > shareMs) {
+            s.calm = 0;
+            if (++s.over < 2 && slice < shareMs * 4) {
                 return s.divisor;
+            }
+            s.over = 0;
+            if (now - s.fasterAt < 20_000L) {
+                s.calmNeeded = Math.min(16, s.calmNeeded * 2);
             }
             // in stages (half speed, a quarter, ...) one per second rather than straight down to what it needs: the players there
             // see it coming, and a region only just over the budget never goes further than it has to
             return Math.min(maxDivisor, s.divisor << 1);
         }
         s.over = 0;
-        if (s.divisor > 1 && avgMs * 2 < Math.max(shareMs * 0.8, budgetMs * 0.8)) {
-            // at twice the speed it would still stay well under its share; or it costs next to nothing (the players in it and the
-            // chunks around them cost a few ms whatever the speed, so with many slowed regions sharing the budget it would never get back)
-            if (++s.calm >= calmSeconds) {
+        // one stage faster doubles the divided part; it goes faster only when that stays well under the limit of that stage, so a
+        // region between 40% and 100% of its share stays where it is (no flipping between two stages)
+        int faster = s.divisor >> 1;
+        double limit = faster > 1 ? shareMs : budgetMs;
+        double cost = faster > 1 ? 2 * slice : rest + 2 * slice;
+        if (cost < limit * 0.8) {
+            int need = cost < limit * 0.2 ? 1 : s.calmNeeded;   // clearly cheap (a killed lag machine): one stage a second
+            if (++s.calm >= need) {
                 s.calm = 0;
-                return s.divisor >> 1;
+                s.fasterAt = now;
+                return faster;
             }
             return s.divisor;
         }
@@ -169,6 +219,19 @@ public final class RegionBudget {
                 || entity instanceof WitherBoss || (entity.isVehicle() && entity.hasPassenger(e -> e instanceof Player));
     }
 
+    /** Time the region's thread spent on work slow motion divides (one phase of the region tick, measured around it). */
+    public static void sliced(long nanos) {
+        State s = enabled() ? current() : null;
+        if (s != null) {
+            s.sliceNanos += nanos;
+        }
+    }
+
+    /** Time inside a sliced phase that is not divided after all (the players' own entity tick). */
+    public static void notSliced(long nanos) {
+        sliced(-nanos);
+    }
+
     /** After the region's tick: once a second the share is set from the time it took. */
     public static void end(LevelChunkRegion region, long nanos) {
         if (!enabled()) {
@@ -181,22 +244,24 @@ public final class RegionBudget {
             return;
         }
         double avg = s.sumNanos / 1e6 / s.ticks;
+        double slice = s.sliceNanos / 1e6 / s.ticks;
         s.sumNanos = 0;
+        s.sliceNanos = 0;
         s.ticks = 0;
         s.lastMs = avg;
         try {
-            decide(region, s, avg);
+            decide(region, s, avg, slice);
         } finally {
             bossBars(region, s);
         }
     }
 
-    private static void decide(LevelChunkRegion region, State s, double avg) {
+    private static void decide(LevelChunkRegion region, State s, double avg, double slice) {
         int before = s.divisor;
         // regions near each other cannot tick at the same time (a region locks its neighbours while it ticks), so lag machines in
         // several regions add up: the slowed regions share one budget
         int slow = SLOW.size() + (SLOW.containsKey(region) ? 0 : 1);
-        s.divisor = next(s, avg, BUDGET_MS, BUDGET_MS / Math.max(1, slow), MAX_DIVISOR, CALM_SECONDS);
+        s.divisor = next(s, avg, slice, BUDGET_MS, BUDGET_MS / Math.max(1, slow), MAX_DIVISOR, CALM_SECONDS);
         if (s.divisor == before) {
             return;
         }
