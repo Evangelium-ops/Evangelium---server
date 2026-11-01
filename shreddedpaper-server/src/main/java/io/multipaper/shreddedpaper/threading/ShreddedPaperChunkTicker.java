@@ -203,7 +203,12 @@ public class ShreddedPaperChunkTicker {
                 }
                 RegionBudget.sliced(System.nanoTime() - randomStart);
 
-                level.runBlockEvents(region);
+                // Knowledge - tick budget: block events (pistons, note blocks, bells) are redstone's other half: they run in their turn too
+                if (RegionBudget.ticksRegionWork()) {
+                    final long eventsStart = System.nanoTime();
+                    level.runBlockEvents(region);
+                    RegionBudget.sliced(System.nanoTime() - eventsStart);
+                }
 
                 level.handlingTickThreadLocal.set(false);
             }
