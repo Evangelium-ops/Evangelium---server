@@ -30,6 +30,36 @@
  import net.minecraft.util.Mth;
  import net.minecraft.util.Util;
  import net.minecraft.util.debugchart.LocalSampleLogger;
+@@ -109,6 +_,7 @@
+     ) : null;
+     protected final java.util.Map<Class<? extends net.minecraft.network.protocol.Packet<?>>, io.papermc.paper.util.IntervalledCounter> packetSpecificLimits = new java.util.HashMap<>();
+ 
++    private final io.multipaper.shreddedpaper.network.PacketReplyTracker serverPingReplies = new io.multipaper.shreddedpaper.network.PacketReplyTracker();
+     private boolean stopReadingPackets;
+     private void killForPacketSpam() {
+         this.sendPacket(new ClientboundDisconnectPacket(io.papermc.paper.adventure.PaperAdventure.asVanilla(io.papermc.paper.configuration.GlobalConfiguration.get().packetLimiter.kickMessage)), PacketSendListener.thenRun(() -> {
+@@ -145,6 +_,7 @@
+ 
+     @Override
+     public void channelInactive(ChannelHandlerContext ctx) {
++        synchronized (this.PACKET_LIMIT_LOCK) { this.serverPingReplies.clear(); }
+         this.disconnect(Component.translatable("disconnect.endOfStream"));
+     }
+ 
+@@ -226,7 +_,12 @@
+                     long time = System.nanoTime();
+                     synchronized (PACKET_LIMIT_LOCK) {
+                         if (this.allPacketCounts != null) {
+-                            this.allPacketCounts.updateAndAdd(1, time);
++                            // Knowledge - acknowledgements we requested are not unsolicited packet spam.
++                            if (packet instanceof net.minecraft.network.protocol.common.ServerboundPongPacket pong && this.serverPingReplies.acceptPong(pong.getId(), time)) {
++                                this.allPacketCounts.updateCurrentTime(time);
++                            } else {
++                                this.allPacketCounts.updateAndAdd(1, time);
++                            }
+                             if (this.allPacketCounts.getRate() >= io.papermc.paper.configuration.GlobalConfiguration.get().packetLimiter.allPackets.maxPacketRate()) {
+                                 this.killForPacketSpam();
+                                 return;
 @@ -303,6 +_,7 @@
  
      private static void syncAfterConfigurationChange(ChannelFuture future) {
@@ -63,6 +93,34 @@
              this.channel.eventLoop().execute(() -> this.doSendPacket(packet, sendListener, flush));
          }
      }
+@@ -471,6 +_,12 @@
+             channelFuture = this.channel.write(packet, this.channel.voidPromise()); // Paper - Optimize network
+         }
+ 
++        // Knowledge - record native and bundled pings only after their write was submitted.
++        if (this.allPacketCounts != null && (packet instanceof net.minecraft.network.protocol.common.ClientboundPingPacket || packet instanceof net.minecraft.network.protocol.BundlePacket<?>)) {
++            synchronized (this.PACKET_LIMIT_LOCK) {
++                this.trackServerPings(packet, System.nanoTime());
++            }
++        }
+         // Paper start - Optimize network
+         if (packet.hasFinishListener()) {
+             channelFuture.addListener((ChannelFutureListener) future -> packet.onPacketDispatchFinish(player, future));
+@@ -483,6 +_,14 @@
+         // Paper end - Optimize network
+     }
+ 
++    private void trackServerPings(Packet<?> packet, long now) {
++        if (packet instanceof net.minecraft.network.protocol.common.ClientboundPingPacket ping) {
++            this.serverPingReplies.sentPing(ping.getId(), now);
++        } else if (packet instanceof net.minecraft.network.protocol.BundlePacket<?> bundle) {
++            for (Packet<?> child : bundle.subPackets()) this.trackServerPings(child, now);
++        }
++    }
++
+     public void flushChannel() {
+         if (this.isConnected()) {
+             this.flush();
 @@ -500,7 +_,7 @@
      }
  
