@@ -1,0 +1,11 @@
+--- a/net/minecraft/world/level/storage/LevelStorageSource.java
++++ b/net/minecraft/world/level/storage/LevelStorageSource.java
+@@ -419,7 +_,7 @@
+         final DirectoryLock lock;
+         public final LevelStorageSource.LevelDirectory levelDirectory;
+         private final String levelId;
+-        private final Map<LevelResource, Path> resources = Maps.newHashMap();
++        private final Map<LevelResource, Path> resources = new java.util.concurrent.ConcurrentHashMap<>(); // ShreddedPaper - players are created on several region threads at once
+         // CraftBukkit start
+         public final ResourceKey<LevelStem> dimensionType;
+ 
