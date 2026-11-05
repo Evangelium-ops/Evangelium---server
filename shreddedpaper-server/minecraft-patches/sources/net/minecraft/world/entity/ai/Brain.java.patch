@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/ai/Brain.java
 +++ b/net/minecraft/world/entity/ai/Brain.java
-@@ -406,10 +_,36 @@
+@@ -406,10 +_,29 @@
  
      public void tick(ServerLevel level, E entity) {
          this.forgetOutdatedMemories();
@@ -15,14 +15,7 @@
 +
 +    /** Whether this brain ticked in the previous tick and has a sensor that fires on its next tick. */
 +    public boolean knowledgeWantsPresensing(long gameTime) {
-+        if (this.knowledgeLastTick != gameTime - 1) {
-+            return false;
-+        }
-+        for (Sensor<? super E> sensor : this.sensors.values()) {
-+            if (sensor.knowledgeDueNext()) {
-+                return true;
-+            }
-+        }
++        // Knowledge - live memories must expire before sensing on the entity's owning tick.
 +        return false;
 +    }
 +
