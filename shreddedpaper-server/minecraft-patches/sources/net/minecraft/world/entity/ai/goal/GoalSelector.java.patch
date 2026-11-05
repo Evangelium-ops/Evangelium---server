@@ -1,16 +1,20 @@
 --- a/net/minecraft/world/entity/ai/goal/GoalSelector.java
 +++ b/net/minecraft/world/entity/ai/goal/GoalSelector.java
-@@ -91,7 +_,13 @@
+@@ -91,7 +91,17 @@
              }
          }
  
 -        this.lockedFlags.entrySet().removeIf(entry -> !entry.getValue().isRunning());
 +        // Knowledge - preserve enum order while avoiding entry iterator allocations.
-+        for (Goal.Flag flag : GOAL_FLAG_VALUES) {
-+            WrappedGoal locked = this.lockedFlags.get(flag);
-+            if (locked != null && !locked.isRunning()) {
-+                this.lockedFlags.remove(flag);
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.goalOptimizationEnabled()) {
++            for (Goal.Flag flag : GOAL_FLAG_VALUES) {
++                WrappedGoal locked = this.lockedFlags.get(flag);
++                if (locked != null && !locked.isRunning()) {
++                    this.lockedFlags.remove(flag);
++                }
 +            }
++        } else {
++            this.lockedFlags.entrySet().removeIf(entry -> !entry.getValue().isRunning());
 +        }
          profilerFiller.pop();
          profilerFiller.push("goalUpdate");
