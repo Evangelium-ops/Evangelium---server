@@ -1,0 +1,16 @@
+--- a/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java
++++ b/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java
+@@ -20,7 +_,13 @@
+         List<LivingEntity> entitiesOfClass = level.getEntitiesOfClass(
+             LivingEntity.class, aabb, matchableEntity -> matchableEntity != entity && matchableEntity.isAlive()
+         );
++        // Knowledge start - each distance computed once, the same stable order
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.spatialOptimizationEnabled()) {
++            io.multipaper.shreddedpaper.ai.DistanceSort.sort(entitiesOfClass, entity::distanceToSqr);
++        } else {
+         entitiesOfClass.sort(Comparator.comparingDouble(entity::distanceToSqr));
++        }
++        // Knowledge end
+         Brain<?> brain = entity.getBrain();
+         brain.setMemory(MemoryModuleType.NEAREST_LIVING_ENTITIES, entitiesOfClass);
+         brain.setMemory(MemoryModuleType.NEAREST_VISIBLE_LIVING_ENTITIES, new NearestVisibleLivingEntities(level, entity, entitiesOfClass));

@@ -1,14 +1,22 @@
 --- a/net/minecraft/world/entity/ai/Brain.java
 +++ b/net/minecraft/world/entity/ai/Brain.java
-@@ -49,6 +_,8 @@
+@@ -49,7 +_,16 @@
      private static final int SCHEDULE_UPDATE_DELAY = 20;
      private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = Maps.newHashMap();
      private final Map<SensorType<? extends Sensor<? super E>>, Sensor<? super E>> sensors = Maps.newLinkedHashMap();
 +    private static final Sensor<?>[] EMPTY_SENSORS = new Sensor<?>[0];
 +    private final Sensor<? super E>[] sensorArray;
      private final Map<Integer, Map<Activity, Set<BehaviorControl<? super E>>>> availableBehaviorsByPriority = Maps.newTreeMap();
++    // Knowledge start - the behaviors flattened in the order of the maps above; null after they change, rebuilt on the owning tick
++    private record BehaviorGroup<E extends LivingEntity>(Activity activity, BehaviorControl<? super E>[] behaviors) {
++    }
++
++    private BehaviorGroup<E> @Nullable [] behaviorGroups;
++    private BehaviorControl<? super E>[] runningBehaviors;
++    // Knowledge end
      private @Nullable EnvironmentAttribute<Activity> schedule;
      private final Map<Activity, Set<Pair<MemoryModuleType<?>, MemoryStatus>>> activityRequirements = Maps.newHashMap();
+     private final Map<Activity, Set<MemoryModuleType<?>>> activityMemoriesToEraseWhenStopped = Maps.newHashMap();
 @@ -123,6 +_,7 @@
          return mutableObject.get();
      }
@@ -17,16 +25,30 @@
      public Brain(
          Collection<? extends MemoryModuleType<?>> memoryModuleTypes,
          Collection<? extends SensorType<? extends Sensor<? super E>>> sensorTypes,
-@@ -138,6 +_,9 @@
-         for (SensorType<? extends Sensor<? super E>> sensorType : sensorTypes) {
+@@ -139,6 +_,9 @@
              this.sensors.put(sensorType, (Sensor<? super E>)sensorType.create());
          }
-+
+ 
 +        // Sensor membership is private and fixed after construction; retain LinkedHashMap firing order.
 +        this.sensorArray = this.sensors.isEmpty() ? (Sensor<? super E>[]) EMPTY_SENSORS : this.sensors.values().toArray(Sensor[]::new);
- 
++
          for (Sensor<? super E> sensor : this.sensors.values()) {
              for (MemoryModuleType<?> memoryModuleType1 : sensor.requires()) {
+                 this.memories.put(memoryModuleType1, Optional.empty());
+@@ -380,11 +_,13 @@
+                 .computeIfAbsent(activity, activity1 -> Sets.newLinkedHashSet())
+                 .add((BehaviorControl<? super E>)pair.getSecond());
+         }
++        this.behaviorGroups = null; // Knowledge
+     }
+ 
+     @VisibleForTesting
+     public void removeAllBehaviors() {
+         this.availableBehaviorsByPriority.clear();
++        this.behaviorGroups = null; // Knowledge
+     }
+ 
+     public boolean isActive(Activity activity) {
 @@ -406,14 +_,39 @@
  
      public void tick(ServerLevel level, E entity) {
@@ -69,3 +91,74 @@
          }
      }
  
+@@ -438,9 +_,44 @@
+         }
+     }
+ 
++    // Knowledge start
++    @SuppressWarnings("unchecked")
++    private BehaviorGroup<E>[] behaviorGroups() {
++        BehaviorGroup<E>[] groups = this.behaviorGroups;
++        if (groups == null) {
++            java.util.List<BehaviorGroup<E>> list = new ObjectArrayList<>();
++            int total = 0;
++            for (Map<Activity, Set<BehaviorControl<? super E>>> map : this.availableBehaviorsByPriority.values()) {
++                for (Entry<Activity, Set<BehaviorControl<? super E>>> entry : map.entrySet()) {
++                    list.add(new BehaviorGroup<>(entry.getKey(), entry.getValue().toArray(new BehaviorControl[0])));
++                    total += entry.getValue().size();
++                }
++            }
++            this.runningBehaviors = new BehaviorControl[total];
++            this.behaviorGroups = groups = list.toArray(new BehaviorGroup[0]);
++        }
++        return groups;
++    }
++    // Knowledge end
++
+     private void startEachNonRunningBehavior(ServerLevel level, E entity) {
+         long gameTime = level.getGameTime();
+ 
++        // Knowledge start - the same order; an activity a behavior switches on or off is still seen by the groups after it
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled()) {
++            for (BehaviorGroup<E> group : this.behaviorGroups()) {
++                if (this.activeActivities.contains(group.activity())) {
++                    BehaviorControl<? super E>[] behaviors = group.behaviors();
++                    for (int i = 0; i < behaviors.length; i++) {
++                        if (behaviors[i].getStatus() == Behavior.Status.STOPPED) {
++                            behaviors[i].tryStart(level, entity, gameTime);
++                        }
++                    }
++                }
++            }
++            return;
++        }
++        // Knowledge end
+         for (Map<Activity, Set<BehaviorControl<? super E>>> map : this.availableBehaviorsByPriority.values()) {
+             for (Entry<Activity, Set<BehaviorControl<? super E>>> entry : map.entrySet()) {
+                 Activity activity = entry.getKey();
+@@ -458,6 +_,25 @@
+     private void tickEachRunningBehavior(ServerLevel level, E entity) {
+         long gameTime = level.getGameTime();
+ 
++        // Knowledge start - who runs is settled before the first tickOrStop, as with getRunningBehaviors(), without its list
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled()) {
++            BehaviorGroup<E>[] groups = this.behaviorGroups();
++            BehaviorControl<? super E>[] running = this.runningBehaviors;
++            int count = 0;
++            for (BehaviorGroup<E> group : groups) {
++                BehaviorControl<? super E>[] behaviors = group.behaviors();
++                for (int i = 0; i < behaviors.length; i++) {
++                    if (behaviors[i].getStatus() == Behavior.Status.RUNNING) {
++                        running[count++] = behaviors[i];
++                    }
++                }
++            }
++            for (int i = 0; i < count; i++) {
++                running[i].tickOrStop(level, entity, gameTime);
++            }
++            return;
++        }
++        // Knowledge end
+         for (BehaviorControl<? super E> behaviorControl : this.getRunningBehaviors()) {
+             behaviorControl.tickOrStop(level, entity, gameTime);
+         }
