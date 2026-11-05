@@ -1,0 +1,21 @@
+--- a/net/minecraft/world/entity/Mob.java
++++ b/net/minecraft/world/entity/Mob.java
+@@ -813,6 +813,8 @@
+ 
+     @Override
+     protected final void serverAiStep() {
++        long aiStarted = io.multipaper.shreddedpaper.ai.AiDiagnostics.begin(this);
++        try {
+         this.noActionTime++;
+         // Paper start - Allow nerfed mobs to jump and float
+         if (!this.aware) {
+@@ -859,6 +861,9 @@
+         this.jumpControl.tick();
+         profilerFiller.pop();
+         profilerFiller.pop();
++        } finally {
++            io.multipaper.shreddedpaper.ai.AiDiagnostics.end(this, aiStarted);
++        }
+     }
+ 
+     protected void customServerAiStep(ServerLevel level) {

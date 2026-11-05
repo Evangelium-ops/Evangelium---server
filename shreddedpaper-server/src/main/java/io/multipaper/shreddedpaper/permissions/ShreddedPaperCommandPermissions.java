@@ -16,6 +16,8 @@ public class ShreddedPaperCommandPermissions {
         DefaultPermissions.registerPermission(PREFIX + "regions", "Regions command (laggy regions)", PermissionDefault.OP, commands); // Knowledge
         DefaultPermissions.registerPermission("shreddedpaper.regions.alerts", "Told when a region lags", PermissionDefault.OP, parent); // Knowledge
 
+        DefaultPermissions.registerPermission(PREFIX + "aiengine", "AI diagnostics and coverage", PermissionDefault.OP, commands);
+
         commands.recalculatePermissibles();
     }
 }

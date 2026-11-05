@@ -25,6 +25,19 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         ShreddedPaperConfiguration.instance = instance;
     }
 
+    public AiEngine aiEngine;
+
+    public class AiEngine extends ConfigurationPart {
+        public boolean enabled = true;
+        public boolean goalOptimization = true;
+        public boolean spatialOptimization = true;
+        public boolean navigationOptimization = true;
+        @Comment("Owner-thread AI timing; disabled by default. Counts sampled invocations, not total AI CPU time.")
+        public boolean profilingEnabled = false;
+        @Comment("Profile one invocation per mob every N entity ticks, staggered by entity id; clamped to 1..1200.")
+        public int profilingIntervalTicks = 20;
+    }
+
     public Multithreading multithreading;
 
     public class Multithreading extends ConfigurationPart {

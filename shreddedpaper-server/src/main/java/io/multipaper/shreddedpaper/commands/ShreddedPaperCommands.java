@@ -12,6 +12,7 @@ public class ShreddedPaperCommands {
     static {
         for (Command command : new Command[] {
                 new MPMapCommand("mpmap"),
+                new AiCommand("aiengine"),
                 new RegionsCommand("regions") // Knowledge - tick budget
         }) {
             COMMANDS.put(command.getName(), command);
