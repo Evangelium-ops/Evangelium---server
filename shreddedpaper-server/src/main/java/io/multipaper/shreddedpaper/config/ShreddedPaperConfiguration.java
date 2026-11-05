@@ -32,6 +32,8 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public boolean goalOptimization = true;
         public boolean spatialOptimization = true;
         public boolean navigationOptimization = true;
+        @Comment("Iterate fixed Brain sensors in constructor order; sensor timers and owner-thread execution remain unchanged.")
+        public boolean brainOptimization = true;
         @Comment("Owner-thread AI timing; disabled by default. Counts sampled invocations, not total AI CPU time.")
         public boolean profilingEnabled = false;
         @Comment("Profile one invocation per mob every N entity ticks, staggered by entity id; clamped to 1..1200.")

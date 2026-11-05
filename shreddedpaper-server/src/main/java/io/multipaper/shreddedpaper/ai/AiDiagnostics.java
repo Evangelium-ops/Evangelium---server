@@ -21,6 +21,10 @@ public final class AiDiagnostics {
         var config = ShreddedPaperConfiguration.get();
         return config != null && config.aiEngine != null && config.aiEngine.enabled && config.aiEngine.navigationOptimization;
     }
+    public static boolean brainOptimizationEnabled() {
+        var config = ShreddedPaperConfiguration.get();
+        return config != null && config.aiEngine != null && config.aiEngine.enabled && config.aiEngine.brainOptimization;
+    }
     private static class Metrics {
         static final Sample[] TYPES = java.util.stream.IntStream.range(0, BuiltInRegistries.ENTITY_TYPE.size())
             .mapToObj(ignored -> new Sample()).toArray(Sample[]::new);

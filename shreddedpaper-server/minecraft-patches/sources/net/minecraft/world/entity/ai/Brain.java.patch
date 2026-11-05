@@ -1,6 +1,33 @@
 --- a/net/minecraft/world/entity/ai/Brain.java
 +++ b/net/minecraft/world/entity/ai/Brain.java
-@@ -406,10 +_,29 @@
+@@ -49,6 +_,8 @@
+     private static final int SCHEDULE_UPDATE_DELAY = 20;
+     private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = Maps.newHashMap();
+     private final Map<SensorType<? extends Sensor<? super E>>, Sensor<? super E>> sensors = Maps.newLinkedHashMap();
++    private static final Sensor<?>[] EMPTY_SENSORS = new Sensor<?>[0];
++    private final Sensor<? super E>[] sensorArray;
+     private final Map<Integer, Map<Activity, Set<BehaviorControl<? super E>>>> availableBehaviorsByPriority = Maps.newTreeMap();
+     private @Nullable EnvironmentAttribute<Activity> schedule;
+     private final Map<Activity, Set<Pair<MemoryModuleType<?>, MemoryStatus>>> activityRequirements = Maps.newHashMap();
+@@ -123,6 +_,7 @@
+         return mutableObject.get();
+     }
+ 
++    @SuppressWarnings("unchecked")
+     public Brain(
+         Collection<? extends MemoryModuleType<?>> memoryModuleTypes,
+         Collection<? extends SensorType<? extends Sensor<? super E>>> sensorTypes,
+@@ -138,6 +_,9 @@
+         for (SensorType<? extends Sensor<? super E>> sensorType : sensorTypes) {
+             this.sensors.put(sensorType, (Sensor<? super E>)sensorType.create());
+         }
++
++        // Sensor membership is private and fixed after construction; retain LinkedHashMap firing order.
++        this.sensorArray = this.sensors.isEmpty() ? (Sensor<? super E>[]) EMPTY_SENSORS : this.sensors.values().toArray(Sensor[]::new);
+ 
+         for (Sensor<? super E> sensor : this.sensors.values()) {
+             for (MemoryModuleType<?> memoryModuleType1 : sensor.requires()) {
+@@ -406,14 +_,39 @@
  
      public void tick(ServerLevel level, E entity) {
          this.forgetOutdatedMemories();
@@ -9,7 +36,7 @@
          this.startEachNonRunningBehavior(level, entity);
          this.tickEachRunningBehavior(level, entity);
      }
-+
+ 
 +    // Knowledge start - read-only sensing ahead of the brain tick (see Sensor#knowledgePrecompute)
 +    public long knowledgeLastTick = Long.MIN_VALUE;
 +
@@ -27,6 +54,18 @@
 +        }
 +    }
 +    // Knowledge end
- 
++
      private void tickSensors(ServerLevel level, E brainHolder) {
-         for (Sensor<? super E> sensor : this.sensors.values()) {
+-        for (Sensor<? super E> sensor : this.sensors.values()) {
+-            sensor.tick(level, brainHolder);
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled()) {
++            for (int i = 0; i < this.sensorArray.length; i++) {
++                this.sensorArray[i].tick(level, brainHolder);
++            }
++        } else {
++            for (Sensor<? super E> sensor : this.sensors.values()) {
++                sensor.tick(level, brainHolder);
++            }
+         }
+     }
+ 
