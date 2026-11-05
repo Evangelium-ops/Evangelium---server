@@ -32,7 +32,7 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public boolean goalOptimization = true;
         public boolean spatialOptimization = true;
         public boolean navigationOptimization = true;
-        @Comment("Iterate fixed Brain sensors in constructor order; sensor timers and owner-thread execution remain unchanged.")
+        @Comment("Iterate fixed Brain sensors and behaviors as flat arrays in their original order; timers, activity checks and owner-thread execution remain unchanged.")
         public boolean brainOptimization = true;
         @Comment("Owner-thread AI timing; disabled by default. Counts sampled invocations, not total AI CPU time.")
         public boolean profilingEnabled = false;

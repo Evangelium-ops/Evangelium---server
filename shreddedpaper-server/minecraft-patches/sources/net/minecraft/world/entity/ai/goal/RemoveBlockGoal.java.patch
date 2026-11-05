@@ -1,0 +1,45 @@
+--- a/net/minecraft/world/entity/ai/goal/RemoveBlockGoal.java
++++ b/net/minecraft/world/entity/ai/goal/RemoveBlockGoal.java
+@@ -146,9 +_,41 @@
+         }
+     }
+ 
++    // Knowledge start - one search touches thousands of blocks of a few chunks; it runs at once on the owning thread, so a chunk cannot go away during it
++    private @Nullable ChunkAccess scanChunk;
++    private boolean scanning;
++
++    @Override
++    protected boolean findNearestBlock() {
++        if (!io.multipaper.shreddedpaper.ai.AiDiagnostics.goalOptimizationEnabled()) {
++            return super.findNearestBlock();
++        }
++        this.scanning = true;
++        try {
++            return super.findNearestBlock();
++        } finally {
++            this.scanning = false;
++            this.scanChunk = null;
++        }
++    }
++
++    private @Nullable ChunkAccess chunkAt(LevelReader level, BlockPos pos) {
++        int x = pos.getX() >> 4, z = pos.getZ() >> 4;
++        ChunkAccess chunk = this.scanChunk;
++        if (chunk != null && chunk.getPos().x == x && chunk.getPos().z == z) {
++            return chunk;
++        }
++        chunk = level.getChunkIfLoadedImmediately(x, z); // Paper - Prevent AI rules from loading chunks
++        if (this.scanning) {
++            this.scanChunk = chunk;
++        }
++        return chunk;
++    }
++    // Knowledge end
++
+     @Override
+     protected boolean isValidTarget(LevelReader level, BlockPos pos) {
+-        ChunkAccess chunk = level.getChunkIfLoadedImmediately(pos.getX() >> 4, pos.getZ() >> 4); // Paper - Prevent AI rules from loading chunks
++        ChunkAccess chunk = this.chunkAt(level, pos); // Knowledge
+         return chunk != null
+             && chunk.getBlockState(pos).is(this.blockToRemove)
+             && chunk.getBlockState(pos.above()).isAir()

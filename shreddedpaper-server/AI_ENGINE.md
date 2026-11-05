@@ -8,9 +8,25 @@ ai-engine:
   goal-optimization: true
   spatial-optimization: true
   navigation-optimization: true
+  brain-optimization: true
   profiling-enabled: false
   profiling-interval-ticks: 20
 ```
+
+Each flag covers:
+
+- `goal-optimization`: locked-flag cleanup without iterators; a search of `RemoveBlockGoal`
+  (zombies and turtle eggs) keeps the chunk it is in instead of looking it up per block.
+- `spatial-optimization`: lazy visibility cache; nearest-entity and nearest-item sensors sort
+  with each distance computed once (`DistanceSort`), in the same stable order.
+- `navigation-optimization`: path reconstruction appends and reverses.
+- `brain-optimization`: sensors and behaviors are walked as flat arrays in the order of the
+  maps they come from. The activity check stays live per group, because a behavior can switch
+  an activity during the walk, and vanilla sees that at once. `SetLookAndInteract` tests the
+  mob type before the distance. A plugin that changes Brain's private behavior map by
+  reflection without going through `addActivity` is not seen until the next rebuild.
+
+The Brain ordering fix (sensors after memory expiry) is a correctness fix and has no flag.
 
 Only implemented optimizations have flags. Master disable selects original implementations;
 missing configuration during startup also selects original implementations. Specialized AI,
