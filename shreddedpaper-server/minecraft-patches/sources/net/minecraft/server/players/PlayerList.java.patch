@@ -20,6 +20,24 @@
  import net.minecraft.world.level.Level;
  import net.minecraft.world.level.block.Blocks;
  import net.minecraft.world.level.block.state.BlockState;
+@@ -115,7 +_,7 @@
+     private static final SimpleDateFormat BAN_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd 'at' HH:mm:ss z", Locale.ROOT);
+     private final MinecraftServer server;
+     public final List<ServerPlayer> players = new java.util.concurrent.CopyOnWriteArrayList(); // CraftBukkit - ArrayList -> CopyOnWriteArrayList: Iterator safety
+-    private final Map<UUID, ServerPlayer> playersByUUID = Maps.newHashMap();
++    private final Map<UUID, ServerPlayer> playersByUUID = new java.util.concurrent.ConcurrentHashMap<>(); // ShreddedPaper - players join on several region threads at once
+     private final UserBanList bans;
+     private final IpBanList ipBans;
+     private final ServerOpList ops;
+@@ -133,7 +_,7 @@
+ 
+     // CraftBukkit start
+     private org.bukkit.craftbukkit.CraftServer cserver;
+-    private final Map<String,ServerPlayer> playersByName = new java.util.HashMap<>();
++    private final Map<String,ServerPlayer> playersByName = new java.util.concurrent.ConcurrentHashMap<>(); // ShreddedPaper - a plain map lost one of two players joining at once
+     public @Nullable String collideRuleTeamName; // Paper - Configurable player collision
+ 
+     public PlayerList(
 @@ -490,7 +_,9 @@
          for (ThrownEnderpearl thrownEnderpearl : player.getEnderPearls()) {
              // Paper start - Allow using old ender pearl behavior
@@ -74,3 +92,12 @@
          for (int i = 0; i < this.players.size(); i++) {
              ServerPlayer serverPlayer = this.players.get(i);
              // CraftBukkit start - Test if player receiving packet can see the source of the packet
+@@ -1269,7 +_,7 @@
+     }
+ 
+     public @Nullable ServerPlayer getPlayer(UUID playerUUID) {
+-        return this.playersByUUID.get(playerUUID);
++        return playerUUID == null ? null : this.playersByUUID.get(playerUUID); // ShreddedPaper - the concurrent map throws on null
+     }
+ 
+     public @Nullable ServerPlayer getPlayer(String name) {
