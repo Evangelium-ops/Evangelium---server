@@ -1,15 +1,21 @@
 --- a/net/minecraft/world/entity/ai/behavior/SetLookAndInteract.java
 +++ b/net/minecraft/world/entity/ai/behavior/SetLookAndInteract.java
-@@ -19,8 +_,11 @@
+@@ -19,8 +_,16 @@
                  .apply(
                      instance,
                      (lookTarget, interactionTarget, nearestVisibleLivingEntities) -> (level, entity, gameTime) -> {
-+                        // Knowledge - the same test, the cheap half first: in a crowd of villagers looking for a player it ends at once
-+                        boolean typeFirst = io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled();
-                         Optional<LivingEntity> optional = instance.<NearestVisibleLivingEntities>get(nearestVisibleLivingEntities)
+-                        Optional<LivingEntity> optional = instance.<NearestVisibleLivingEntities>get(nearestVisibleLivingEntities)
 -                            .findClosest(nearEntity -> nearEntity.distanceToSqr(entity) <= i && entityType.equals(nearEntity.getType()));
++                        // Knowledge start - in a crowd of villagers looking for a player: no walk through the crowd, several times a tick
++                        NearestVisibleLivingEntities visible = instance.<NearestVisibleLivingEntities>get(nearestVisibleLivingEntities);
++                        boolean typeFirst = io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled();
++                        if (typeFirst && !visible.mayContainType(entityType)) {
++                            return false;
++                        }
++                        Optional<LivingEntity> optional = visible
 +                            .findClosest(typeFirst ? nearEntity -> entityType.equals(nearEntity.getType()) && nearEntity.distanceToSqr(entity) <= i
 +                                : nearEntity -> nearEntity.distanceToSqr(entity) <= i && entityType.equals(nearEntity.getType()));
++                        // Knowledge end
                          if (optional.isEmpty()) {
                              return false;
                          } else {
