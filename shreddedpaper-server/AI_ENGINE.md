@@ -22,7 +22,7 @@ Each flag covers:
 - `navigation-optimization`: path reconstruction appends and reverses.
 - `brain-optimization`: sensors and behaviors are walked as flat arrays in the order of the
   maps they come from. The activity check stays live per group, because a behavior can switch
-  an activity during the walk, and vanilla sees that at once. `SetLookAndInteract` tests the
+  an activity during the walk, and vanilla sees that at once. `SetLookAndInteract` skips the walk when the sensor snapshot holds no mob of the wanted type and tests the
   mob type before the distance. A plugin that changes Brain's private behavior map by
   reflection without going through `addActivity` is not seen until the next rebuild.
 

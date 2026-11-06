@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/ai/memory/NearestVisibleLivingEntities.java
 +++ b/net/minecraft/world/entity/ai/memory/NearestVisibleLivingEntities.java
-@@ -14,6 +14,7 @@
+@@ -14,6 +_,7 @@
      private static final NearestVisibleLivingEntities EMPTY = new NearestVisibleLivingEntities();
      private final List<LivingEntity> nearbyEntities;
      private final Predicate<LivingEntity> lineOfSightTest;
@@ -8,7 +8,7 @@
  
      private NearestVisibleLivingEntities() {
          this.nearbyEntities = List.of();
-@@ -22,9 +23,16 @@
+@@ -22,10 +_,36 @@
  
      public NearestVisibleLivingEntities(ServerLevel level, LivingEntity entity, List<LivingEntity> nearbyEntities) {
          this.nearbyEntities = nearbyEntities;
@@ -17,6 +17,7 @@
 +        this.visibilityCache = lazyVisibilityCache ? null : new Object2BooleanOpenHashMap<>(nearbyEntities.size());
          Predicate<LivingEntity> predicate = target -> Sensor.isEntityTargetable(level, entity, target);
 -        this.lineOfSightTest = target -> map.computeIfAbsent(target, predicate);
+-    }
 +        this.lineOfSightTest = target -> {
 +            // Defer backing arrays until a caller actually requests visibility.
 +            if (this.visibilityCache == null) {
@@ -24,6 +25,26 @@
 +            }
 +            return this.visibilityCache.computeIfAbsent(target, predicate);
 +        };
-     }
++    }
++
++    // Knowledge start - one scan of this snapshot answers "is any X here" for every behavior until the next sensor run; types never change
++    private java.util.Set<net.minecraft.world.entity.EntityType<?>> types;
++
++    public boolean mayContainType(net.minecraft.world.entity.EntityType<?> type) {
++        if (this.nearbyEntities.isEmpty()) {
++            return false; // the shared EMPTY: nothing to remember
++        }
++        java.util.Set<net.minecraft.world.entity.EntityType<?>> set = this.types;
++        if (set == null) {
++            set = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>();
++            for (LivingEntity livingEntity : this.nearbyEntities) {
++                set.add(livingEntity.getType());
++            }
++            this.types = set;
++        }
++        return set.contains(type);
++    }
++    // Knowledge end
  
      public static NearestVisibleLivingEntities empty() {
+         return EMPTY;
