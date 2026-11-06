@@ -9,6 +9,7 @@ ai-engine:
   spatial-optimization: true
   navigation-optimization: true
   brain-optimization: true
+  villager-decision-interval: 1
   profiling-enabled: false
   profiling-interval-ticks: 20
 ```
@@ -31,7 +32,7 @@ The Brain ordering fix (sensors after memory expiry) is a correctness fix and ha
 Only implemented optimizations have flags. Master disable selects original implementations;
 missing configuration during startup also selects original implementations. Specialized AI,
 Brain, sensors, physics and activation timing retain existing lifecycle behavior. There is
-no asynchronous navigation or replacement scheduler in this infrastructure.
+no asynchronous navigation; the one scheduler is the optional villager decision interval below.
 
 Profiling samples the existing Mob.serverAiStep on its owning tick context, including
 navigation, specialized AI and controls, with try/finally completion even on early return
@@ -57,3 +58,56 @@ compile the real configuration and diagnostics sources, check disabled profiling
 null entity (proving it does not access entity state), and benchmark disabled calls. Native
 server compilation and live profiling are separate integration checks; do not interpret
 these microbenchmarks as a full-server speedup claim.
+
+## Villager decision scheduler
+
+`villager-decision-interval` (1 to 4, default 1, which is vanilla) lets an idle villager look for
+a new behavior every N ticks instead of every tick. It is the only part of the engine that
+changes timing, so it is off until an owner chooses it.
+
+- Only `Brain.startEachNonRunningBehavior` waits. Running behaviors, sensors, memory expiry,
+  movement, damage and every other mob keep every tick.
+- Delay is at most N - 1 ticks. Staggering by tick count and entity id needs no queue and no scan.
+- Never delayed: hurt, trading, sleeping, a hostile or a player in view, or an activity just
+  changed (`Brain.decideNextTick`).
+- Off when `brain-optimization` or the master switch is off. Values outside 1 to 4 are clamped.
+
+Measured at 4 against 1 on Linux: distributed villagers 9 to 22% faster, mixed about 4 to 7%,
+dense clusters flat because collisions dominate there. One run, so read these as approximate.
+All 34 live checks pass at 4.
+
+## Thread safety
+
+- All AI code runs on the tick thread that owns the entity. There are no workers, queues or pools.
+- Brain, its flat arrays and its scratch array belong to one entity. `DistanceSort` allocates per
+  call. `RemoveBlockGoal`'s chunk memo lives only for one synchronous search.
+- `NearestVisibleLivingEntities.mayContainType` caches per instance; the shared EMPTY instance
+  returns before it writes.
+- `AiDiagnostics` counters are registry sized LongAdders, read as approximate snapshots and never
+  used to make decisions.
+- Helper pre-sensing is disabled: sensors write live Brain memories, so they run on the owning tick.
+- Async pathfinding was measured and not built: pathfinding is at most 3.3% of samples, even with
+  5,000 zombies chasing a moving target through pillars.
+
+## Testing
+
+From `D:\skripts\launcher\tests-manual`:
+
+- `ai_gameplay_plain.py`: 34 live checks on a plain server, engine on and off. Set
+  `VILLAGER_DECISION_INTERVAL=4` to include the scheduler.
+- `ai_brain_behaviors_test.py`, `ai_distance_sort_test.py`, `ai_brain_sensors_test.py`: differential
+  tests against the original code.
+- `ai_bench_linux.py`: matched benchmark. Use Linux. Windows rounds the main tick's wait to multiples
+  of 15.6 ms. One run alone can swing 10% either way, so pool at least two.
+- `AI_COVERAGE.md` from `ai_coverage_matrix.py`.
+
+## Maintenance
+
+- Edit `src/minecraft/java`, then run `fixupMinecraftSourcePatches` and only then
+  `rebuildMinecraftSourcePatches`. Rebuilding alone drops patches for uncommitted edits.
+- On a Minecraft update, recheck that `availableBehaviorsByPriority` still changes only through
+  `addActivityAndRemoveMemoriesWhenStopped` and `removeAllBehaviors`; `ai_brain_behaviors_test.py`
+  asserts this. A new mutator must clear `behaviorGroups`.
+- Recheck that `SetLookAndInteract` and the two sorting sensors still match the fallback branches.
+- A plugin that changes Brain's private behavior map by reflection is not seen until the next
+  rebuild of the arrays. `ai-engine.brain-optimization: false` is the fallback.
