@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/ai/goal/GoalSelector.java
 +++ b/net/minecraft/world/entity/ai/goal/GoalSelector.java
-@@ -91,7 +91,17 @@
+@@ -91,7 +_,17 @@
              }
          }
  

@@ -33,7 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Knowledge - a tick budget per region. Every region still finishes each tick together with the others (one clock, so plugins see
  * nothing new), but a region that keeps taking longer than the budget (a lag machine, a giant farm) does only a share of its work per
- * tick: its mobs, items, block entities, random ticks and scheduled block ticks get every n-th tick, up to every 64th (slow motion in that region), so the
+ * tick: its mobs, items, block entities, random ticks, natural spawning and scheduled block ticks get every n-th tick, up to every 64th (slow motion in that region), so the
  * others no longer wait for it. Players, projectiles, what players ride, the dragon and the wither always tick. The share is set once a
  * second from the region's tick time and grows back step by step when the region is cheap again.
  * -Dshreddedpaper.regionBudgetMs (0 = off).
@@ -52,10 +52,22 @@ public final class RegionBudget {
     static final int CALM_SECONDS = Integer.getInteger("shreddedpaper.regionBudgetCalmSeconds", 3);
     static final String ALERT_PERMISSION = "shreddedpaper.regions.alerts";
 
+    /** five minutes: the longest a slowed region's scheduled block tick waits, so a region that recovers is not stuck on old delays */
+    private static final long MAX_SCALED_DELAY = 6000;
     private static final int LOG_SIZE = 50;
     private static final Deque<String> LOG = new ArrayDeque<>();
     /** the regions running slower than normal right now */
     private static final Map<LevelChunkRegion, State> SLOW = new ConcurrentHashMap<>();
+    private static final java.util.Set<String> ANNOUNCED = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Long> RECOVERED = new ConcurrentHashMap<>();
+
+    public enum Work {
+        SCHEDULED("scheduled blocks/fluids"), EVENTS("block events/redstone"), RANDOM("random ticks"),
+        ENTITIES("mobs/items"), BLOCK_ENTITIES("block entities");
+
+        final String label;
+        Work(String label) { this.label = label; }
+    }
 
     private RegionBudget() {
     }
@@ -71,12 +83,17 @@ public final class RegionBudget {
         long sumNanos;
         /** of sumNanos: the work slow motion divides (mobs, items, block entities, random and scheduled ticks), see sliced() */
         long sliceNanos;
+        final long[] workNanos = new long[Work.values().length];
+        volatile double[] fullWorkMs = new double[Work.values().length];
         int ticks;
         int calm;
         int over;
         /** cheap seconds needed before one stage faster: doubles when a region that was just sped up has to be slowed again */
         int calmNeeded = CALM_SECONDS;
         long fasterAt;
+        double fasterLoad;
+        int recoveryFloor = 1;
+        double recoveryLoad;
         volatile double lastMs;
         volatile long slowSince;
         /** shown to the players in the region while it is slowed */
@@ -122,6 +139,8 @@ public final class RegionBudget {
                 s.over = 0;
                 if (now - s.fasterAt < 20_000L) {
                     s.calmNeeded = Math.min(16, s.calmNeeded * 2);   // sped up too early: wait longer before the next try
+                    s.recoveryFloor = 2;
+                    s.recoveryLoad = s.fasterLoad;
                 }
                 return 2;
             }
@@ -146,6 +165,9 @@ public final class RegionBudget {
             s.over = 0;
             if (now - s.fasterAt < 20_000L) {
                 s.calmNeeded = Math.min(16, s.calmNeeded * 2);
+                // A failed speed-up is retried only after the work at the safe speed becomes cheaper.
+                s.recoveryFloor = Math.min(maxDivisor, s.divisor << 1);
+                s.recoveryLoad = s.fasterLoad;
             }
             // in stages (half speed, a quarter, ...) one per second rather than straight down to what it needs: the players there
             // see it coming, and a region only just over the budget never goes further than it has to
@@ -158,10 +180,15 @@ public final class RegionBudget {
         double limit = faster > 1 ? shareMs : budgetMs;
         double cost = faster > 1 ? 2 * slice : rest + 2 * slice;
         if (cost < limit * 0.8) {
+            if (faster < s.recoveryFloor && fullSlice >= s.recoveryLoad * 0.7) {
+                s.calm = 0;
+                return s.divisor;
+            }
             int need = cost < limit * 0.2 ? 1 : s.calmNeeded;   // clearly cheap (a killed lag machine): one stage a second
             if (++s.calm >= need) {
                 s.calm = 0;
                 s.fasterAt = now;
+                s.fasterLoad = fullSlice;
                 return faster;
             }
             return s.divisor;
@@ -186,6 +213,17 @@ public final class RegionBudget {
     private static State current() {
         LevelChunkRegion region = ShreddedPaperChunkTicker.getCurrentlyTickingRegion();
         return region == null ? null : region.budget;
+    }
+
+    /**
+     * The delay of a scheduled block or fluid tick (repeaters, observers, water, ...) set from here. Those wait on the real game clock while
+     * everything else counts its own turns, so without this they barely slow down and a farm's parts fall out of step.
+     * shortcut: a tick already waiting keeps its delay when the stage changes, so a region back at full speed can wait up to
+     * MAX_SCALED_DELAY once; a clock per region would avoid it, if that ever matters.
+     */
+    public static int delay(int delay) {
+        State s = enabled() ? current() : null;
+        return s == null || s.divisor <= 1 ? delay : (int) Math.max(delay, Math.min((long) delay * s.divisor, MAX_SCALED_DELAY));
     }
 
     /** Scheduled block and fluid ticks and the like: run in this tick? */
@@ -220,31 +258,46 @@ public final class RegionBudget {
     }
 
     /** Time the region's thread spent on work slow motion divides (one phase of the region tick, measured around it). */
-    public static void sliced(long nanos) {
+    public static void sliced(Work work, long nanos) {
         State s = enabled() ? current() : null;
         if (s != null) {
             s.sliceNanos += nanos;
+            s.workNanos[work.ordinal()] += nanos;
         }
     }
 
     /** Time inside a sliced phase that is not divided after all (the players' own entity tick). */
     public static void notSliced(long nanos) {
-        sliced(-nanos);
+        sliced(Work.ENTITIES, -nanos);
     }
 
-    /** After the region's tick: once a second the share is set from the time it took. */
+    static boolean sampleComplete(int ticks, long nanos, int divisor) {
+        // A quiet window must include the throttled work's turn before it can justify speeding up.
+        return ticks >= Math.max(20, divisor) || (divisor == 1 && nanos >= 1_000_000_000L);
+    }
+
+    /** Assess a full work cycle, keeping the player bar current between assessments. */
     public static void end(LevelChunkRegion region, long nanos) {
         if (!enabled()) {
             return;
         }
         State s = region.budget;
         s.sumNanos += nanos;
-        // once a second: after 20 ticks, or sooner when the ticks are so slow that 20 of them take longer than a second
-        if (++s.ticks < 20 && s.sumNanos < 1_000_000_000L) {
+        // At least one second, and at least one execution of every throttled work phase.
+        if (!sampleComplete(++s.ticks, s.sumNanos, s.divisor)) {
+            if (s.tick % 20 == 0) {
+                bossBars(region, s);
+            }
             return;
         }
         double avg = s.sumNanos / 1e6 / s.ticks;
         double slice = s.sliceNanos / 1e6 / s.ticks;
+        double[] fullWork = new double[s.workNanos.length];
+        for (int i = 0; i < fullWork.length; i++) {
+            fullWork[i] = Math.max(0, s.workNanos[i] / 1e6 / s.ticks * s.divisor);
+            s.workNanos[i] = 0;
+        }
+        s.fullWorkMs = fullWork;
         s.sumNanos = 0;
         s.sliceNanos = 0;
         s.ticks = 0;
@@ -323,7 +376,7 @@ public final class RegionBudget {
                 + ((pos.z << RegionPos.REGION_SHIFT) * 16 + half);
     }
 
-    private static String speed(int divisor) {
+    public static String speed(int divisor) {
         double tps = 20.0 / divisor;
         return divisor <= 1 ? "full speed" : "1/" + divisor + " speed (" + (tps >= 1 ? String.valueOf((int) tps) : String.format("%.2f", tps)) + " TPS)";
     }
@@ -347,10 +400,10 @@ public final class RegionBudget {
         NamedTextColor color;
         if (s.divisor > before) {
             text = "Region near " + where + " is lagging (" + String.format("%.1f", avg) + " ms per tick, budget " + (int) BUDGET_MS
-                    + " ms): now at " + speed(s.divisor) + ". Most: " + contents(region) + ".";
+                    + " ms): now at " + speed(s.divisor) + ". Most: " + contents(region) + ". " + costs(s);
             color = NamedTextColor.RED;
         } else if (s.divisor > 1) {
-            text = "Region near " + where + " is getting cheaper (" + String.format("%.1f", avg) + " ms per tick): now at " + speed(s.divisor) + ".";
+            text = "Region near " + where + " is getting cheaper (" + String.format("%.1f", avg) + " ms per tick): now at " + speed(s.divisor) + ". " + costs(s);
             color = NamedTextColor.GOLD;
         } else {
             text = "Region near " + where + " is back to full speed.";
@@ -362,14 +415,17 @@ public final class RegionBudget {
                 LOG.removeFirst();
             }
         }
-        LOGGER.warn(text);
-        Component message = Component.text("[Regions] ", NamedTextColor.DARK_RED).append(Component.text(text, color)
+        if (!shouldAnnounce(where, before, s.divisor, System.currentTimeMillis())) {
+            return;
+        }
+        LOGGER.warn(text + " Further updates: /regions logs.");
+        Component message = Component.text("[Regions] ", NamedTextColor.DARK_RED).append(Component.text(where + " - " + summary(s) + ". Details: /regions", color)
                 .hoverEvent(HoverEvent.showText(Component.text("Click to teleport there")))
                 .clickEvent(ClickEvent.runCommand(teleport(region))));
         // players are told from the main thread, never from a region's tick thread
         MinecraftServer.getServer().execute(() -> {
             for (org.bukkit.entity.Player p : Bukkit.getOnlinePlayers()) {
-                if (p.hasPermission(ALERT_PERMISSION)) {
+                if (p.isOp() || p.hasPermission(ALERT_PERMISSION)) {
                     p.sendMessage(message);
                 }
             }
@@ -384,6 +440,40 @@ public final class RegionBudget {
     }
 
     // ------------------------------------------------------------------ /regions
+
+    static boolean shouldAnnounce(String region, int before, int divisor, long now) {
+        if (divisor == 1) {
+            RECOVERED.put(region, now);
+            return false;
+        }
+        if (before != 1) return false;
+        Long recovered = RECOVERED.remove(region);
+        return ANNOUNCED.add(region) || (recovered != null && now - recovered >= 10_000L);
+    }
+
+    public static String summary(State s) {
+        double[] values = s.fullWorkMs;
+        Work cause = null;
+        double largest = 0;
+        for (Work work : Work.values()) {
+            if (values[work.ordinal()] > largest) {
+                largest = values[work.ordinal()];
+                cause = work;
+            }
+        }
+        return "Cause: " + (cause == null ? "unknown" : cause.label) + " | "
+                + String.format(java.util.Locale.ROOT, "%.1f MSPT", s.lastMs) + " | " + speed(s.divisor);
+    }
+
+    public static String costs(State s) {
+        double[] values = s.fullWorkMs;
+        StringBuilder text = new StringBuilder("Estimated full-speed work (ms/tick): ");
+        for (Work work : Work.values()) {
+            if (work.ordinal() > 0) text.append(", ");
+            text.append(work.label).append(' ').append(String.format(java.util.Locale.ROOT, "%.1f", values[work.ordinal()]));
+        }
+        return text.toString();
+    }
 
     public static Collection<Map.Entry<LevelChunkRegion, State>> slowRegions() {
         return new ArrayList<>(SLOW.entrySet());

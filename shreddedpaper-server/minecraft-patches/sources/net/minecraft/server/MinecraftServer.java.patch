@@ -101,6 +101,15 @@
  
                      // adjust ticksBehind so that it is not greater-than catchup
                      if (ticksBehind > catchup) {
+@@ -1532,7 +_,7 @@
+ 
+     @Override
+     public boolean pollTask() {
+-        boolean flag = this.packetProcessor.executeSinglePacket() | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks
++        boolean flag = (!io.multipaper.shreddedpaper.threading.ShreddedPaperTickThread.isShreddedPaperTickThread() && this.packetProcessor.executeSinglePacket()) | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks // Knowledge - main thread packets only on the main thread: on a tick thread waiting in managedBlock they failed with RunningOnDifferentThreadException and were queued again
+         this.mayHaveDelayedTasks = flag;
+         return flag;
+     }
 @@ -1622,7 +_,9 @@
                      this.autoSave();
                  }

@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/pathfinder/PathFinder.java
 +++ b/net/minecraft/world/level/pathfinder/PathFinder.java
-@@ -171,11 +171,20 @@
+@@ -171,11 +_,20 @@
      private Path reconstructPath(Node node, BlockPos targetPos, boolean reachesTarget) {
          List<Node> list = Lists.newArrayList();
          Node node1 = node;
