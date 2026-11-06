@@ -25,6 +25,22 @@ public final class AiDiagnostics {
         var config = ShreddedPaperConfiguration.get();
         return config != null && config.aiEngine != null && config.aiEngine.enabled && config.aiEngine.brainOptimization;
     }
+    /**
+     * Whether an idle villager looks for a new behavior this tick. Off (always true) unless villager-decision-interval is above 1. At most
+     * interval - 1 ticks late, staggered by entity id so no scan or queue is needed, and never late for one that is hurt, trading, sleeping,
+     * near a hostile or a player, or whose activity just changed.
+     */
+    public static boolean villagerDecidesNow(net.minecraft.world.entity.npc.villager.Villager villager, boolean activityChanged) {
+        var config = ShreddedPaperConfiguration.get();
+        if (config == null || config.aiEngine == null || !config.aiEngine.enabled || !config.aiEngine.brainOptimization || activityChanged) return true;
+        int interval = Math.clamp(config.aiEngine.villagerDecisionInterval, 1, 4);
+        if (interval == 1 || Math.floorMod((long) villager.tickCount + villager.getId(), interval) == 0) return true;
+        if (villager.hurtTime > 0 || villager.isTrading() || villager.isSleeping()) return true;
+        var brain = villager.getBrain();
+        return brain.hasMemoryValue(net.minecraft.world.entity.ai.memory.MemoryModuleType.HURT_BY)
+            || brain.hasMemoryValue(net.minecraft.world.entity.ai.memory.MemoryModuleType.NEAREST_HOSTILE)
+            || brain.hasMemoryValue(net.minecraft.world.entity.ai.memory.MemoryModuleType.NEAREST_VISIBLE_PLAYER);
+    }
     private static class Metrics {
         static final Sample[] TYPES = java.util.stream.IntStream.range(0, BuiltInRegistries.ENTITY_TYPE.size())
             .mapToObj(ignored -> new Sample()).toArray(Sample[]::new);
