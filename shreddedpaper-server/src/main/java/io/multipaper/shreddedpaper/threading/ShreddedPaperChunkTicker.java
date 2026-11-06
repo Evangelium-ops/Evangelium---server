@@ -181,7 +181,7 @@ public class ShreddedPaperChunkTicker {
                     final long sliceStart = System.nanoTime(); // Knowledge - tick budget: divided work
                     level.blockTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickBlock);
                     level.fluidTicks.tick(region.getRegionPos(), level.getGameTime(), level.paperConfig().environment.maxBlockTicks, level::tickFluid);
-                    RegionBudget.sliced(System.nanoTime() - sliceStart);
+                    RegionBudget.sliced(RegionBudget.Work.SCHEDULED, System.nanoTime() - sliceStart);
                 }
 
                 // Knowledge - bookkeeping and mob spawning stay on this thread; random ticks, snow and ice reach about one chunk and run in
@@ -201,13 +201,13 @@ public class ShreddedPaperChunkTicker {
                         level.tickChunk(chunk, randomTickSpeed);
                     }
                 }
-                RegionBudget.sliced(System.nanoTime() - randomStart);
+                RegionBudget.sliced(RegionBudget.Work.RANDOM, System.nanoTime() - randomStart);
 
                 // Knowledge - tick budget: block events (pistons, note blocks, bells) are redstone's other half: they run in their turn too
                 if (RegionBudget.ticksRegionWork()) {
                     final long eventsStart = System.nanoTime();
                     level.runBlockEvents(region);
-                    RegionBudget.sliced(System.nanoTime() - eventsStart);
+                    RegionBudget.sliced(RegionBudget.Work.EVENTS, System.nanoTime() - eventsStart);
                 }
 
                 level.handlingTickThreadLocal.set(false);
@@ -239,7 +239,7 @@ public class ShreddedPaperChunkTicker {
                     chunkLocalEntities.add(entity);
                 } else if (playerEntities != null && entity instanceof ServerPlayer player && IntraRegion.isChunkLocalPlayer(player)) {
                     playerEntities.add(entity);
-                } else if (entity instanceof ServerPlayer) {
+                } else if (RegionBudget.alwaysTicks(entity)) {
                     final long playerStart = System.nanoTime(); // Knowledge - tick budget: players are never divided
                     ShreddedPaperEntityTicker.tickEntity(entity);
                     RegionBudget.notSliced(System.nanoTime() - playerStart);
@@ -260,10 +260,13 @@ public class ShreddedPaperChunkTicker {
                 }
             }
 
+            RegionBudget.sliced(RegionBudget.Work.ENTITIES, System.nanoTime() - entitiesStart);
+
             if (!ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
 
+            final long blockEntitiesStart = System.nanoTime();
             level.tickBlockEntities(region.tickingBlockEntities, region.pendingBlockEntityTickers);
-            RegionBudget.sliced(System.nanoTime() - entitiesStart); // Knowledge - tick budget
+            RegionBudget.sliced(RegionBudget.Work.BLOCK_ENTITIES, System.nanoTime() - blockEntitiesStart);
 
             // Knowledge - a crowd in one place: players in chunks at least three apart tick on several threads (IntraRegion#isChunkLocalPlayer)
             final List<ServerPlayer> regionPlayers = region.getPlayers();
@@ -309,7 +312,7 @@ public class ShreddedPaperChunkTicker {
             return false;
         }
 
-        if (spawnState != null && levelChunkRegion.isPlayerTickingRequested(levelChunk.getPos())) {
+        if (spawnState != null && levelChunkRegion.isPlayerTickingRequested(levelChunk.getPos()) && RegionBudget.ticks(levelChunk.getPos())) { // Knowledge - tick budget: a slowed farm gets its mobs at its own speed
             this._tickSpawningChunk(world, levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
         }
 

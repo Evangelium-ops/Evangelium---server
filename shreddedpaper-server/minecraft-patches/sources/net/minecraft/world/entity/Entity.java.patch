@@ -158,7 +158,9 @@
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.deltaMovement = deltaMovement;
              } // Paper - detailed watchdog information
-@@ -5101,6 +_,12 @@
+@@ -5099,6 +_,12 @@
+         }
+         // Paper end - Block invalid positions and bounding box
          if (this.position.x != x || this.position.y != y || this.position.z != z) {
 +            // Knowledge - reject unsafe raw moves before position changes make the owning region stale.
 +            if (this.previousTickingChunkPosRegion != null || this.previousTrackedChunkPosRegion != null) {
@@ -169,8 +171,6 @@
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.position = new Vec3(x, y, z);
              } // Paper - detailed watchdog information
-             int floor = Mth.floor(x);
-             int floor1 = Mth.floor(y);
 @@ -5116,11 +_,12 @@
              this.levelCallback.onMove();
              if (!this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) {

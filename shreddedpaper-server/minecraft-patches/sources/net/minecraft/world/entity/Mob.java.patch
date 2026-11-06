@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/Mob.java
 +++ b/net/minecraft/world/entity/Mob.java
-@@ -813,6 +813,8 @@
+@@ -813,6 +_,8 @@
  
      @Override
      protected final void serverAiStep() {
@@ -9,7 +9,7 @@
          this.noActionTime++;
          // Paper start - Allow nerfed mobs to jump and float
          if (!this.aware) {
-@@ -859,6 +861,9 @@
+@@ -859,6 +_,9 @@
          this.jumpControl.tick();
          profilerFiller.pop();
          profilerFiller.pop();

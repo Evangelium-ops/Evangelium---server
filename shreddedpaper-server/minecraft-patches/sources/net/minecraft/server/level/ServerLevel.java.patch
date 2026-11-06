@@ -457,8 +457,14 @@
              ((ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer)this.server).moonrise$executeMidTickTasks();
          }
          // Paper end - rewrite chunk system
-@@ -1467,7 +_,7 @@
+@@ -1465,9 +_,13 @@
+     }
+ 
      private void tickPassenger(Entity ridingEntity, Entity passengerEntity, final boolean isActive) { // Paper - EAR 2
++        if (!io.multipaper.shreddedpaper.ShreddedPaper.isSync((ServerLevel) passengerEntity.level(), passengerEntity.chunkPosition())) { // ShreddedPaper - sync a passenger from another region with its vehicle
++            io.multipaper.shreddedpaper.ShreddedPaper.ensureSync(ridingEntity, passengerEntity, () -> this.tickPassenger(ridingEntity, passengerEntity, isActive));
++            return;
++        }
          if (passengerEntity.isRemoved() || passengerEntity.getVehicle() != ridingEntity) {
              passengerEntity.stopRiding();
 -        } else if (passengerEntity instanceof Player || this.entityTickList.contains(passengerEntity)) {
