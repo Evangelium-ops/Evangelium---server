@@ -63,6 +63,8 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
     public class Optimizations extends ConfigurationPart {
 
         public int entityActivationCheckFrequency = 20;
+        @Comment("Mobs packed together stop collecting who pushes them once the push limit (max-entity-collisions) and the cramming rule are both answered; the same mobs are pushed and crammed as before, only the rest of the crowd is not filtered every tick.")
+        public boolean cappedPushSearch = true;
         public boolean disableVanishApi = false;
         public boolean disableLocatorBar = true;
         public boolean useLazyExecuteWhenNotFlushing = true;
