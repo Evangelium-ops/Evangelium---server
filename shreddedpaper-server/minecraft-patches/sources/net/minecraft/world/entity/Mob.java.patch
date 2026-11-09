@@ -1,7 +1,11 @@
 --- a/net/minecraft/world/entity/Mob.java
 +++ b/net/minecraft/world/entity/Mob.java
-@@ -813,6 +_,8 @@
+@@ -811,8 +_,12 @@
+         }
+     }
  
++    public int farAiInterval; // ShreddedPaper - far mobs think less often (see FarAi), 0 = not looked up yet
++
      @Override
      protected final void serverAiStep() {
 +        long aiStarted = io.multipaper.shreddedpaper.ai.AiDiagnostics.begin(this);
@@ -9,6 +13,18 @@
          this.noActionTime++;
          // Paper start - Allow nerfed mobs to jump and float
          if (!this.aware) {
+@@ -828,7 +_,10 @@
+         this.sensing.tick();
+         profilerFiller.pop();
+         int i = this.tickCount + this.getId();
+-        if (i % 2 != 0 && this.tickCount > 1) {
++        int far = io.multipaper.shreddedpaper.ai.FarAi.interval(this); // ShreddedPaper - far mobs think less often
++        if (far > 1 && i % far != 0) {
++            // far from every player: goal and target thinking waits, movement below still runs every tick
++        } else if (i % 2 != 0 && this.tickCount > 1) {
+             profilerFiller.push("targetSelector");
+             this.targetSelector.tickRunningGoals(false);
+             profilerFiller.pop();
 @@ -859,6 +_,9 @@
          this.jumpControl.tick();
          profilerFiller.pop();
