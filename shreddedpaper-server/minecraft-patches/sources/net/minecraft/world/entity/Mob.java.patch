@@ -13,14 +13,24 @@
          this.noActionTime++;
          // Paper start - Allow nerfed mobs to jump and float
          if (!this.aware) {
-@@ -828,7 +_,10 @@
+@@ -828,7 +_,20 @@
          this.sensing.tick();
          profilerFiller.pop();
          int i = this.tickCount + this.getId();
 -        if (i % 2 != 0 && this.tickCount > 1) {
 +        int far = io.multipaper.shreddedpaper.ai.FarAi.interval(this); // ShreddedPaper - far mobs think less often
-+        if (far > 1 && i % far != 0) {
-+            // far from every player: goal and target thinking waits, movement below still runs every tick
++        if (far > 1) {
++            // far from every player: goals and targets are looked at every far ticks (movement below still runs every tick); their
++            // chances and timers are scaled to that spacing (Goal.reducedTickDelay), so a far mob acts on vanilla's real-time schedule
++            if (i % far == 0) {
++                io.multipaper.shreddedpaper.ai.FarAi.enter(far);
++                try {
++                    this.targetSelector.tick();
++                    this.goalSelector.tick();
++                } finally {
++                    io.multipaper.shreddedpaper.ai.FarAi.exit();
++                }
++            }
 +        } else if (i % 2 != 0 && this.tickCount > 1) {
              profilerFiller.push("targetSelector");
              this.targetSelector.tickRunningGoals(false);

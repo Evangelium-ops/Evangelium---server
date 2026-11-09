@@ -11,12 +11,28 @@ import net.minecraft.world.entity.player.Player;
  * Far mobs think less often (the idea of Pufferfish's dynamic activation of brain). Within {@code far-ai-start-distance} of a player a
  * mob is vanilla. Farther away its goal and target selectors run every N ticks, N growing with the distance (squared distance >>
  * far-ai-distance-shift, at most far-ai-max-interval); movement, looking, jumping, path following, sensing and a mob's own logic
- * still run every tick, so far mobs keep moving smoothly and only decide a little later. Never slowed: a mob with a target, hurt,
+ * still run every tick, so far mobs keep moving smoothly. Goal chances and timers are scaled to the spacing (Goal.reducedTickDelay), so
+ * on average a far mob wanders, looks around and acts on vanilla's real-time schedule (farms keep their rates). Never slowed: a mob with a target, hurt,
  * in water or lava, leashed, riding or ridden, and the bosses.
  */
 public final class FarAi {
 
     private FarAi() {
+    }
+
+    /** Ticks between goal and target thinking of the mob whose selectors run on this thread right now; 1 = vanilla timing. */
+    private static final ThreadLocal<int[]> SPACING = ThreadLocal.withInitial(() -> new int[] {1});
+
+    public static void enter(int spacing) {
+        SPACING.get()[0] = spacing;
+    }
+
+    public static void exit() {
+        SPACING.get()[0] = 1;
+    }
+
+    public static int spacing() {
+        return SPACING.get()[0];
     }
 
     /** Ticks between this mob's goal and target thinking: 1 = every tick (vanilla). */
