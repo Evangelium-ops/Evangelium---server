@@ -8,7 +8,7 @@
  
      private NearestVisibleLivingEntities() {
          this.nearbyEntities = List.of();
-@@ -22,10 +_,36 @@
+@@ -22,10 +_,62 @@
  
      public NearestVisibleLivingEntities(ServerLevel level, LivingEntity entity, List<LivingEntity> nearbyEntities) {
          this.nearbyEntities = nearbyEntities;
@@ -25,10 +25,36 @@
 +            }
 +            return this.visibilityCache.computeIfAbsent(target, predicate);
 +        };
++        // Knowledge start - the players, in list order, picked out now while the sensor's sort still has every neighbour in cache
++        if (io.multipaper.shreddedpaper.ai.AiDiagnostics.brainOptimizationEnabled()) {
++            List<LivingEntity> players = List.of();
++            for (LivingEntity livingEntity : nearbyEntities) {
++                if (livingEntity.getType() == net.minecraft.world.entity.EntityType.PLAYER) {
++                    if (players.isEmpty()) players = new java.util.ArrayList<>(2);
++                    players.add(livingEntity);
++                }
++            }
++            this.players = players;
++        }
++        // Knowledge end
 +    }
 +
 +    // Knowledge start - one scan of this snapshot answers "is any X here" for every behavior until the next sensor run; types never change
 +    private java.util.Set<net.minecraft.world.entity.EntityType<?>> types;
++
++    private List<LivingEntity> players; // null: brain optimization off when this snapshot was taken
++
++    // same answer as findClosest(e -> type.equals(e.getType()) && predicate.test(e)): the same entities tested in the same order; for a
++    // player in a crowd of villagers it walks only the players
++    public Optional<LivingEntity> findClosestOfType(net.minecraft.world.entity.EntityType<?> type, Predicate<LivingEntity> predicate) {
++        List<LivingEntity> list = type == net.minecraft.world.entity.EntityType.PLAYER && this.players != null ? this.players : this.nearbyEntities;
++        for (LivingEntity livingEntity : list) {
++            if (type.equals(livingEntity.getType()) && predicate.test(livingEntity) && this.lineOfSightTest.test(livingEntity)) {
++                return Optional.of(livingEntity);
++            }
++        }
++        return Optional.empty();
++    }
 +
 +    public boolean mayContainType(net.minecraft.world.entity.EntityType<?> type) {
 +        if (this.nearbyEntities.isEmpty()) {
