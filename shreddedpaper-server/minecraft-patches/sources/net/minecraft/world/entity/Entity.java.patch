@@ -136,6 +136,24 @@
              // Paper start - gateway-specific teleport event
              final org.bukkit.event.entity.EntityTeleportEvent teleEvent;
              if (this.portalProcess != null && this.portalProcess.isSamePortal(((net.minecraft.world.level.block.EndGatewayBlock) Blocks.END_GATEWAY)) && this.level.getBlockEntity(this.portalProcess.getEntryPosition()) instanceof net.minecraft.world.level.block.entity.TheEndGatewayBlockEntity theEndGatewayBlockEntity) {
+@@ -4533,7 +_,17 @@
+         if (len > 64) maxZ = minZ + 64.0;
+         this.bb = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+         // CraftBukkit end
++        // Knowledge start - keep the section list's packed copy of this box exact (the only place a box changes)
++        double[] boxes = this.knowledge$boxes;
++        if (boxes != null) {
++            ca.spottedleaf.moonrise.patches.chunk_system.level.entity.ChunkEntitySlices.writeBox(boxes, this.knowledge$boxIndex, this.bb);
++        }
++        // Knowledge end
+     }
++
++    // Knowledge - the packed hitbox array of the chunk section list holding this entity, and its slot there (null: in no packed list)
++    public double[] knowledge$boxes;
++    public int knowledge$boxIndex;
+ 
+     public final float getEyeHeight(Pose pose) {
+         return this.getDimensions(pose).eyeHeight();
 @@ -4920,7 +_,7 @@
              pushVector = pushVector.normalize().scale(0.0045000000000000005);
          }

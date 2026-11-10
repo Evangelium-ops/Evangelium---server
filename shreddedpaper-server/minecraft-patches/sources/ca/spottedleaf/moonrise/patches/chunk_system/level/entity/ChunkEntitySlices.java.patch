@@ -1,0 +1,177 @@
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
+@@ -74,7 +_,7 @@
+         this.chunkZ = chunkZ;
+         this.world = world;
+ 
+-        this.allEntities = new EntityCollectionBySection(this);
++        this.allEntities = new EntityCollectionBySection(this, true); // Knowledge - packed boxes
+         this.hardCollidingEntities = new EntityCollectionBySection(this);
+         this.entitiesByClass = new Reference2ObjectOpenHashMap<>();
+         this.entitiesByType = new Reference2ObjectOpenHashMap<>();
+@@ -398,6 +_,18 @@
+         }
+     }
+ 
++    // Knowledge start - packed hitboxes (minX, minY, minZ, maxX, maxY, maxZ per slot) beside the entities of a section list
++    private static final boolean VERIFY_BOXES = Boolean.getBoolean("shreddedpaper.verifyPackedBoxes"); // test runs: every skip and hit is re-checked
++
++    public static void writeBox(final double[] boxes, final int index, final net.minecraft.world.phys.AABB bb) {
++        final int o = index * 6;
++        if (o + 6 <= boxes.length) {
++            boxes[o] = bb.minX; boxes[o + 1] = bb.minY; boxes[o + 2] = bb.minZ;
++            boxes[o + 3] = bb.maxX; boxes[o + 4] = bb.maxY; boxes[o + 5] = bb.maxZ;
++        }
++    }
++    // Knowledge end
++
+     private static final class BasicEntityList<E extends Entity> {
+ 
+         private static final Entity[] EMPTY = new Entity[0];
+@@ -414,6 +_,22 @@
+             this.storage = (E[])(cap <= 0 ? EMPTY : new Entity[cap]);
+         }
+ 
++        // Knowledge start - set for the lists of allEntities only: each entity there knows its slot and writes its box on every change
++        private double[] boxes;
++
++        BasicEntityList<E> packed() {
++            this.boxes = new double[this.storage.length * 6];
++            return this;
++        }
++
++        private void claim(final int index) {
++            final Entity entity = this.storage[index];
++            entity.knowledge$boxes = this.boxes;
++            entity.knowledge$boxIndex = index;
++            writeBox(this.boxes, index, entity.getBoundingBox());
++        }
++        // Knowledge end
++
+         public boolean isEmpty() {
+             return this.size == 0;
+         }
+@@ -438,6 +_,15 @@
+             } else {
+                 this.storage[idx] = entity;
+             }
++            // Knowledge start
++            if (this.boxes != null) {
++                if (this.boxes.length < this.storage.length * 6) {
++                    this.boxes = Arrays.copyOf(this.boxes, this.storage.length * 6);
++                    for (int i = 0; i < idx; ++i) this.storage[i].knowledge$boxes = this.boxes; // the array moved
++                }
++                this.claim(idx);
++            }
++            // Knowledge end
+         }
+ 
+         public int indexOf(final E entity) {
+@@ -465,6 +_,13 @@
+             }
+ 
+             storage[size] = null;
++            // Knowledge start - the boxes move with their entities, and the entities after it learn their new slot
++            if (this.boxes != null) {
++                if (entity.knowledge$boxes == this.boxes) entity.knowledge$boxes = null;
++                if (idx != size) System.arraycopy(this.boxes, (idx + 1) * 6, this.boxes, idx * 6, (size - idx) * 6);
++                for (int i = idx; i < size; ++i) storage[i].knowledge$boxIndex = i;
++            }
++            // Knowledge end
+ 
+             return true;
+         }
+@@ -480,7 +_,14 @@
+         private final BasicEntityList<Entity>[] entitiesBySection;
+         private int count;
+ 
++        private final boolean packed; // Knowledge
++
+         public EntityCollectionBySection(final ChunkEntitySlices slices) {
++            this(slices, false);
++        }
++
++        public EntityCollectionBySection(final ChunkEntitySlices slices, final boolean packed) {
++            this.packed = packed;
+             this.slices = slices;
+ 
+             final int sectionCount = slices.maxSection - slices.minSection + 1;
+@@ -496,7 +_,7 @@
+             }
+ 
+             if (list == null) {
+-                this.entitiesBySection[sectionIndex] = list = new BasicEntityList<>();
++                this.entitiesBySection[sectionIndex] = list = this.packed ? new BasicEntityList<>().packed() : new BasicEntityList<>(); // Knowledge
+             }
+ 
+             list.add(entity);
+@@ -529,6 +_,7 @@
+             final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
+ 
+             final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
++            final boolean packed = this.packed && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.packedEntityBoxes; // Knowledge
+ 
+             for (int section = min; section <= max; ++section) {
+                 final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
+@@ -538,13 +_,25 @@
+                 }
+ 
+                 final Entity[] storage = list.storage;
++                // Knowledge start - packed boxes: the same test as AABB.intersects on the same numbers, without visiting each entity
++                final double[] boxes = packed ? list.boxes : null;
++                final double bMinX = box.minX, bMinY = box.minY, bMinZ = box.minZ, bMaxX = box.maxX, bMaxY = box.maxY, bMaxZ = box.maxZ;
+ 
+                 for (int i = 0, len = Math.min(storage.length, list.size()); i < len; ++i) {
++                    if (boxes != null) {
++                        final int o = i * 6;
++                        if (!(boxes[o] < bMaxX && boxes[o + 3] > bMinX && boxes[o + 1] < bMaxY && boxes[o + 4] > bMinY && boxes[o + 2] < bMaxZ && boxes[o + 5] > bMinZ)) {
++                            if (VERIFY_BOXES && storage[i] != null && storage[i].getBoundingBox().intersects(box)) throw new IllegalStateException("packed box out of date for " + storage[i]);
++                            continue;
++                        }
++                    }
+                     final Entity entity = storage[i];
+ 
+-                    if (entity == null || entity == except || !entity.getBoundingBox().intersects(box)) {
++                    if (entity == null || entity == except || (boxes == null && !entity.getBoundingBox().intersects(box))) {
+                         continue;
+                     }
++                    if (VERIFY_BOXES && boxes != null && !entity.getBoundingBox().intersects(box)) throw new IllegalStateException("packed box out of date for " + entity);
++                    // Knowledge end
+ 
+                     if (predicate != null && !predicate.test(entity)) {
+                         continue;
+@@ -568,6 +_,7 @@
+             final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
+ 
+             final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
++            final boolean packed = this.packed && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.packedEntityBoxes; // Knowledge
+ 
+             for (int section = min; section <= max; ++section) {
+                 final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
+@@ -577,13 +_,25 @@
+                 }
+ 
+                 final Entity[] storage = list.storage;
++                // Knowledge start - packed boxes: the same test as AABB.intersects on the same numbers, without visiting each entity
++                final double[] boxes = packed ? list.boxes : null;
++                final double bMinX = box.minX, bMinY = box.minY, bMinZ = box.minZ, bMaxX = box.maxX, bMaxY = box.maxY, bMaxZ = box.maxZ;
+ 
+                 for (int i = 0, len = Math.min(storage.length, list.size()); i < len; ++i) {
++                    if (boxes != null) {
++                        final int o = i * 6;
++                        if (!(boxes[o] < bMaxX && boxes[o + 3] > bMinX && boxes[o + 1] < bMaxY && boxes[o + 4] > bMinY && boxes[o + 2] < bMaxZ && boxes[o + 5] > bMinZ)) {
++                            if (VERIFY_BOXES && storage[i] != null && storage[i].getBoundingBox().intersects(box)) throw new IllegalStateException("packed box out of date for " + storage[i]);
++                            continue;
++                        }
++                    }
+                     final Entity entity = storage[i];
+ 
+-                    if (entity == null || entity == except || !entity.getBoundingBox().intersects(box)) {
++                    if (entity == null || entity == except || (boxes == null && !entity.getBoundingBox().intersects(box))) {
+                         continue;
+                     }
++                    if (VERIFY_BOXES && boxes != null && !entity.getBoundingBox().intersects(box)) throw new IllegalStateException("packed box out of date for " + entity);
++                    // Knowledge end
+ 
+                     if (predicate != null && !predicate.test(entity)) {
+                         continue;
