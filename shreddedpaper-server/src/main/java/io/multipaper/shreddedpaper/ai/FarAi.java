@@ -49,6 +49,12 @@ public final class FarAi {
     }
 
     static int compute(Mob mob, ShreddedPaperConfiguration.AiEngine c) {
+        if (!c.farAiExemptTypes.isEmpty()) {   // here, once a second per mob, not in the every-tick exempt check
+            var key = net.minecraft.world.entity.EntityType.getKey(mob.getType());
+            if (c.farAiExemptTypes.contains(key.toString()) || c.farAiExemptTypes.contains(key.getPath())) {
+                return 1;
+            }
+        }
         int max = Math.clamp(c.farAiMaxInterval, 1, 40);
         Player nearest = mob.level().getNearestPlayer(mob, -1.0);
         if (nearest == null) {

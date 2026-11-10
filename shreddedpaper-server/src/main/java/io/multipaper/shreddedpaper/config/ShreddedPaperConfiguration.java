@@ -41,6 +41,8 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public int farAiStartDistance = 12;
         public int farAiDistanceShift = 8;
         public int farAiMaxInterval = 20;
+        @Comment("Mob types that always think at vanilla speed, for example [\"minecraft:villager\", \"cow\"]. Use it when a farm or a plugin needs a mob type at full speed even far from players.")
+        public java.util.List<String> farAiExemptTypes = java.util.List.of();
         @Comment("Owner-thread AI timing; disabled by default. Counts sampled invocations, not total AI CPU time.")
         public boolean profilingEnabled = false;
         @Comment("Profile one invocation per mob every N entity ticks, staggered by entity id; clamped to 1..1200.")
