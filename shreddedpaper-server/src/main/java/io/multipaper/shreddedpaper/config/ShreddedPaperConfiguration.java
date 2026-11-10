@@ -35,7 +35,7 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         @Comment("Iterate fixed Brain sensors and behaviors as flat arrays in their original order; timers, activity checks and owner-thread execution remain unchanged.")
         public boolean brainOptimization = true;
         @Comment("Ticks between an idle villager's checks for a new behavior, 1 to 4. 1 is vanilla. Above 1 a decision can be that many ticks late, never when hurt, trading, sleeping, near a hostile or a player, or when its activity changes; running behaviors, sensors and physics stay on every tick. Other mobs are never delayed.")
-        public int villagerDecisionInterval = 1;
+        public int villagerDecisionInterval = 4;
         @Comment("Far mobs think less often: beyond far-ai-start-distance from every player a mob's goal and target selectors run every N ticks (squared distance >> far-ai-distance-shift, at most far-ai-max-interval). Movement, looking, path following, sensing and mob-specific logic stay on every tick. Never for mobs with a target, hurt, in water or lava, leashed, riding or ridden, or bosses.")
         public boolean farAiEnabled = true;
         public int farAiStartDistance = 12;
