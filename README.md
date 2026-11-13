@@ -1,3 +1,14 @@
+# Project: Evangelium server (ShreddedPaper fork)
+
+This is the source of the server software that runs inside [Project: Evangelium](https://evangelium.cc), published under the licences of
+[ShreddedPaper](https://github.com/MultiPaper/ShreddedPaper) and Paper, which it is based on. Our changes are in the commits after
+ShreddedPaper's own history: several threads inside one region, cheaper crowds and mob farms, a region tick budget and more.
+How we measure them: https://evangelium.cc/benchmarks
+
+Questions: support@evangelium.cc
+
+---
+
 # ShreddedPaper
 
 [![Discord](https://img.shields.io/discord/937309618743427113.svg?color=738ad6&label=Join%20the%20Discord%20server&logo=discord&logoColor=ffffff)](https://discord.gg/dN3WCZkSRV)
