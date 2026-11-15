@@ -16,6 +16,15 @@
                  }
              }
  
+@@ -210,7 +_,7 @@
+                                         )
+                                     )
+                                 );
+-                        } else {
++                        } else if (!(io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.skipWatchedPlayerMotion && this.entity instanceof ServerPlayer watched && !watched.isFallFlying())) { // Knowledge - watchers move other players only from position packets; knockback (hurtMarked) and elytra motion are still sent
+                             this.synchronizer.sendToTrackingPlayers(new ClientboundSetEntityMotionPacket(this.entity.getId(), this.lastSentMovement));
+                         }
+                     }
 @@ -352,7 +_,7 @@
              if (!list.isEmpty()) {
                  consumer.accept(new ClientboundSetEquipmentPacket(this.entity.getId(), list, true)); // Paper - data sanitization
@@ -25,3 +34,41 @@
          }
  
          if (!this.entity.getPassengers().isEmpty()) {
+@@ -404,11 +_,37 @@
+                     serverPlayer.getBukkitEntity().injectScaledMaxHealth(attributesToSync, false);
+                 }
+                 // CraftBukkit end
++                // Knowledge start - speeds, reach and mining attributes only matter to the player's own client; watchers get the rest
++                if (io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.skipWatchedPlayerOwnAttributes && this.entity instanceof ServerPlayer self) {
++                    self.connection.send(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributesToSync));
++                    List<AttributeInstance> shown = null;
++                    for (AttributeInstance instance : attributesToSync) {
++                        if (!isOwnClientAttribute(instance)) {
++                            if (shown == null) shown = new java.util.ArrayList<>(attributesToSync.size());
++                            shown.add(instance);
++                        }
++                    }
++                    if (shown != null) this.synchronizer.sendToTrackingPlayers(new ClientboundUpdateAttributesPacket(this.entity.getId(), shown));
++                } else
++                // Knowledge end
+                 this.synchronizer.sendToTrackingPlayersAndSelf(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributesToSync));
+             }
+ 
+             attributesToSync.clear();
+         }
++    }
++
++    // Knowledge - attributes a client only uses for the player it controls (movement, attack cooldown, reach, mining)
++    private static boolean isOwnClientAttribute(AttributeInstance instance) {
++        net.minecraft.core.Holder<net.minecraft.world.entity.ai.attributes.Attribute> a = instance.getAttribute();
++        return a.is(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_SPEED)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.SNEAKING_SPEED)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.BLOCK_BREAK_SPEED)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.MINING_EFFICIENCY)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.SUBMERGED_MINING_SPEED)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.BLOCK_INTERACTION_RANGE)
++            || a.is(net.minecraft.world.entity.ai.attributes.Attributes.ENTITY_INTERACTION_RANGE);
+     }
+ 
+     public interface Synchronizer {

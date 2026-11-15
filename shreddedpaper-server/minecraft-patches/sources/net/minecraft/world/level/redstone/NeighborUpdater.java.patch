@@ -1,0 +1,17 @@
+--- a/net/minecraft/world/level/redstone/NeighborUpdater.java
++++ b/net/minecraft/world/level/redstone/NeighborUpdater.java
+@@ -50,12 +_,14 @@
+         // Paper end - Add source block to BlockPhysicsEvent
+         try {
+             // CraftBukkit start
++            if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel) || serverLevel.hasPhysicsEvent) { // Evangelium - build the event only when a plugin listens (same check as Level.setBlock)
+             org.bukkit.event.block.BlockPhysicsEvent event = new org.bukkit.event.block.BlockPhysicsEvent(org.bukkit.craftbukkit.block.CraftBlock.at(level, pos), org.bukkit.craftbukkit.block.data.CraftBlockData.fromData(state), org.bukkit.craftbukkit.block.CraftBlock.at(level, sourcePos)); // Paper - Add source block to BlockPhysicsEvent
+             level.getCraftServer().getPluginManager().callEvent(event);
+ 
+             if (event.isCancelled()) {
+                 return;
+             }
++            } // Evangelium
+             // CraftBukkit end
+             state.handleNeighborChanged(level, pos, neighborBlock, orientation, movedByPiston);
+             // Spigot start

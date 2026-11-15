@@ -1,0 +1,18 @@
+--- a/net/minecraft/world/level/chunk/LevelChunkSection.java
++++ b/net/minecraft/world/level/chunk/LevelChunkSection.java
+@@ -18,6 +_,7 @@
+     private short tickingBlockCount;
+     private short tickingFluidCount;
+     public final PalettedContainer<BlockState> states;
++    public int knowledge$changes; // Knowledge - counts block changes, so a resting entity can tell its surroundings are unchanged (Entity resting cache)
+     private PalettedContainer<Holder<Biome>> biomes; // CraftBukkit - read/write
+ 
+     // Paper start - block counting
+@@ -136,6 +_,7 @@
+             blockState = this.states.getAndSetUnchecked(x, y, z, state);
+         }
+ 
++        if (blockState != state) this.knowledge$changes++; // Knowledge - resting cache
+         FluidState fluidState = blockState.getFluidState();
+         FluidState fluidState1 = state.getFluidState();
+         if (!blockState.isAir()) {

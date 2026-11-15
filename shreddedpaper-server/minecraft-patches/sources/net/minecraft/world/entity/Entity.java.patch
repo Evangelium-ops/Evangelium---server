@@ -40,6 +40,109 @@
      public float maxUpStep; // Purpur - Add option to set armorstand step height
      public boolean noPhysics;
      public final RandomSource random; // Paper - Share random for entities to make them more random // Add toggle for RNG manipulation
+@@ -330,6 +_,102 @@
+     public boolean wasInPowderSnow;
+     public Optional<BlockPos> mainSupportingBlockPos = Optional.empty();
+     private boolean onGroundNoBlocks = false;
++    // Knowledge start - resting cache: a mob standing still in a block area where nothing changed gets last tick's block answers
++    private net.minecraft.world.level.chunk.LevelChunkSection @Nullable [] knowledge$restSections; // null: no area taken
++    private final int[] knowledge$restVersions = new int[8];
++    private int knowledge$restCount;
++    private @Nullable Level knowledge$restLevel;
++    private double knowledge$restX, knowledge$restY, knowledge$restZ;
++    private @Nullable AABB knowledge$restBox;
++    private int knowledge$restSince;
++    private @Nullable Vec3 knowledge$restMoveIn, knowledge$restMoveOut;
++    private @Nullable AABB knowledge$restSupportBox;
++    private @Nullable Optional<BlockPos> knowledge$restSupport;
++    private boolean knowledge$restAir, knowledge$restNoFluid;
++    private static final boolean KNOWLEDGE_VERIFY_REST = Boolean.getBoolean("shreddedpaper.verifyRestCache"); // tests: recompute every cached answer and throw on a difference
++
++    private void knowledge$verifyRest(String what, Object cached, Object fresh) {
++        if (!java.util.Objects.equals(cached, fresh)) throw new IllegalStateException("resting cache " + what + " out of date for " + this + ": " + cached + " vs " + fresh);
++    }
++
++    /** Same level, same spot, same box, taken under a second ago, and no block of the sections around it changed since. */
++    private boolean knowledge$restValid() {
++        final net.minecraft.world.level.chunk.LevelChunkSection[] sections = this.knowledge$restSections;
++        if (sections == null || this.knowledge$restLevel != this.level
++            || this.position.x != this.knowledge$restX || this.position.y != this.knowledge$restY || this.position.z != this.knowledge$restZ
++            || !this.getBoundingBox().equals(this.knowledge$restBox)
++            || net.minecraft.server.MinecraftServer.currentTick - this.knowledge$restSince > 20) { // a fresh look every second, also for edits that bypass the section counter
++            return false;
++        }
++        for (int i = 0; i < this.knowledge$restCount; i++) {
++            if (sections[i].knowledge$changes != this.knowledge$restVersions[i]) return false;
++        }
++        return true;
++    }
++
++    /** Take the area around a mob that just came to rest: the sections within 2 blocks of its box, plus the answers that only depend on them. */
++    private void knowledge$takeRest() {
++        this.knowledge$restSections = null;
++        if (!(this instanceof LivingEntity) || this instanceof net.minecraft.world.entity.player.Player
++            || !io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.restingEntityCache) return;
++        final AABB box = this.getBoundingBox();
++        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();
++        final int sx0 = Mth.floor(box.minX - 2.0) >> 4, sx1 = Mth.floor(box.maxX + 2.0) >> 4;
++        final int sz0 = Mth.floor(box.minZ - 2.0) >> 4, sz1 = Mth.floor(box.maxZ + 2.0) >> 4;
++        final int sy0 = Mth.floor(box.minY - 2.0) >> 4, sy1 = Mth.floor(box.maxY + 2.0) >> 4;
++        if ((sx1 - sx0 + 1) * (sz1 - sz0 + 1) * (sy1 - sy0 + 1) > 8 || sy0 < minSection || sy1 > maxSection) return;
++        final net.minecraft.world.level.chunk.LevelChunkSection[] sections = new net.minecraft.world.level.chunk.LevelChunkSection[8];
++        int count = 0;
++        for (int cx = sx0; cx <= sx1; cx++) {
++            for (int cz = sz0; cz <= sz1; cz++) {
++                final net.minecraft.world.level.chunk.LevelChunk chunk = this.level.getChunkIfLoaded(cx, cz);
++                if (chunk == null) return;
++                for (int cy = sy0; cy <= sy1; cy++) {
++                    final net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSections()[cy - minSection];
++                    this.knowledge$restVersions[count] = section.knowledge$changes;
++                    sections[count++] = section;
++                }
++            }
++        }
++        // the cached collision answers hold only for blocks whose shape depends on the block state alone: no dynamic shape (moving
++        // pistons), and a shape that does not ask the entity (scaffolding, powder snow and fluids do)
++        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
++        final ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext context = new ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext(this);
++        boolean air = true, noFluid = true;
++        final AABB inside = this.makeBoundingBox(this.position()).deflate(1.0E-5F);
++        final AABB fluidBox = box.deflate(1.0E-3);
++        for (int x = Mth.floor(box.minX) - 2; x <= Mth.floor(box.maxX) + 2; x++) {
++            for (int y = Mth.floor(box.minY) - 2; y <= Mth.floor(box.maxY) + 2; y++) {
++                for (int z = Mth.floor(box.minZ) - 2; z <= Mth.floor(box.maxZ) + 2; z++) {
++                    final BlockState state = this.level.getBlockState(pos.set(x, y, z));
++                    if (!state.isAir()) {
++                        if (state.getBlock().hasDynamicShape()) return;
++                        state.getCollisionShape(this.level, pos, context);
++                        if (context.isDelegated()) return;
++                    }
++                    if (air && !state.isAir() && x >= Mth.floor(inside.minX) && x <= Mth.floor(inside.maxX) && y >= Mth.floor(inside.minY) && y <= Mth.floor(inside.maxY)
++                        && z >= Mth.floor(inside.minZ) && z <= Mth.floor(inside.maxZ)) {
++                        air = false;
++                    }
++                    if (noFluid && !state.getFluidState().isEmpty() && x >= Mth.floor(fluidBox.minX) && x <= Mth.ceil(fluidBox.maxX) - 1
++                        && y >= Mth.floor(fluidBox.minY) && y <= Mth.ceil(fluidBox.maxY) - 1 && z >= Mth.floor(fluidBox.minZ) && z <= Mth.ceil(fluidBox.maxZ) - 1) {
++                        noFluid = false;
++                    }
++                }
++            }
++        }
++        this.knowledge$restCount = count;
++        this.knowledge$restLevel = this.level;
++        this.knowledge$restX = this.position.x; this.knowledge$restY = this.position.y; this.knowledge$restZ = this.position.z;
++        this.knowledge$restBox = box;
++        this.knowledge$restSince = net.minecraft.server.MinecraftServer.currentTick;
++        this.knowledge$restMoveIn = null; this.knowledge$restMoveOut = null;
++        this.knowledge$restSupportBox = null; this.knowledge$restSupport = null;
++        this.knowledge$restAir = air;
++        this.knowledge$restNoFluid = noFluid;
++        this.knowledge$restSections = sections;
++    }
++    // Knowledge end
+     private float crystalSoundIntensity;
+     private int lastCrystalSoundPlayTick;
+     public boolean hasVisualFire;
 @@ -709,7 +_,7 @@
      public void resendPossiblyDesyncedEntityData(net.minecraft.server.level.ServerPlayer player) {
          if (player.getBukkitEntity().canSee(this.getBukkitEntity())) {
@@ -64,13 +167,33 @@
          this.setPosRaw(x, y, z, true); // Paper - Block invalid positions and bounding box; force update
          // this.setBoundingBox(this.makeBoundingBox()); // Paper - Block invalid positions and bounding box; move into setPosRaw
      }
-@@ -1148,7 +_,9 @@
+@@ -1113,7 +_,17 @@
+         if (onGround) {
+             AABB boundingBox = this.getBoundingBox();
+             AABB aabb = new AABB(boundingBox.minX, boundingBox.minY - 1.0E-6, boundingBox.minZ, boundingBox.maxX, boundingBox.minY, boundingBox.maxZ);
+-            Optional<BlockPos> optional = this.level.findSupportingBlock(this, aabb);
++            Optional<BlockPos> optional; // Knowledge start - resting cache
++            if (this.knowledge$restSupport != null && aabb.equals(this.knowledge$restSupportBox) && this.knowledge$restValid()) {
++                optional = this.knowledge$restSupport;
++                if (KNOWLEDGE_VERIFY_REST) this.knowledge$verifyRest("support", optional, this.level.findSupportingBlock(this, aabb));
++            } else {
++                optional = this.level.findSupportingBlock(this, aabb);
++                if (this.knowledge$restSections != null && this.knowledge$restValid()) {
++                    this.knowledge$restSupportBox = aabb;
++                    this.knowledge$restSupport = optional;
++                }
++            } // Knowledge end
+             if (optional.isPresent() || this.onGroundNoBlocks) {
+                 this.mainSupportingBlockPos = optional;
+             } else if (movement != null) {
+@@ -1148,7 +_,10 @@
      public void move(MoverType type, Vec3 movement) {
          final Vec3 originalMovement = movement; // Paper - Expose pre-collision velocity
          // Paper start - detailed watchdog information
 -        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread("Cannot move an entity off-main");
 +        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this, "Cannot move an entity off-main"); // ShreddedPaper
 +        BlockPos newPos = new BlockPos((int) (this.getX() + movement.x), (int) (this.getY() + movement.y), (int) (this.getZ() + movement.z)); // ShreddedPaper - check destination region
++        if ((newPos.getX() >> 4) != this.chunkPosition.x || (newPos.getZ() >> 4) != this.chunkPosition.z) // Knowledge - same chunk: the check above already passed for it
 +        TickThread.ensureTickThread((ServerLevel) this.level, newPos, "Cannot move an entity into off-main"); // ShreddedPaper - check destination region
          synchronized (this.posLock) {
              this.moveStartX = this.getX();
@@ -84,6 +207,98 @@
              BlockPos blockPos = this.mainSupportingBlockPos.get();
              if (!(yOffset > 1.0E-5F)) {
                  return blockPos;
+@@ -1585,12 +_,30 @@
+             this.level, (Entity)(Object)this, initialCollisionBox, entityAABBs, 0, null
+         );
+ 
++        // Knowledge start - resting cache: straight down, nothing hard to collide with, not at the border: last tick's answer
++        final boolean restCandidate = xZero & zZero && movement.y < 0.0 && entityAABBs.isEmpty()
++            && !ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isCollidingWithBorder(this.level.getWorldBorder(), initialCollisionBox);
++        final boolean restHit = restCandidate && this.knowledge$restMoveIn != null && movement.equals(this.knowledge$restMoveIn) && this.knowledge$restValid();
++        if (restHit && !KNOWLEDGE_VERIFY_REST) {
++            return this.knowledge$restMoveOut;
++        }
++        // Knowledge end
+         ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
+             this.level, (Entity)(Object)this, initialCollisionBox, potentialCollisionsVoxel, potentialCollisionsBB,
+             ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
+         );
+         potentialCollisionsBB.addAll(entityAABBs);
+         final Vec3 collided = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(movement, currentBox, potentialCollisionsVoxel, potentialCollisionsBB);
++        // Knowledge start - came to rest: take the area and remember this answer
++        if (restHit) this.knowledge$verifyRest("collide", this.knowledge$restMoveOut, collided);
++        if (restCandidate && collided.y == 0.0) {
++            if (!this.knowledge$restValid()) this.knowledge$takeRest();
++            if (this.knowledge$restSections != null) {
++                this.knowledge$restMoveIn = movement;
++                this.knowledge$restMoveOut = collided;
++            }
++        }
++        // Knowledge end
+ 
+         final boolean collidedX = collided.x != movement.x;
+         final boolean collidedY = collided.y != movement.y;
+@@ -1711,6 +_,7 @@
+     }
+ 
+     private void checkInsideBlocks(List<Entity.Movement> movements, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector) {
++        if (this instanceof net.minecraft.world.entity.item.FallingBlockEntity && this.onlyAirAlong(movements)) return; // Fork
+         if (this.isAffectedByBlocks()) {
+             LongSet set = this.visitedBlocks;
+ 
+@@ -1740,11 +_,44 @@
+         }
+     }
+ 
++    // Fork start - every block the walk below visits lies inside the deflated boxes at the start and end of each movement (and between);
++    // when all of them are air the walk changes nothing. Not with the block intersection debug view on (it reports air too).
++    private boolean onlyAirAlong(List<Entity.Movement> movements) {
++        if (!(this.level instanceof ServerLevel serverLevel) || serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS)) {
++            return false;
++        }
++        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
++        for (Entity.Movement movement : movements) {
++            AABB box = this.makeBoundingBox(movement.from()).minmax(this.makeBoundingBox(movement.to())).deflate(1.0E-5F);
++            int minX = Mth.floor(box.minX), minY = Mth.floor(box.minY), minZ = Mth.floor(box.minZ);
++            int maxX = Mth.floor(box.maxX), maxY = Mth.floor(box.maxY), maxZ = Mth.floor(box.maxZ);
++            if ((long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1) > 64) {
++                return false; // long fall in one tick: let the normal walk handle it
++            }
++            for (int x = minX; x <= maxX; x++) {
++                for (int y = minY; y <= maxY; y++) {
++                    for (int z = minZ; z <= maxZ; z++) {
++                        if (!this.level.getBlockState(pos.set(x, y, z)).isAir()) {
++                            return false;
++                        }
++                    }
++                }
++            }
++        }
++        return true;
++    }
++    // Fork end
++
+     private int checkInsideBlocks(Vec3 from, Vec3 to, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector, LongSet visited, int maxSteps) {
+         AABB aabb = this.makeBoundingBox(to).deflate(1.0E-5F);
+         boolean flag = from.distanceToSqr(to) > Mth.square(0.9999900000002526);
+         boolean flag1 = this.level instanceof ServerLevel serverLevel
+             && serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS);
++        // Knowledge - resting cache: standing still among air only, every cell would answer "air, go on" (index 0, so the result is 1)
++        if (!flag1 && this.knowledge$restAir && from.equals(to) && to.equals(this.position) && this.knowledge$restValid()) {
++            if (KNOWLEDGE_VERIFY_REST) for (BlockPos p : BlockPos.betweenClosed(aabb)) this.knowledge$verifyRest("inside", true, this.level.getBlockState(p).isAir());
++            return 1;
++        }
+         AtomicInteger atomicInteger = new AtomicInteger();
+         BlockGetter.forEachBlockIntersectedBetween(
+             from,
+@@ -1765,6 +_,7 @@
+ 
+                         return true;
+                     } else {
++                        if (visited.contains(pos.asLong())) return true; // Knowledge - already handled this tick: the tests below could only lead to "return true"
+                         VoxelShape entityInsideCollisionShape = blockState.getEntityInsideCollisionShape(this.level(), pos, this);
+                         boolean flag2 = entityInsideCollisionShape == Shapes.block()
+                             || this.collidedWithShapeMovingFrom(from, to, entityInsideCollisionShape.move(new Vec3(pos)).toAabbs());
 @@ -2377,7 +_,7 @@
                  }
                  delta = event.getKnockback();
@@ -154,6 +369,23 @@
  
      public final float getEyeHeight(Pose pose) {
          return this.getDimensions(pose).eyeHeight();
+@@ -4811,6 +_,16 @@
+         if (this.touchingUnloadedChunk()) {
+             return false;
+         }
++        // Knowledge - resting cache: no fluid in the cells of the box, so the scan below would find nothing
++        if (this.knowledge$restNoFluid && this.knowledge$restValid()) {
++            if (KNOWLEDGE_VERIFY_REST) {
++                final AABB b = this.getBoundingBox().deflate(1.0E-3);
++                for (BlockPos p : BlockPos.betweenClosed(Mth.floor(b.minX), Mth.floor(b.minY), Mth.floor(b.minZ), Mth.ceil(b.maxX) - 1, Mth.ceil(b.maxY) - 1, Mth.ceil(b.maxZ) - 1))
++                    this.knowledge$verifyRest("fluid", true, this.level.getFluidState(p).isEmpty());
++            }
++            this.fluidHeight.put(fluid, 0.0);
++            return false;
++        }
+ 
+         final AABB boundingBox = this.getBoundingBox().deflate(1.0E-3);
+ 
 @@ -4920,7 +_,7 @@
              pushVector = pushVector.normalize().scale(0.0045000000000000005);
          }
@@ -176,13 +408,14 @@
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.deltaMovement = deltaMovement;
              } // Paper - detailed watchdog information
-@@ -5099,6 +_,12 @@
+@@ -5099,6 +_,13 @@
          }
          // Paper end - Block invalid positions and bounding box
          if (this.position.x != x || this.position.y != y || this.position.z != z) {
 +            // Knowledge - reject unsafe raw moves before position changes make the owning region stale.
 +            if (this.previousTickingChunkPosRegion != null || this.previousTrackedChunkPosRegion != null) {
 +                TickThread.ensureTickThread(this, "Cannot move entity off its owning region");
++                if ((Mth.floor(x) >> 4) != this.chunkPosition.x || (Mth.floor(z) >> 4) != this.chunkPosition.z) // Knowledge - same chunk: the check above already passed for it
 +                TickThread.ensureTickThread(this.level(), BlockPos.containing(x, y, z), "Cannot move entity to an unowned region");
 +            }
 +

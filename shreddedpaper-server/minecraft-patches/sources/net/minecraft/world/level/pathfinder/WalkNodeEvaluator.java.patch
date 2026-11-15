@@ -1,0 +1,92 @@
+--- a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
+@@ -34,11 +_,21 @@
+     private final Long2ObjectMap<PathType> pathTypesByPosCacheByMob = new Long2ObjectOpenHashMap<>();
+     private final Object2BooleanMap<AABB> collisionCache = new Object2BooleanOpenHashMap<>();
+     private final Node[] reusableNeighbors = new Node[Direction.Plane.HORIZONTAL.length()];
++    // Knowledge start - one search asks for the same block's path type and floor level many times (each node is reached from
++    // up to 8 neighbours, and a mob's box overlaps the box of the node above). Blocks do not change during a search, so keep
++    // the answers until done(). Only used for this evaluator's own search context (not MoveControl's one-off questions).
++    private final Long2ObjectMap<PathType> knowledgePathTypes = new Long2ObjectOpenHashMap<>();
++    private final it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap knowledgeFloorLevels = new it.unimi.dsi.fastutil.longs.Long2DoubleOpenHashMap();
++    private boolean knowledgeMemo;
++    // Knowledge end
+ 
+     @Override
+     public void prepare(PathNavigationRegion level, Mob mob) {
+         super.prepare(level, mob);
+         mob.onPathfindingStart();
++        this.knowledgePathTypes.clear(); // Knowledge - a search that found no start node never reaches done()
++        this.knowledgeFloorLevels.clear();
++        this.knowledgeMemo = io.multipaper.shreddedpaper.ai.AiDiagnostics.navigationOptimizationEnabled();
+     }
+ 
+     @Override
+@@ -46,6 +_,9 @@
+         this.mob.onPathfindingDone();
+         this.pathTypesByPosCacheByMob.clear();
+         this.collisionCache.clear();
++        this.knowledgePathTypes.clear(); // Knowledge
++        this.knowledgeFloorLevels.clear();
++        this.knowledgeMemo = false;
+         super.done();
+     }
+ 
+@@ -202,6 +_,22 @@
+     }
+ 
+     protected double getFloorLevel(BlockPos pos) {
++        // Knowledge start - remember per search
++        if (this.knowledgeMemo) {
++            long key = pos.asLong();
++            double cached = this.knowledgeFloorLevels.getOrDefault(key, Double.NaN);
++            if (cached == cached) {
++                return cached;
++            }
++            double computed = this.knowledgeFloorLevel(pos);
++            this.knowledgeFloorLevels.put(key, computed);
++            return computed;
++        }
++        return this.knowledgeFloorLevel(pos);
++    }
++
++    private double knowledgeFloorLevel(BlockPos pos) {
++        // Knowledge end
+         BlockGetter blockGetter = this.currentContext.level();
+         return (this.canFloat() || this.isAmphibious()) && blockGetter.getFluidState(pos).is(FluidTags.WATER)
+             ? pos.getY() + 0.5
+@@ -351,7 +_,15 @@
+     }
+ 
+     protected PathType getCachedPathType(int x, int y, int z) {
+-        return this.pathTypesByPosCacheByMob.computeIfAbsent(BlockPos.asLong(x, y, z), l -> this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob));
++        // Knowledge start - get, then put on a miss: no capturing lambda per call (this runs for every neighbour of every node)
++        long key = BlockPos.asLong(x, y, z);
++        PathType cached = this.pathTypesByPosCacheByMob.get(key);
++        if (cached == null) {
++            cached = this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob);
++            this.pathTypesByPosCacheByMob.put(key, cached);
++        }
++        return cached;
++        // Knowledge end
+     }
+ 
+     @Override
+@@ -419,6 +_,17 @@
+ 
+     @Override
+     public PathType getPathType(PathfindingContext context, int x, int y, int z) {
++        // Knowledge start - remember per search (the static type reads the block and its 26 neighbours)
++        if (this.knowledgeMemo && context == this.currentContext) {
++            long key = BlockPos.asLong(x, y, z);
++            PathType cached = this.knowledgePathTypes.get(key);
++            if (cached == null) {
++                cached = getPathTypeStatic(context, new BlockPos.MutableBlockPos(x, y, z));
++                this.knowledgePathTypes.put(key, cached);
++            }
++            return cached;
++        }
++        // Knowledge end
+         return getPathTypeStatic(context, new BlockPos.MutableBlockPos(x, y, z));
+     }
+ 

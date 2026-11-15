@@ -27,6 +27,21 @@
              }
          };
          // Moonrise end - chunk tick iteration
+@@ -49,6 +_,14 @@
+ 
+     private static final NearbyMapType[] MAP_TYPES = NearbyMapType.values();
+     public static final int TOTAL_MAP_TYPES = MAP_TYPES.length;
++    // Knowledge start - the GENERAL maps are read nowhere in this server, but every chunk border a player crosses updated their rings
++    // (GENERAL has radius 33, the biggest of all); -Dshreddedpaper.generalNearbyMaps=true keeps them for a plugin that reads them
++    private static final boolean KNOWLEDGE_GENERAL_MAPS = Boolean.getBoolean("shreddedpaper.generalNearbyMaps");
++
++    private static boolean knowledgeSkip(final NearbyMapType type) {
++        return !KNOWLEDGE_GENERAL_MAPS && (type == NearbyMapType.GENERAL || type == NearbyMapType.GENERAL_SMALL || type == NearbyMapType.GENERAL_REALLY_SMALL);
++    }
++    // Knowledge end
+ 
+     private static final int GENERAL_AREA_VIEW_DISTANCE = MoonriseConstants.MAX_VIEW_DISTANCE + 1;
+     private static final int GENERAL_SMALL_VIEW_DISTANCE = 10;
 @@ -60,11 +_,16 @@
  
      private final ServerLevel world;
@@ -44,7 +59,7 @@
          }
      }
  
-@@ -74,9 +_,11 @@
+@@ -74,13 +_,16 @@
  
      public void addPlayer(final ServerPlayer player) {
          final TrackedPlayer[] newTrackers = new TrackedPlayer[TOTAL_MAP_TYPES];
@@ -56,7 +71,12 @@
  
          final ChunkPos chunk = player.chunkPosition();
  
-@@ -90,7 +_,7 @@
+         for (int i = 0; i < TOTAL_MAP_TYPES; ++i) {
++            if (knowledgeSkip(MAP_TYPES[i])) continue; // Knowledge
+             // use 0 for default, will be updated by tickPlayer
+             (newTrackers[i] = new TrackedPlayer(player, MAP_TYPES[i])).add(chunk.x, chunk.z, 0);
+         }
+@@ -90,12 +_,13 @@
      }
  
      public void removePlayer(final ServerPlayer player) {
@@ -65,7 +85,13 @@
          if (players == null) {
              return; // May be called during teleportation before the player is actually placed
          }
-@@ -111,7 +_,7 @@
+ 
+         for (final TrackedPlayer tracker : players) {
++            if (tracker == null) continue; // Knowledge - a skipped GENERAL map
+             tracker.remove();
+         }
+     }
+@@ -111,47 +_,49 @@
      }
  
      public void tickPlayer(final ServerPlayer player) {
@@ -74,7 +100,17 @@
          if (players == null) {
              throw new IllegalStateException("Don't have player " + player);
          }
-@@ -127,31 +_,31 @@
+ 
+         final ChunkPos chunk = player.chunkPosition();
+ 
++        if (KNOWLEDGE_GENERAL_MAPS) { // Knowledge
+         players[NearbyMapType.GENERAL.ordinal()].update(chunk.x, chunk.z, GENERAL_AREA_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_SMALL_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_REALLY_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_REALLY_SMALL_VIEW_DISTANCE);
++        } // Knowledge
+         players[NearbyMapType.TICK_VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getTickViewDistance(player));
+         players[NearbyMapType.VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getViewDistance(player));
+         players[NearbyMapType.SPAWN_RANGE.ordinal()].update(chunk.x, chunk.z, ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE); // Moonrise - chunk tick iteration
      }
  
      public TrackedChunk getChunk(final ChunkPos pos) {

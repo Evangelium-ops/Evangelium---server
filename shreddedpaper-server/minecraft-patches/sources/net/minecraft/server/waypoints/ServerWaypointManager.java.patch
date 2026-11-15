@@ -1,15 +1,19 @@
 --- a/net/minecraft/server/waypoints/ServerWaypointManager.java
 +++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
-@@ -19,9 +_,29 @@
+@@ -18,10 +_,40 @@
+ public class ServerWaypointManager implements WaypointManager<WaypointTransmitter> {
      private final Set<WaypointTransmitter> waypoints = new HashSet<>();
      private final Set<ServerPlayer> players = new HashSet<>();
-     private final Table<ServerPlayer, WaypointTransmitter, WaypointTransmitter.Connection> connections = HashBasedTable.create();
+-    private final Table<ServerPlayer, WaypointTransmitter, WaypointTransmitter.Connection> connections = HashBasedTable.create();
++    // Knowledge - plain maps by player instead of a HashBasedTable: copying a table row view (every waypoint update of every player)
++    // went through view wrappers and was 40% of updatePlayer in a crowd
++    private final Map<ServerPlayer, Map<WaypointTransmitter, WaypointTransmitter.Connection>> connections = new java.util.HashMap<>();
 +    // Knowledge start - the connections by waypoint: a column of the table is a scan of every player's row, and every player's waypoint is
 +    // updated against every other player (a crowd made that a big part of the tick)
 +    private final Map<WaypointTransmitter, Map<ServerPlayer, WaypointTransmitter.Connection>> byWaypoint = new java.util.HashMap<>();
 +
 +    private void knowledgePut(ServerPlayer player, WaypointTransmitter waypoint, WaypointTransmitter.Connection connection) {
-+        this.connections.put(player, waypoint, connection);
++        this.connections.computeIfAbsent(player, k -> new java.util.LinkedHashMap<>()).put(waypoint, connection);
 +        this.byWaypoint.computeIfAbsent(waypoint, k -> new java.util.HashMap<>()).put(player, connection);
 +    }
 +
@@ -21,7 +25,15 @@
 +                this.byWaypoint.remove(waypoint);
 +            }
 +        }
-+        return this.connections.remove(player, waypoint);
++        Map<WaypointTransmitter, WaypointTransmitter.Connection> row = this.connections.get(player);
++        if (row == null) {
++            return null;
++        }
++        WaypointTransmitter.Connection removed = row.remove(waypoint);
++        if (row.isEmpty()) {
++            this.connections.remove(player);
++        }
++        return removed;
 +    }
 +    // Knowledge end
  
@@ -31,7 +43,7 @@
          this.waypoints.add(waypoint);
  
          for (ServerPlayer serverPlayer : this.players) {
-@@ -30,29 +_,39 @@
+@@ -30,29 +_,45 @@
      }
  
      @Override
@@ -69,7 +81,13 @@
 +        if (column != null) {
 +            column.forEach((serverPlayer, connection) -> {
 +                connection.disconnect();
-+                this.connections.remove(serverPlayer, waypoint);
++                Map<WaypointTransmitter, WaypointTransmitter.Connection> row = this.connections.get(serverPlayer);
++                if (row != null) {
++                    row.remove(waypoint);
++                    if (row.isEmpty()) {
++                        this.connections.remove(serverPlayer);
++                    }
++                }
 +            });
 +        }
 +        // Knowledge end
@@ -81,28 +99,37 @@
          this.players.add(player);
  
          for (WaypointTransmitter waypointTransmitter : this.waypoints) {
-@@ -64,41 +_,47 @@
+@@ -64,41 +_,50 @@
          }
      }
  
 -    public void updatePlayer(ServerPlayer player) {
-+    public synchronized void updatePlayer(ServerPlayer player) { // ShreddedPaper - synchronized
-         Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.row(player);
+-        Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.row(player);
 -        SetView<WaypointTransmitter> set = Sets.difference(this.waypoints, map.keySet());
- 
+-
 -        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : ImmutableSet.copyOf(map.entrySet())) {
-+        // Knowledge start - a plain list copy and a lookup per waypoint instead of an immutable set copy and a set difference view
-+        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(map.entrySet())) {
-             this.updateConnection(player, entry.getKey(), entry.getValue());
-         }
- 
+-            this.updateConnection(player, entry.getKey(), entry.getValue());
+-        }
+-
 -        for (WaypointTransmitter waypointTransmitter : set) {
 -            this.createConnection(player, waypointTransmitter);
+-        }
++    public synchronized void updatePlayer(ServerPlayer player) { // ShreddedPaper - synchronized
++        Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.getOrDefault(player, Map.of());
++
++        // Knowledge start - a plain list copy and a lookup per waypoint instead of an immutable set copy and a set difference view
++        if (!map.isEmpty()) {
++            for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(map.entrySet())) {
++                this.updateConnection(player, entry.getKey(), entry.getValue());
++            }
++            map = this.connections.getOrDefault(player, Map.of()); // the row may have been dropped (emptied) or made anew above
++        }
++
 +        for (WaypointTransmitter waypointTransmitter : this.waypoints) {
 +            if (!map.containsKey(waypointTransmitter)) {
 +                this.createConnection(player, waypointTransmitter);
 +            }
-         }
++        }
 +        // Knowledge end
      }
  
@@ -113,7 +140,7 @@
 -        });
 +    public synchronized void removePlayer(ServerPlayer player) { // ShreddedPaper - synchronized
 +        // Knowledge start - through the index
-+        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(this.connections.row(player).entrySet())) {
++        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(this.connections.getOrDefault(player, Map.of()).entrySet())) {
 +            entry.getValue().disconnect();
 +            this.knowledgeRemove(player, entry.getKey());
 +        }
@@ -123,8 +150,9 @@
      }
  
 -    public void breakAllConnections() {
+-        this.connections.values().forEach(WaypointTransmitter.Connection::disconnect);
 +    public synchronized void breakAllConnections() { // ShreddedPaper - synchronized
-         this.connections.values().forEach(WaypointTransmitter.Connection::disconnect);
++        this.connections.values().forEach(row -> row.values().forEach(WaypointTransmitter.Connection::disconnect)); // Knowledge
          this.connections.clear();
 +        this.byWaypoint.clear(); // Knowledge
      }

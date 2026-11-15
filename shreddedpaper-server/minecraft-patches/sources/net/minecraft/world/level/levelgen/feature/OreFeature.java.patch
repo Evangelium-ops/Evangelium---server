@@ -1,0 +1,25 @@
+--- a/net/minecraft/world/level/levelgen/feature/OreFeature.java
++++ b/net/minecraft/world/level/levelgen/feature/OreFeature.java
+@@ -108,6 +_,9 @@
+         }
+ 
+         try (BulkSectionAccess bulkSectionAccess = new BulkSectionAccess(level)) {
++            // Knowledge: one block getter and an indexed target loop per vein, not a new lambda and iterator per candidate block
++            final Function<BlockPos, BlockState> blockGetter = bulkSectionAccess::getBlockState;
++            final java.util.List<OreConfiguration.TargetBlockState> targets = config.targetStates;
+             for (int i3x = 0; i3x < i1; i3x++) {
+                 double d = doubles[i3x * 4 + 3];
+                 if (!(d < 0.0)) {
+@@ -144,9 +_,10 @@
+                                                             relativeBlockPosCoord, relativeBlockPosCoord1, relativeBlockPosCoord2
+                                                         );
+ 
+-                                                        for (OreConfiguration.TargetBlockState targetBlockState : config.targetStates) {
++                                                        for (int target = 0, targetCount = targets.size(); target < targetCount; target++) {
++                                                            OreConfiguration.TargetBlockState targetBlockState = targets.get(target);
+                                                             if (canPlaceOre(
+-                                                                blockState, bulkSectionAccess::getBlockState, random, config, targetBlockState, mutableBlockPos
++                                                                blockState, blockGetter, random, config, targetBlockState, mutableBlockPos
+                                                             )) {
+                                                                 section.setBlockState(
+                                                                     relativeBlockPosCoord,

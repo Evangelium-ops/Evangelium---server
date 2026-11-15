@@ -58,7 +58,7 @@
 -    final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>();
 -    volatile boolean isUpdatingNavigations;
 +    // final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>(); // ShreddedPaper - handled ourselves
-+    final ThreadLocal<Boolean> isUpdatingNavigations = ThreadLocal.withInitial(() -> false); // ShreddedPaper - make thread local
++    final ThreadLocal<Boolean> isUpdatingNavigations = new io.multipaper.shreddedpaper.util.ThreadFlag(false); // ShreddedPaper - make thread local // Evangelium - cheap read while unset
      protected final Raids raids;
 -    private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
 -    private final List<BlockEventData> blockEventsToReschedule = new ArrayList<>(64);
@@ -593,6 +593,22 @@
      }
  
      private boolean doBlockEvent(BlockEventData event) {
+@@ -2303,10 +_,14 @@
+ 
+     @Override
+     public WorldBorder getWorldBorder() {
+-        WorldBorder worldBorder = this.getDataStorage().computeIfAbsent(WorldBorder.TYPE);
++        WorldBorder worldBorder = this.knowledgeWorldBorder; // Knowledge - every ticking block entity asks; the saved data object never changes once loaded
++        if (worldBorder != null) return worldBorder;
++        worldBorder = this.getDataStorage().computeIfAbsent(WorldBorder.TYPE);
+         worldBorder.applyInitialSettings(this.levelData.getGameTime());
++        this.knowledgeWorldBorder = worldBorder;
+         return worldBorder;
+     }
++    private volatile @Nullable WorldBorder knowledgeWorldBorder; // Knowledge
+ 
+     @Override
+     public RecipeManager recipeAccess() {
 @@ -2337,7 +_,7 @@
              final MapItemSavedData mapData = storage.get(MapItemSavedData.type(mapId)); // get populates the cache
              if (mapData != null) { // map was read, init it and return
@@ -612,7 +628,12 @@
          // CraftBukkit end
          this.getServer().overworld().getDataStorage().set(MapItemSavedData.type(mapId), data);
      }
-@@ -2412,11 +_,11 @@
+@@ -2408,15 +_,16 @@
+ 
+     @Override
+     public void updatePOIOnBlockStateChange(BlockPos pos, BlockState oldState, BlockState newState) {
++        if (!oldState.evangeliumHasPoi() && !newState.evangeliumHasPoi()) return; // Evangelium - neither is a POI: both lookups below would be empty
+         Optional<Holder<PoiType>> optional = PoiTypes.forState(oldState);
          Optional<Holder<PoiType>> optional1 = PoiTypes.forState(newState);
          if (!Objects.equals(optional, optional1)) {
              BlockPos blockPos = pos.immutable();

@@ -41,7 +41,7 @@
 +            ignoreBlockEntityUpdatesThreadLocal.set(true); // ShreddedPaper - use thread local for ignoreBlockEntityUpdates
              container.setItem(i, origItemStack);
 -            ignoreBlockEntityUpdates = false;
-+            ignoreBlockEntityUpdatesThreadLocal.remove(); // ShreddedPaper - use thread local for ignoreBlockEntityUpdates
++            ignoreBlockEntityUpdatesThreadLocal.set(Boolean.FALSE); // ShreddedPaper - use thread local for ignoreBlockEntityUpdates // Knowledge - set, not remove: remove makes the next get rebuild the entry
              container.setChanged();
              return true;
          }
@@ -72,6 +72,15 @@
  
              for (int i : getSlots(sourceContainer, direction)) {
                  if (tryTakeInItemFromSlot(hopper, sourceContainer, i, direction, level)) { // Spigot
+@@ -674,7 +_,7 @@
+         ItemStack item = destination.getItem(slot);
+         if (canPlaceItemInContainer(destination, stack, slot, direction)) {
+             boolean flag = false;
+-            boolean isEmpty = destination.isEmpty();
++            boolean isEmpty = destination instanceof HopperBlockEntity && destination.isEmpty(); // Knowledge - only read for hoppers below; a chest scan per slot tried was wasted
+             if (item.isEmpty()) {
+                 // Spigot start - SPIGOT-6693, SimpleContainer#setItem
+                 ItemStack leftover = ItemStack.EMPTY; // Paper - Make hoppers respect inventory max stack size
 @@ -683,9 +_,9 @@
                      stack = stack.split(destination.getMaxStackSize());
                  }
@@ -80,7 +89,7 @@
 +                ignoreBlockEntityUpdatesThreadLocal.set(true); // Paper - Perf: Optimize Hoppers // ShreddedPaper - use thread local for ignoreBlockEntityUpdates
                  destination.setItem(slot, stack);
 -                ignoreBlockEntityUpdates = false; // Paper - Perf: Optimize Hoppers
-+                ignoreBlockEntityUpdatesThreadLocal.remove(); // Paper - Perf: Optimize Hoppers // ShreddedPaper - use thread local for ignoreBlockEntityUpdates
++                ignoreBlockEntityUpdatesThreadLocal.set(Boolean.FALSE); // Paper - Perf: Optimize Hoppers // ShreddedPaper - use thread local for ignoreBlockEntityUpdates // Knowledge - set, not remove: remove makes the next get rebuild the entry
                  stack = leftover; // Paper - Make hoppers respect inventory max stack size
                  flag = true;
              } else if (canMergeItems(item, stack)) {

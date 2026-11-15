@@ -19,6 +19,17 @@ public class PerThreadNeighborUpdater implements NeighborUpdater {
     }
 
     private NeighborUpdater getOrCreate() {
+        // Evangelium start - tick threads remember the last level's updater; the ThreadLocal would return the same object
+        if (Thread.currentThread() instanceof ShreddedPaperTickThread thread) {
+            if (thread.neighborUpdaterOwner == this) {
+                return thread.neighborUpdater;
+            }
+            NeighborUpdater updater = threadLocalNeighborUpdater.get();
+            thread.neighborUpdaterOwner = this;
+            thread.neighborUpdater = updater;
+            return updater;
+        }
+        // Evangelium end
         return threadLocalNeighborUpdater.get();
     }
 

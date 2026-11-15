@@ -69,6 +69,12 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public boolean cappedPushSearch = true;
         @Comment("Each chunk section keeps a copy of its entities' hitboxes side by side in memory, kept exact on every move, so finding who touches a box (pushing, pickups, attacks) reads one array instead of every entity. Same entities found in the same order.")
         public boolean packedEntityBoxes = true;
+        @Comment("Players who watch another player do not get that player's motion packets from jumping or being pushed (a client moves other players only from their position packets, so nothing looks different). Knockback motion, elytra flight and every packet about yourself are still sent. Fighting crowds send about a quarter fewer packets.")
+        public boolean skipWatchedPlayerMotion = true;
+        @Comment("Movement speed, attack speed, reach and mining attributes of a player are sent only to that player's own client (sprinting and switching items changed them for every watcher). Watchers still get every other attribute, and all of them when they start seeing the player.")
+        public boolean skipWatchedPlayerOwnAttributes = true;
+        @Comment("A mob standing still where no block around it changed reuses last tick's block answers (falling, supporting block, blocks it is inside, fluids) instead of asking every block again; a fresh look at least once a second. Same results; only block edits that bypass the server (some world-edit plugins writing chunk memory directly) are seen up to a second late by a resting mob.")
+        public boolean restingEntityCache = true;
         public boolean disableVanishApi = false;
         public boolean disableLocatorBar = true;
         public boolean useLazyExecuteWhenNotFlushing = true;

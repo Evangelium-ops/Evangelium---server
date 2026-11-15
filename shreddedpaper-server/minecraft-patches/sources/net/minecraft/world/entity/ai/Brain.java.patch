@@ -1,8 +1,11 @@
 --- a/net/minecraft/world/entity/ai/Brain.java
 +++ b/net/minecraft/world/entity/ai/Brain.java
-@@ -49,7 +_,16 @@
+@@ -47,14 +_,23 @@
+     static final Logger LOGGER = LogUtils.getLogger();
+     private final Supplier<Codec<Brain<E>>> codec;
      private static final int SCHEDULE_UPDATE_DELAY = 20;
-     private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = Maps.newHashMap();
+-    private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = Maps.newHashMap();
++    private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>(); // Knowledge - read several times per behaviour per tick; MemoryModuleType has no equals, so identity hashing is the same lookup without HashMap nodes
      private final Map<SensorType<? extends Sensor<? super E>>, Sensor<? super E>> sensors = Maps.newLinkedHashMap();
 +    private static final Sensor<?>[] EMPTY_SENSORS = new Sensor<?>[0];
 +    private final Sensor<? super E>[] sensorArray;
@@ -17,6 +20,12 @@
      private @Nullable EnvironmentAttribute<Activity> schedule;
      private final Map<Activity, Set<Pair<MemoryModuleType<?>, MemoryStatus>>> activityRequirements = Maps.newHashMap();
      private final Map<Activity, Set<MemoryModuleType<?>>> activityMemoriesToEraseWhenStopped = Maps.newHashMap();
+     private Set<Activity> coreActivities = Sets.newHashSet();
+-    private final Set<Activity> activeActivities = Sets.newHashSet();
++    private final Set<Activity> activeActivities = new it.unimi.dsi.fastutil.objects.ObjectArraySet<>(4); // Knowledge - core + one activity, checked for every behaviour group each tick: a short equals scan (Activity checks identity first) beats hashing
+     private Activity defaultActivity = Activity.IDLE;
+     private long lastScheduleUpdate = -9999L;
+ 
 @@ -123,6 +_,7 @@
          return mutableObject.get();
      }

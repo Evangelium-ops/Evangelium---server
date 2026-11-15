@@ -50,8 +50,8 @@
 -    public Map<BlockPos, BlockEntity> capturedTileEntities = new java.util.LinkedHashMap<>(); // Paper - Retain block place order when capturing blockstates
 -    @Nullable
 -    public List<net.minecraft.world.entity.item.ItemEntity> captureDrops;
-+    public ThreadLocal<Boolean> captureBlockStatesThreadLocal = ThreadLocal.withInitial(() -> false); // ShreddedPaper - use thread local
-+    public ThreadLocal<Boolean> captureTreeGenerationThreadLocal = ThreadLocal.withInitial(() -> false); // ShreddedPaper - use thread local
++    public ThreadLocal<Boolean> captureBlockStatesThreadLocal = new io.multipaper.shreddedpaper.util.ThreadFlag(false); // ShreddedPaper - use thread local // Evangelium - cheap read while unset
++    public ThreadLocal<Boolean> captureTreeGenerationThreadLocal = new io.multipaper.shreddedpaper.util.ThreadFlag(false); // ShreddedPaper - use thread local // Evangelium - cheap read while unset
 +    public ThreadLocal<Map<BlockPos, org.bukkit.craftbukkit.block.CraftBlockState>> capturedBlockStatesThreadLocal = ThreadLocal.withInitial(() -> new java.util.LinkedHashMap<>()); // Paper // ShreddedPaper - use thread local
 +    public ThreadLocal<Map<BlockPos, BlockEntity>> capturedTileEntitiesThreadLocal = ThreadLocal.withInitial(() -> new java.util.LinkedHashMap<>()); // Paper - Retain block place order when capturing blockstates // ShreddedPaper - use thread local
 +    public ThreadLocal<@Nullable List<net.minecraft.world.entity.item.ItemEntity>> captureDropsThreadLocal = new ThreadLocal<>(); // ShreddedPaper - use thread local
@@ -168,7 +168,7 @@
              if (previous != null) {
                  return previous.getHandle();
              }
-@@ -1433,28 +_,46 @@
+@@ -1433,37 +_,69 @@
      }
  
      public void addBlockEntityTicker(TickingBlockEntity ticker) {
@@ -206,13 +206,17 @@
          toRemove.add(null); // Paper - Fix MC-117075
 -        for (this.tileTickPosition = 0; this.tileTickPosition < this.blockEntityTickers.size(); this.tileTickPosition++) { // Paper - Disable tick limiters
 -            TickingBlockEntity tickingBlockEntity = this.blockEntityTickers.get(this.tileTickPosition);
++        long knowledgeLastChunk = Long.MIN_VALUE; // Knowledge - block entities of one chunk come one after another: ask the chunk system once per run
++        boolean knowledgeLastTicks = false;
 +        for (int tileTickPosition = 0; tileTickPosition < blockEntityTickers.size(); tileTickPosition++) { // Paper - Disable tick limiters // ShreddedPaper - handle block entities ourselves
 +            TickingBlockEntity tickingBlockEntity = blockEntityTickers.get(tileTickPosition); // ShreddedPaper - handle block entities ourselves
              // Spigot end
              if (tickingBlockEntity.isRemoved()) {
                  toRemove.add(tickingBlockEntity); // Paper - Fix MC-117075; use removeAll
 -            } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos())) {
-+            } else if (runsNormally && this.shouldTickBlocksAt(tickingBlockEntity.getPos()) && io.multipaper.shreddedpaper.threading.RegionBudget.ticks(tickingBlockEntity.getPos())) { // Knowledge - tick budget
++            } else if (runsNormally && (knowledgeLastChunk == ChunkPos.asLong(tickingBlockEntity.getPos()) ? knowledgeLastTicks
++                    : (knowledgeLastTicks = this.shouldTickBlocksAt(knowledgeLastChunk = ChunkPos.asLong(tickingBlockEntity.getPos()))))
++                    && io.multipaper.shreddedpaper.threading.RegionBudget.ticks(tickingBlockEntity.getPos())) { // Knowledge - tick budget
 +                // Knowledge start - block entities that only reach a block or two are ticked after this loop, chunks at least three apart on several threads
 +                if (io.multipaper.shreddedpaper.threading.IntraRegion.isChunkLocal(tickingBlockEntity.knowledgeBlockEntityType())) {
 +                    if (knowledgePhased == null) knowledgePhased = new java.util.ArrayList<>();
@@ -222,8 +226,11 @@
 +                // Knowledge end
                  tickingBlockEntity.tick();
                  // Paper start - rewrite chunk system
-                 if ((++tickedEntities & 7) == 0) {
-@@ -1463,7 +_,16 @@
+-                if ((++tickedEntities & 7) == 0) {
++                if ((++tickedEntities & 63) == 0) { // Evangelium - every 64th, not 8th: each call reads the clock and shared fields from every region thread (the 25us backoff makes most calls no-ops anyway)
+                     ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel)(Level)(Object)this).moonrise$midTickTasks();
++                    knowledgeLastChunk = Long.MIN_VALUE; // Knowledge - chunk tasks may change which chunks tick: ask again
+                 }
                  // Paper end - rewrite chunk system
              }
          }
@@ -237,7 +244,7 @@
 +            ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel)(Level)(Object)this).moonrise$midTickTasks();
 +        }
 +        // Knowledge end
-+        blockEntityTickers.removeAll(toRemove); // Paper - Fix MC-117075 // ShreddedPaper - handle block entities ourselves
++        if (toRemove.size() > 1) blockEntityTickers.removeAll(toRemove); // Paper - Fix MC-117075 // ShreddedPaper - handle block entities ourselves // Knowledge - only null in the set: the list has no nulls (the loop above would have thrown), nothing to remove
  
          this.tickingBlockEntities = false;
          this.spigotConfig.currentPrimedTnt = 0; // Spigot
