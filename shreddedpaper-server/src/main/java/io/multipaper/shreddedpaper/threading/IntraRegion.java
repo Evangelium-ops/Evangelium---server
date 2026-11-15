@@ -129,8 +129,16 @@ public final class IntraRegion {
             return;
         }
         Long2ObjectLinkedOpenHashMap<List<T>> byChunk = new Long2ObjectLinkedOpenHashMap<>();
+        // items of one chunk usually come one after another (block entities are added chunk by chunk): reuse the last list, same result
+        long lastKey = 0;
+        List<T> last = null;
         for (T item : items) {
-            byChunk.computeIfAbsent(chunkKey.applyAsLong(item), k -> new ArrayList<>()).add(item);
+            long key = chunkKey.applyAsLong(item);
+            if (last == null || key != lastKey) {
+                last = byChunk.computeIfAbsent(key, k -> new ArrayList<>());
+                lastKey = key;
+            }
+            last.add(item);
         }
         if (byChunk.size() < MIN_CHUNKS) {
             runSerially(items, work);

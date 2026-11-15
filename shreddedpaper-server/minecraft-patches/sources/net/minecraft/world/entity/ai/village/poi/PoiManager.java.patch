@@ -1,14 +1,36 @@
 --- a/net/minecraft/world/entity/ai/village/poi/PoiManager.java
 +++ b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
-@@ -59,7 +_,7 @@
+@@ -59,11 +_,25 @@
          return POI_DATA_SOURCE - level;
      }
  
 -    private void updateDistanceTracking(long section) {
-+    private synchronized void updateDistanceTracking(long section) { // ShreddedPaper - synchronized
-         if (this.isVillageCenter(section)) {
-             this.villageDistanceTracker.setSource(section, POI_DATA_SOURCE);
-         } else {
+-        if (this.isVillageCenter(section)) {
+-            this.villageDistanceTracker.setSource(section, POI_DATA_SOURCE);
+-        } else {
+-            this.villageDistanceTracker.removeSource(section);
++    // Knowledge: the sections that are village sources right now, readable without the tracker lock (changed only under it)
++    private final java.util.Set<Long> villageSources = java.util.concurrent.ConcurrentHashMap.newKeySet();
++
++    private void updateDistanceTracking(long section) { // ShreddedPaper - synchronized
++        // Knowledge: every region thread of the world shares this lock, and chunk unloads call this for all ~24 sections of a chunk.
++        // The village check reads only the caller's own section, so it runs before the lock; a section that is not a village centre
++        // and was not a source has nothing to change (removeSource would be a no-op) and never takes the lock at all.
++        boolean center = this.isVillageCenter(section);
++        if (!center && !this.villageSources.contains(section)) {
++            return;
++        }
++        synchronized (this) {
++            if (center) {
++                this.villageDistanceTracker.setSource(section, POI_DATA_SOURCE);
++                this.villageSources.add(section);
++            } else {
++                this.villageDistanceTracker.removeSource(section);
++                this.villageSources.remove(section);
++            }
+         }
+     }
+ 
 @@ -347,7 +_,7 @@
          return this.getOrLoad(SectionPos.asLong(pos)).flatMap(poiSection -> poiSection.getDebugPoiInfo(pos)).orElse(null);
      }

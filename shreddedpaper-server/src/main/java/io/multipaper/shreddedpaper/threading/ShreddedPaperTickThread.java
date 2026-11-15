@@ -34,6 +34,10 @@ public class ShreddedPaperTickThread extends TickThread {
         LOGGER.info("Using {} threads", THREAD_COUNT);
     }
 
+    // Evangelium - one-entry cache for PerThreadNeighborUpdater (skips its ThreadLocal lookup on every neighbour update)
+    Object neighborUpdaterOwner;
+    net.minecraft.world.level.redstone.NeighborUpdater neighborUpdater;
+
     public ShreddedPaperTickThread(Runnable run, String name) {
         super(run, String.format(name, ID_GENERATOR.incrementAndGet()));
     }

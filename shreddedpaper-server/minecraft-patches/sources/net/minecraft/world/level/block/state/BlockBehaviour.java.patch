@@ -16,3 +16,21 @@
      }
  
      protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos, boolean movedByPiston) {
+@@ -421,6 +_,17 @@
+         private static final VoxelShape[] FULL_BLOCK_OCCLUSION_SHAPES = Util.make(
+             new VoxelShape[DIRECTIONS.length], shape -> Arrays.fill(shape, Shapes.block())
+         );
++        // Evangelium start - cached "is this state a point of interest" (PoiTypes is fixed after bootstrap), saves two HashMap lookups per setBlock
++        private byte evangeliumPoi; // 0 not looked up yet, 1 no, 2 yes
++        public final boolean evangeliumHasPoi() {
++            byte v = this.evangeliumPoi;
++            if (v == 0) {
++                v = net.minecraft.world.entity.ai.village.poi.PoiTypes.hasPoi((BlockState) this) ? (byte) 2 : (byte) 1;
++                this.evangeliumPoi = v;
++            }
++            return v == 2;
++        }
++        // Evangelium end
+         private final int lightEmission;
+         private final boolean useShapeForLightOcclusion;
+         private final boolean isAir;

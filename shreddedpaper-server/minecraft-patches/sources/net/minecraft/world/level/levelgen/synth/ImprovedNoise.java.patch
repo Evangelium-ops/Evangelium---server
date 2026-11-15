@@ -1,0 +1,47 @@
+--- a/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
+@@ -7,6 +_,7 @@
+ public final class ImprovedNoise {
+     private static final float SHIFT_UP_EPSILON = 1.0E-7F;
+     private final byte[] p;
++    private final int[] perm = new int[256]; // Knowledge: p as ints, so a lookup needs no & 0xFF (same values)
+     public final double xo;
+     public final double yo;
+     public final double zo;
+@@ -27,6 +_,10 @@
+             this.p[i] = this.p[i + randomInt];
+             this.p[i + randomInt] = b;
+         }
++
++        for (int i = 0; i < 256; i++) {
++            this.perm[i] = this.p[i] & 0xFF;
++        }
+     }
+ 
+     public double noise(double x, double y, double z) {
+@@ -74,12 +_,23 @@
+         return this.sampleWithDerivative(floor, floor1, floor2, d3, d4, d5, values);
+     }
+ 
++    // Knowledge: the gradient table as three flat arrays; same products and sums in the same order (strict IEEE): bit-identical
++    private static final double[] GRAD_X = new double[16], GRAD_Y = new double[16], GRAD_Z = new double[16];
++    static {
++        for (int i = 0; i < 16; i++) {
++            GRAD_X[i] = SimplexNoise.GRADIENT[i][0];
++            GRAD_Y[i] = SimplexNoise.GRADIENT[i][1];
++            GRAD_Z[i] = SimplexNoise.GRADIENT[i][2];
++        }
++    }
++
+     private static double gradDot(int gradIndex, double xFactor, double yFactor, double zFactor) {
+-        return SimplexNoise.dot(SimplexNoise.GRADIENT[gradIndex & 15], xFactor, yFactor, zFactor);
++        int i = gradIndex & 15;
++        return GRAD_X[i] * xFactor + GRAD_Y[i] * yFactor + GRAD_Z[i] * zFactor;
+     }
+ 
+     private int p(int index) {
+-        return this.p[index & 0xFF] & 0xFF;
++        return this.perm[index & 0xFF];
+     }
+ 
+     private double sampleAndLerp(int gridX, int gridY, int gridZ, double deltaX, double weirdDeltaY, double deltaZ, double deltaY) {

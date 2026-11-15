@@ -1,6 +1,65 @@
 --- a/io/papermc/paper/util/PoiAccess.java
 +++ b/io/papermc/paper/util/PoiAccess.java
-@@ -225,7 +_,9 @@
+@@ -183,6 +_,50 @@
+ 
+     // only includes x/z axis
+     // finds the closest poi data by distance. if multiple match the same distance, then they all are returned.
++    // Knowledge start - when no POI in the search box passes the type, occupancy and distance tests, the section walk can find
++    // nothing (and never calls the position predicate), so skip it. Reads each loaded POI chunk once instead of a BFS over
++    // every section in range; jobless villagers retry this every 1-2 s per behaviour.
++    private static boolean knowledgeNoCandidate(final PoiManager poiStorage, final Predicate<Holder<PoiType>> villagePlaceType,
++                                                final Predicate<? super PoiRecord> occupancyFilter, final BlockPos sourcePosition,
++                                                final int range, final double maxDistanceSquared,
++                                                final int lowerX, final int lowerZ, final int upperX, final int upperZ, final int lowerY, final int upperY) {
++        if (!io.multipaper.shreddedpaper.ai.AiDiagnostics.spatialOptimizationEnabled()) {
++            return false;
++        }
++        final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkHolderManager holders =
++            ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)poiStorage.moonrise$getWorld()).moonrise$getChunkTaskScheduler().chunkHolderManager;
++        for (int chunkX = lowerX; chunkX <= upperX; ++chunkX) {
++            for (int chunkZ = lowerZ; chunkZ <= upperZ; ++chunkZ) {
++                final ca.spottedleaf.moonrise.patches.chunk_system.level.poi.PoiChunk chunk = holders.getPoiChunkIfLoaded(chunkX, chunkZ, true);
++                if (chunk == null) {
++                    continue;
++                }
++                for (int chunkY = lowerY; chunkY <= upperY; ++chunkY) {
++                    final Optional<PoiSection> section = chunk.getSectionForVanilla(chunkY);
++                    if (section.isEmpty()) {
++                        continue;
++                    }
++                    for (final Map.Entry<Holder<PoiType>, Set<PoiRecord>> entry : section.get().getData().entrySet()) {
++                        if (!villagePlaceType.test(entry.getKey())) {
++                            continue;
++                        }
++                        for (final PoiRecord poiData : entry.getValue()) {
++                            final BlockPos poiPosition = poiData.getPos();
++                            if (occupancyFilter.test(poiData)
++                                    && Math.abs(poiPosition.getX() - sourcePosition.getX()) <= range
++                                    && Math.abs(poiPosition.getZ() - sourcePosition.getZ()) <= range
++                                    && poiPosition.distSqr(sourcePosition) <= maxDistanceSquared) {
++                                return false;
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        return true;
++    }
++    // Knowledge end
++
+     public static void findClosestPoiDataRecords(final PoiManager poiStorage,
+                                                  final Predicate<Holder<PoiType>> villagePlaceType,
+                                                  // position predicate must not modify chunk POI
+@@ -219,13 +_,17 @@
+         final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
+         final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
+ 
++        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) return; // Knowledge
++
+         final int centerX = sourcePosition.getX() >> 4;
+         final int centerY = Mth.clamp(sourcePosition.getY() >> 4, lowerY, upperY);
+         final int centerZ = sourcePosition.getZ() >> 4;
          final long centerKey = CoordinateUtils.getChunkSectionKey(centerX, centerY, centerZ);
  
          final LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
@@ -11,7 +70,15 @@
          seen.add(centerKey);
          queue.enqueue(centerKey);
  
-@@ -468,7 +_,7 @@
+@@ -462,13 +_,15 @@
+         final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
+         final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
+ 
++        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) return; // Knowledge
++
+         final int centerX = sourcePosition.getX() >> 4;
+         final int centerY = Mth.clamp(sourcePosition.getY() >> 4, lowerY, upperY);
+         final int centerZ = sourcePosition.getZ() >> 4;
          final long centerKey = CoordinateUtils.getChunkSectionKey(centerX, centerY, centerZ);
  
          final LongArrayFIFOQueue queue = new LongArrayFIFOQueue();

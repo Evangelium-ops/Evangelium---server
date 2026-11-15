@@ -5,7 +5,7 @@
      private final BlockState crossState;
      private final RedstoneWireEvaluator evaluator = new DefaultRedstoneWireEvaluator(this);
 -    public boolean shouldSignal = true;
-+    public final ThreadLocal<Boolean> shouldSignalThreadLocal = ThreadLocal.withInitial(() -> true); // ShreddedPaper - use thread local for shouldSignal
++    public final ThreadLocal<Boolean> shouldSignalThreadLocal = new io.multipaper.shreddedpaper.util.ThreadFlag(true); // Evangelium - cheap read while unset; // ShreddedPaper - use thread local for shouldSignal
  
      @Override
      public MapCodec<RedStoneWireBlock> codec() {

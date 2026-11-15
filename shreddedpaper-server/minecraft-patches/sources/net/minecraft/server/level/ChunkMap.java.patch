@@ -380,7 +380,7 @@
              }
          }
  
-@@ -1304,6 +_,91 @@
+@@ -1304,6 +_,94 @@
              this.lastSectionPos = SectionPos.of(entity);
          }
  
@@ -406,7 +406,9 @@
 +        public void updatePlayersLimitedAndOrdered(ca.spottedleaf.moonrise.common.list.ReferenceList<ServerPlayer> players, boolean hasTrackerCandidatesChanged, boolean fullTrackerUpdate) {
 +            if (!hasTrackerCandidatesChanged && !fullTrackerUpdate) return;
 +
-+            TreeSet<DistancedServerPlayer> playerSet = new TreeSet<>();
++            // Knowledge - a list, sorted only when there are more candidates than the limit (the set of players kept is the same as
++            // with the TreeSet: compareTo is unique per player); the TreeSet insert was the biggest part of this method in a crowd
++            java.util.ArrayList<DistancedServerPlayer> playerSet = new java.util.ArrayList<>(players.size());
 +            final ServerPlayer[] playersRaw = players.getRawDataUnchecked();
 +
 +            for (int index = 0, len = players.size(); index < len; ++index) {
@@ -437,6 +439,7 @@
 +                }
 +            }
 +
++            if (playerSet.size() > ShreddedPaperConfiguration.get().optimizations.maximumTrackersPerEntity) java.util.Collections.sort(playerSet); // Knowledge
 +            seenByLock.lock();
 +            try {
 +                Set<ServerPlayer> canBeSeenBy = new ReferenceOpenHashSet<>(Math.min(ShreddedPaperConfiguration.get().optimizations.maximumTrackersPerEntity, playerSet.size()));

@@ -1,0 +1,20 @@
+--- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlockStates.java
++++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlockStates.java
+@@ -196,14 +_,14 @@
+         BlockPos pos = craftBlock.getPosition();
+         net.minecraft.world.level.block.state.BlockState state = craftBlock.getNMS();
+         BlockEntity blockEntity = craftBlock.getHandle().getBlockEntity(pos);
+-        boolean prev = CraftBlockEntityState.DISABLE_SNAPSHOT;
+-        CraftBlockEntityState.DISABLE_SNAPSHOT = !useSnapshot;
++        boolean prev = CraftBlockEntityState.DISABLE_SNAPSHOT.get(); // ShreddedPaper
++        CraftBlockEntityState.DISABLE_SNAPSHOT.set(!useSnapshot); // ShreddedPaper
+         try {
+             CraftBlockState blockState = CraftBlockStates.getBlockState(world, pos, state, blockEntity);
+             blockState.setWorldHandle(craftBlock.getHandle()); // Inject the block's generator access
+             return blockState;
+         } finally {
+-            CraftBlockEntityState.DISABLE_SNAPSHOT = prev;
++            CraftBlockEntityState.DISABLE_SNAPSHOT.set(prev); // ShreddedPaper
+         }
+     }
+ 

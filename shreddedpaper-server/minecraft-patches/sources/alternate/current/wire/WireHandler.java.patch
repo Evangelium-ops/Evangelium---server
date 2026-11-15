@@ -1,0 +1,38 @@
+--- a/alternate/current/wire/WireHandler.java
++++ b/alternate/current/wire/WireHandler.java
+@@ -278,18 +_,23 @@
+      * block at the given position in the level.
+      */
+     private Node getOrAddNode(BlockPos pos, BlockState state) {
+-        return nodes.compute(pos.asLong(), (key, node) -> {
+-            if (node == null) {
+-                // If there is not yet a node at this position, retrieve and
+-                // update one from the cache.
+-                return getNextNode(pos, state != null ? state : level.getBlockState(pos));
+-            }
+-            if (node.invalid) {
+-                return revalidateNode(node);
+-            }
+-
+-            return node;
+-        });
++        // Evangelium start - get/put instead of compute with a capturing lambda (same result, no allocation, one probe when present)
++        long key = pos.asLong();
++        Node node = nodes.get(key);
++        if (node == null) {
++            // If there is not yet a node at this position, retrieve and
++            // update one from the cache.
++            node = getNextNode(pos, state != null ? state : level.getBlockState(pos));
++            nodes.put(key, node);
++        } else if (node.invalid) {
++            Node revalidated = revalidateNode(node);
++            if (revalidated != node) {
++                nodes.put(key, revalidated);
++            }
++            node = revalidated;
++        }
++        return node;
++        // Evangelium end
+     }
+ 
+     /**
