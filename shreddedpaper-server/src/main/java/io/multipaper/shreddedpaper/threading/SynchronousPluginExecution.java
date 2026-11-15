@@ -27,6 +27,11 @@ public class SynchronousPluginExecution {
     private static final ThreadLocal<WeakReference<Plugin>> currentPlugin = new ThreadLocal<>();
     private static final ThreadLocal<List<String>> heldPluginLocks = ThreadLocal.withInitial(ArrayList::new); // Use a list as the same plugin may be locked multiple times in a single thread due to recursion
 
+    /** True while this thread runs code of a plugin without Folia support (holding its plugin lock). Knowledge */
+    public static boolean holdsAnyLock() {
+        return !heldPluginLocks.get().isEmpty();
+    }
+
     public static Plugin getCurrentPlugin() {
         WeakReference<Plugin> pluginRef = currentPlugin.get();
         return pluginRef == null ? null : pluginRef.get();

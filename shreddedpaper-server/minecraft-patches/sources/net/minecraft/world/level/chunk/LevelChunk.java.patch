@@ -35,6 +35,41 @@
      private LevelChunk.UnsavedListener unsavedListener = chunkPos -> {};
      // CraftBukkit start
      public boolean mustNotSave;
+@@ -236,6 +_,34 @@
+         return this.level.paperConfig().chunks.fixedChunkInhabitedTime < 0 ? super.getInhabitedTime() : this.level.paperConfig().chunks.fixedChunkInhabitedTime;
+     }
+     // Paper end
++    // ShreddedPaper start - skip unchanged chunk saves
++    private static final String SKIP_UNCHANGED_SAVES_PROPERTY = System.getProperty("shreddedpaper.skipUnchangedChunkSaves");
++    // inhabited time does not mark a chunk unsaved (vanilla); an unchanged chunk is still written at unload once it gained this much
++    private static final long UNLOAD_SAVE_INHABITED_TICKS = 1200L;
++    public volatile long savedInhabitedTime = Long.MIN_VALUE / 2;
++
++    public static boolean skipUnchangedChunkSaves() {
++        if (SKIP_UNCHANGED_SAVES_PROPERTY != null) {
++            return Boolean.parseBoolean(SKIP_UNCHANGED_SAVES_PROPERTY);
++        }
++        io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
++        return config != null && config.optimizations.skipUnchangedChunkSaves;
++    }
++
++    // a chunk read from disk with nothing to upgrade or fix starts out saved: what is on disk is exactly what was loaded
++    public void markLoadedUnchanged() {
++        this.onSaved();
++        this.tryMarkSaved();
++    }
++
++    public void onSaved() {
++        this.savedInhabitedTime = super.getInhabitedTime();
++    }
++
++    public boolean needsUnloadSave() {
++        return super.getInhabitedTime() - this.savedInhabitedTime >= UNLOAD_SAVE_INHABITED_TICKS;
++    }
++    // ShreddedPaper end - skip unchanged chunk saves
+ 
+     @Override
+     public void markUnsaved() {
 @@ -421,7 +_,7 @@
                  if (!section.getBlockState(i, i1, i2).is(block)) {
                      return null;

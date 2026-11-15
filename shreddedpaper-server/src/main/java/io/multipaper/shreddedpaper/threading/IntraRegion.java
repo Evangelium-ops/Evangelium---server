@@ -57,7 +57,7 @@ public final class IntraRegion {
 
     private static final ExecutorService POOL = HELPERS <= 0 ? null
             : Executors.newFixedThreadPool(HELPERS, r -> {
-                ShreddedPaperTickThread t = new ShreddedPaperTickThread(r, "ShreddedPaperRegionHelper-%d");
+                ShreddedPaperTickThread t = new ShreddedPaperTickThread(r, "EvangeliumRegionHelper-%d");
                 t.setDaemon(true);   // never keeps the server process alive
                 return t;
             });

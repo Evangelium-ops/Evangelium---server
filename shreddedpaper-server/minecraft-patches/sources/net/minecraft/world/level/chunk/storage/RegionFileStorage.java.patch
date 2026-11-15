@@ -1,5 +1,19 @@
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -153,7 +_,12 @@
+ 
+         try { // Paper - implement RegionFileSizeException
+         try {
+-            NbtIo.write(compound, writeData.output());
++            // ShreddedPaper start - write the NBT into a plain array first: thousands of small writes through the locked buffered
++            // stream cost more than one big write into the compressor; the bytes reaching it are the same
++            final it.unimi.dsi.fastutil.io.FastByteArrayOutputStream raw = new it.unimi.dsi.fastutil.io.FastByteArrayOutputStream(16384);
++            NbtIo.write(compound, new java.io.DataOutputStream(raw));
++            writeData.output().write(raw.array, 0, raw.length);
++            // ShreddedPaper end - write the NBT into a plain array first
+         } finally {
+             writeData.output().close();
+         }
 @@ -309,7 +_,7 @@
  
      // Paper start

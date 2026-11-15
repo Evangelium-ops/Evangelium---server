@@ -1,0 +1,89 @@
+--- a/net/minecraft/world/level/chunk/PalettedContainer.java
++++ b/net/minecraft/world/level/chunk/PalettedContainer.java
+@@ -342,6 +_,12 @@
+         try {
+             BitStorage bitStorage = this.data.storage;
+             Palette<T> palette = this.data.palette;
++            // ShreddedPaper start - palette already in first-appearance order: same result without the hash palette and remap
++            PalettedContainerRO.PackedData<T> inOrder = packInOrder(strategy, bitStorage, palette);
++            if (inOrder != null) {
++                return inOrder;
++            }
++            // ShreddedPaper end - palette already in first-appearance order
+             HashMapPalette<T> hashMapPalette = new HashMapPalette<>(bitStorage.getBits());
+             int entryCount = strategy.entryCount();
+             int[] ints = reencodeContents(bitStorage, palette, hashMapPalette);
+@@ -363,12 +_,73 @@
+         return var14;
+     }
+ 
++    // ShreddedPaper start - palette already in first-appearance order
++    // vanilla pack() renumbers the entries in the order they first appear in the storage and drops unused ones; when the ids
++    // already appear as 0, 1, 2, ... that renumbering is the identity, so the entries are a prefix of the palette and the
++    // storage keeps its values (and its raw longs when the bit count stays the same)
++    private static <T> PalettedContainerRO.@org.jspecify.annotations.Nullable PackedData<T> packInOrder(Strategy<T> strategy, BitStorage bitStorage, Palette<T> palette) {
++        if (palette instanceof GlobalPalette<T> || palette.getSize() > 256 || !(bitStorage instanceof SimpleBitStorage || bitStorage instanceof ZeroBitStorage)) {
++            return null;
++        }
++        int[] ints = new int[bitStorage.getSize()];
++        bitStorage.unpack(ints);
++        int next = 0;
++        for (int value : ints) {
++            if (value == next) {
++                next++;
++            } else if (value > next) {
++                return null;
++            }
++        }
++        if (next > palette.getSize()) {
++            return null;
++        }
++        List<T> entries = new java.util.ArrayList<>(next);
++        java.util.Set<T> seen = next > 32 ? java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>(next * 2)) : null;
++        for (int id = 0; id < next; id++) {
++            T value = palette.valueFor(id);
++            if (seen != null ? !seen.add(value) : entries.contains(value)) {
++                return null;   // the same value twice: vanilla would merge them
++            }
++            entries.add(value);
++        }
++        int bits = strategy.getConfigurationForPaletteSize(next).bitsInStorage();
++        Optional<LongStream> storage;
++        if (bits == 0) {
++            storage = Optional.empty();
++        } else if (bits == bitStorage.getBits() && bitStorage instanceof SimpleBitStorage) {
++            storage = Optional.of(Arrays.stream(bitStorage.getRaw().clone()));
++        } else {
++            storage = Optional.of(Arrays.stream(new SimpleBitStorage(bits, strategy.entryCount(), ints).getRaw()));
++        }
++        return new PalettedContainerRO.PackedData<>(entries, storage, bits);
++    }
++    // ShreddedPaper end - palette already in first-appearance order
++
+     private static <T> int[] reencodeContents(BitStorage bitStorage, Palette<T> oldPalette, Palette<T> newPalette) {
+         int[] ints = new int[bitStorage.getSize()];
+         bitStorage.unpack(ints);
+         PaletteResize<T> paletteResize = PaletteResize.noResizeExpected();
+         int i = -1;
+         int i1 = -1;
++        // ShreddedPaper start - map each old id once; idFor in first-appearance order adds the same entries in the same order
++        if (oldPalette.getSize() <= 256 && !(oldPalette instanceof GlobalPalette<T>)) {
++            int[] mapped = new int[oldPalette.getSize()];
++            java.util.Arrays.fill(mapped, -1);
++            for (int i2 = 0; i2 < ints.length; i2++) {
++                int i3 = ints[i2];
++                int id = i3 < mapped.length ? mapped[i3] : -1;
++                if (id == -1) {
++                    id = newPalette.idFor(oldPalette.valueFor(i3), paletteResize);
++                    if (i3 < mapped.length) {
++                        mapped[i3] = id;
++                    }
++                }
++                ints[i2] = id;
++            }
++            return ints;
++        }
++        // ShreddedPaper end - map each old id once
+ 
+         for (int i2 = 0; i2 < ints.length; i2++) {
+             int i3 = ints[i2];

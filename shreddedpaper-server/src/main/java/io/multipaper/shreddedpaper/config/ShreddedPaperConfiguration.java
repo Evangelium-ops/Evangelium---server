@@ -75,6 +75,14 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public boolean skipWatchedPlayerOwnAttributes = true;
         @Comment("A mob standing still where no block around it changed reuses last tick's block answers (falling, supporting block, blocks it is inside, fluids) instead of asking every block again; a fresh look at least once a second. Same results; only block edits that bypass the server (some world-edit plugins writing chunk memory directly) are seen up to a second late by a resting mob.")
         public boolean restingEntityCache = true;
+        @Comment("Chunk generation turns each density function tree (the terrain formulas) into generated Java code once per tree shape instead of walking the tree for every sample. Same operations in the same order, so the terrain is bit-identical; any function it does not understand keeps the normal path. -Dshreddedpaper.densityFunctionCompiler=true/false overrides this.")
+        public boolean densityFunctionCompiler = true;
+        @Comment("Chunk generation turns the surface rules (which block goes on top: grass, sand, snow, terracotta...) into generated Java code once per rule shape, and reuses the biome answer of a block instead of building new objects for it. Same checks in the same order, so the terrain is bit-identical. -Dshreddedpaper.surfaceRuleCompiler=true/false overrides this.")
+        public boolean surfaceRuleCompiler = true;
+        @Comment("Biome lookups reuse the per-cell random offsets of the last cell asked and search the biome tree with an early stop; exactly the same biome answers. -Dshreddedpaper.biomeLookupCache=true/false overrides this.")
+        public boolean biomeLookupCache = true;
+        @Comment("A chunk loaded from disk is written back only when something in it changed (blocks, block entities, light, scheduled ticks, structures, plugin data), instead of every chunk being rewritten when it unloads. Only difference: a chunk that spent under a minute near players since its last save does not store that minute in its regional difficulty clock (inhabited time). -Dshreddedpaper.skipUnchangedChunkSaves=true/false overrides this.")
+        public boolean skipUnchangedChunkSaves = true;
         public boolean disableVanishApi = false;
         public boolean disableLocatorBar = true;
         public boolean useLazyExecuteWhenNotFlushing = true;

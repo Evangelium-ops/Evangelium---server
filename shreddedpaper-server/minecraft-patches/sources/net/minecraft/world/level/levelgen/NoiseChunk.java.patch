@@ -1,0 +1,206 @@
+--- a/net/minecraft/world/level/levelgen/NoiseChunk.java
++++ b/net/minecraft/world/level/levelgen/NoiseChunk.java
+@@ -56,7 +_,51 @@
+     long interpolationCounter;
+     long arrayInterpolationCounter;
+     int arrayIndex;
+-    private final DensityFunction.ContextProvider sliceFillingContextProvider = new DensityFunction.ContextProvider() {
++    private final DensityFunction.ContextProvider sliceFillingContextProvider = new SliceFillingContextProvider(); // Knowledge - named class, compiled density functions fill it directly
++    // Knowledge start - density function compiler: the router is mapped once per node (see DensityFunctionCompiler.mapOnce)
++    private final boolean compileDensityFunctions = DensityFunctionCompiler.enabled();
++    private double lazyZ; // last updateForZ value while interpolator values are computed lazily
++    private long lazyZStamp; // counts updateForZ calls
++    private final Map<DensityFunction, DensityFunction> mappedOnce = new java.util.IdentityHashMap<>();
++    private final DensityFunction.Visitor wrapVisitor = this::wrap;
++    private final java.util.function.UnaryOperator<DensityFunction> sharedMapper = this::mapShared;
++
++    private DensityFunction mapShared(DensityFunction function) {
++        DensityFunction mapped = this.mappedOnce.get(function);
++        if (mapped == null) {
++            mapped = DensityFunctionCompiler.mapOnce(function, this.sharedMapper, this.wrapVisitor);
++            this.mappedOnce.put(function, mapped);
++        }
++        return mapped;
++    }
++
++    private DensityFunction mapWrapped(DensityFunction function) {
++        return this.compileDensityFunctions ? this.mapShared(function) : function.mapAll(this::wrap);
++    }
++
++    private NoiseRouter mapRouter(NoiseRouter router) {
++        if (!this.compileDensityFunctions) {
++            return router.mapAll(this::wrap);
++        }
++        // same order as NoiseRouter.mapAll, so the caches are created in the same order
++        return new NoiseRouter(
++            this.mapShared(router.barrierNoise()), this.mapShared(router.fluidLevelFloodednessNoise()), this.mapShared(router.fluidLevelSpreadNoise()),
++            this.mapShared(router.lavaNoise()), this.mapShared(router.temperature()), this.mapShared(router.vegetation()), this.mapShared(router.continents()),
++            this.mapShared(router.erosion()), this.mapShared(router.depth()), this.mapShared(router.ridges()), this.mapShared(router.preliminarySurfaceLevel()),
++            this.mapShared(router.finalDensity()), this.mapShared(router.veinToggle()), this.mapShared(router.veinRidged()), this.mapShared(router.veinGap())
++        );
++    }
++
++    private DensityFunction compiled(DensityFunction function) {
++        return this.compileDensityFunctions ? DensityFunctionCompiler.compileAlways(function) : function;
++    }
++    // Knowledge end - density function compiler
++
++    final class SliceFillingContextProvider implements DensityFunction.ContextProvider { // Knowledge
++        NoiseChunk noiseChunk() {
++            return NoiseChunk.this;
++        }
++
+         @Override
+         public DensityFunction.FunctionContext forIndex(int arrayIndex) {
+             NoiseChunk.this.cellStartBlockY = (arrayIndex + NoiseChunk.this.cellNoiseMinY) * NoiseChunk.this.cellHeight;
+@@ -76,7 +_,7 @@
+                 values[i] = function.compute(NoiseChunk.this);
+             }
+         }
+-    };
++    }
+ 
+     public static NoiseChunk forChunk(
+         ChunkAccess chunk,
+@@ -138,26 +_,26 @@
+         }
+ 
+         NoiseRouter noiseRouter = random.router();
+-        NoiseRouter noiseRouter1 = noiseRouter.mapAll(this::wrap);
+-        this.preliminarySurfaceLevel = noiseRouter1.preliminarySurfaceLevel();
++        NoiseRouter noiseRouter1 = this.mapRouter(noiseRouter); // Knowledge - density function compiler
++        NoiseRouter compiledRouter = this.compileDensityFunctions ? DensityFunctionCompiler.compileAll(noiseRouter1) : noiseRouter1; // Knowledge
++        this.preliminarySurfaceLevel = compiledRouter.preliminarySurfaceLevel(); // Knowledge
+         if (!noiseGeneratorSettings.isAquifersEnabled()) {
+             this.aquifer = Aquifer.createDisabled(fluidPicker);
+         } else {
+             int blockPosCoord = SectionPos.blockToSectionCoord(firstNoiseX);
+             int i2 = SectionPos.blockToSectionCoord(firstNoiseZ);
+             this.aquifer = Aquifer.create(
+-                this, new ChunkPos(blockPosCoord, i2), noiseRouter1, random.aquiferRandom(), noiseSettings.minY(), noiseSettings.height(), fluidPicker
++                this, new ChunkPos(blockPosCoord, i2), compiledRouter, random.aquiferRandom(), noiseSettings.minY(), noiseSettings.height(), fluidPicker
+             );
+         }
+ 
+         List<NoiseChunk.BlockStateFiller> list = new ArrayList<>();
+-        DensityFunction densityFunction = DensityFunctions.cacheAllInCell(
++        DensityFunction densityFunction = this.mapWrapped(DensityFunctions.cacheAllInCell( // Knowledge - density function compiler
+                 DensityFunctions.add(noiseRouter1.finalDensity(), DensityFunctions.BeardifierMarker.INSTANCE)
+-            )
+-            .mapAll(this::wrap);
++            ));
+         list.add(context -> this.aquifer.computeSubstance(context, densityFunction.compute(context)));
+         if (noiseGeneratorSettings.oreVeinsEnabled()) {
+-            list.add(OreVeinifier.create(noiseRouter1.veinToggle(), noiseRouter1.veinRidged(), noiseRouter1.veinGap(), random.oreRandom()));
++            list.add(OreVeinifier.create(compiledRouter.veinToggle(), compiledRouter.veinRidged(), compiledRouter.veinGap(), random.oreRandom())); // Knowledge
+         }
+ 
+         this.blockStateRule = new MaterialRuleList(list.toArray(new NoiseChunk.BlockStateFiller[0]));
+@@ -165,12 +_,12 @@
+ 
+     protected Climate.Sampler cachedClimateSampler(NoiseRouter noiseRouter, List<Climate.ParameterPoint> points) {
+         return new Climate.Sampler(
+-            noiseRouter.temperature().mapAll(this::wrap),
+-            noiseRouter.vegetation().mapAll(this::wrap),
+-            noiseRouter.continents().mapAll(this::wrap),
+-            noiseRouter.erosion().mapAll(this::wrap),
+-            noiseRouter.depth().mapAll(this::wrap),
+-            noiseRouter.ridges().mapAll(this::wrap),
++            this.compiled(this.mapWrapped(noiseRouter.temperature())), // Knowledge
++            this.compiled(this.mapWrapped(noiseRouter.vegetation())), // Knowledge
++            this.compiled(this.mapWrapped(noiseRouter.continents())), // Knowledge
++            this.compiled(this.mapWrapped(noiseRouter.erosion())), // Knowledge
++            this.compiled(this.mapWrapped(noiseRouter.depth())), // Knowledge
++            this.compiled(this.mapWrapped(noiseRouter.ridges())), // Knowledge
+             points
+         );
+     }
+@@ -321,6 +_,7 @@
+         this.inCellX = cellEndBlockX - this.cellStartBlockX;
+ 
+         for (NoiseChunk.NoiseInterpolator noiseInterpolator : this.interpolators) {
++            noiseInterpolator.flushZ(); // Knowledge - a pending lazy updateForZ first, so value keeps the old Z0/Z1 like before
+             noiseInterpolator.updateForX(x);
+         }
+     }
+@@ -328,6 +_,14 @@
+     public void updateForZ(int cellEndBlockZ, double z) {
+         this.inCellZ = cellEndBlockZ - this.cellStartBlockZ;
+         this.interpolationCounter++;
++        // Knowledge start - lazy per-block lerp: most interpolators are only read while filling cells, so value is computed
++        // when read (or before the next updateForX changes its inputs) from the last z, the same lerp with the same inputs
++        if (this.compileDensityFunctions) {
++            this.lazyZ = z;
++            this.lazyZStamp++;
++            return;
++        }
++        // Knowledge end
+ 
+         for (NoiseChunk.NoiseInterpolator noiseInterpolator : this.interpolators) {
+             noiseInterpolator.updateForZ(z);
+@@ -377,11 +_,13 @@
+     private DensityFunction wrapNew(DensityFunction densityFunction) {
+         if (densityFunction instanceof DensityFunctions.Marker marker) {
+             return (DensityFunction)(switch (marker.type()) {
+-                case Interpolated -> new NoiseChunk.NoiseInterpolator(marker.wrapped());
+-                case FlatCache -> new NoiseChunk.FlatCache(marker.wrapped(), true);
+-                case Cache2D -> new NoiseChunk.Cache2D(marker.wrapped());
+-                case CacheOnce -> new NoiseChunk.CacheOnce(marker.wrapped());
+-                case CacheAllInCell -> new NoiseChunk.CacheAllInCell(marker.wrapped());
++                // Knowledge start - density function compiler: each cache computes its compiled child (same values, see DensityFunctionCompiler)
++                case Interpolated -> new NoiseChunk.NoiseInterpolator(this.compiled(marker.wrapped()));
++                case FlatCache -> new NoiseChunk.FlatCache(this.compiled(marker.wrapped()), true);
++                case Cache2D -> new NoiseChunk.Cache2D(this.compiled(marker.wrapped()));
++                case CacheOnce -> new NoiseChunk.CacheOnce(this.compiled(marker.wrapped()));
++                case CacheAllInCell -> new NoiseChunk.CacheAllInCell(this.compiled(marker.wrapped()));
++                // Knowledge end - density function compiler
+             });
+         } else {
+             if (this.blender != Blender.empty()) {
+@@ -698,6 +_,11 @@
+         private double valueZ0;
+         private double valueZ1;
+         private double value;
++        private long lazyZStamp; // Knowledge - NoiseChunk.lazyZStamp when value was last brought up to date
++
++        NoiseChunk noiseChunk() { // Knowledge - density function compiler
++            return NoiseChunk.this;
++        }
+ 
+         NoiseInterpolator(final DensityFunction noiseFiller) {
+             this.noiseFiller = noiseFiller;
+@@ -741,6 +_,13 @@
+             this.valueZ1 = Mth.lerp(x, this.valueXZ01, this.valueXZ11);
+         }
+ 
++        void flushZ() { // Knowledge - the lerp updateForZ(lazyZ) would have done
++            if (this.lazyZStamp != NoiseChunk.this.lazyZStamp) {
++                this.lazyZStamp = NoiseChunk.this.lazyZStamp;
++                this.value = Mth.lerp(NoiseChunk.this.lazyZ, this.valueZ0, this.valueZ1);
++            }
++        }
++
+         void updateForZ(double z) {
+             this.value = Mth.lerp(z, this.valueZ0, this.valueZ1);
+         }
+@@ -766,7 +_,7 @@
+                         this.noise011,
+                         this.noise111
+                     )
+-                    : this.value;
++                    : this.lazyValue(); // Knowledge
+             }
+         }
+ 
+@@ -782,6 +_,11 @@
+         @Override
+         public DensityFunction wrapped() {
+             return this.noiseFiller;
++        }
++
++        private double lazyValue() { // Knowledge
++            this.flushZ();
++            return this.value;
+         }
+ 
+         private void swapSlices() {

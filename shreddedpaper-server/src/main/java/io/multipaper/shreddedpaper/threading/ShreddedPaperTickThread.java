@@ -29,7 +29,7 @@ public class ShreddedPaperTickThread extends TickThread {
 
         THREAD_COUNT = threadCount;
 
-        executor = Executors.newFixedThreadPool(THREAD_COUNT, r -> new ShreddedPaperTickThread(r, "ShreddedPaperTickThread-%d"));
+        executor = Executors.newFixedThreadPool(THREAD_COUNT, r -> new ShreddedPaperTickThread(r, "EvangeliumTickThread-%d"));
 
         LOGGER.info("Using {} threads", THREAD_COUNT);
     }

@@ -102,6 +102,20 @@
              return false;
          }
      }
+@@ -1134,6 +_,13 @@
+     public void save(boolean flush) {
+         org.spigotmc.AsyncCatcher.catchOp("world save"); // Spigot
+         this.server.checkSaveState();
++        // Knowledge start - a full save waits for every region's lock; from a region thread, or while a plugin lock is held, it
++        // deadlocks with regions waiting for that plugin lock (this froze a live server). Hand it to the server thread.
++        if (!ca.spottedleaf.moonrise.common.util.TickThread.isShutdownThread() && (!this.server.getServer().isSameThread() || io.multipaper.shreddedpaper.threading.SynchronousPluginExecution.holdsAnyLock())) {
++            this.server.getServer().execute(() -> this.save(flush));
++            return;
++        }
++        // Knowledge end
+         boolean oldSave = this.world.noSave;
+ 
+         this.world.noSave = false;
 @@ -1587,7 +_,7 @@
          if (!(entity instanceof CraftEntity craftEntity) || entity.getWorld() != this || sound == null || category == null) return;
  

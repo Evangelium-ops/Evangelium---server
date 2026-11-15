@@ -1,0 +1,63 @@
+--- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
++++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+@@ -201,12 +_,20 @@
+                     LevelChunkSection levelChunkSection;
+                     if (byteOr >= level.getMinSectionY() && byteOr <= level.getMaxSectionY()) {
+                         final BlockState[] presetBlockStates = serverLevel.chunkPacketBlockController.getPresetBlockStates(serverLevel, chunkPos, byteOr); // Paper - Anti-Xray - Add preset block states
+-                        final Codec<PalettedContainer<BlockState>> blockStateCodec = presetBlockStates == null ? codec1 : PalettedContainer.codecRW(BlockState.CODEC, containerFactory.blockStatesStrategy(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), presetBlockStates); // Paper - Anti-Xray
+                         PalettedContainer<BlockState> palettedContainer = compoundTag.getCompound("block_states")
+                             .map(
+-                                compoundTag1 -> blockStateCodec.parse(NbtOps.INSTANCE, compoundTag1) // Paper - Anti-Xray
++                                compoundTag1 -> {
++                                    // ShreddedPaper start - read block states without the codec; the codec handles everything unusual
++                                    PalettedContainer<BlockState> fast = io.multipaper.shreddedpaper.util.FastPaletteCodec.readBlockStates(compoundTag1, containerFactory.blockStatesStrategy(), presetBlockStates);
++                                    if (fast != null) {
++                                        return fast;
++                                    }
++                                    final Codec<PalettedContainer<BlockState>> blockStateCodec = presetBlockStates == null ? codec1 : PalettedContainer.codecRW(BlockState.CODEC, containerFactory.blockStatesStrategy(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), presetBlockStates); // Paper - Anti-Xray
++                                    // ShreddedPaper end - read block states without the codec
++                                    return blockStateCodec.parse(NbtOps.INSTANCE, compoundTag1) // Paper - Anti-Xray
+                                     .promotePartial(string -> logErrors(chunkPos, byteOr, string))
+-                                    .getOrThrow(SerializableChunkData.ChunkReadException::new)
++                                    .getOrThrow(SerializableChunkData.ChunkReadException::new);
++                                }
+                             )
+                             .orElseGet(containerFactory::createForBlockStates);
+                         PalettedContainer<Holder<Biome>> palettedContainerRo = compoundTag.getCompound("biomes") // CraftBukkit - read/write
+@@ -261,6 +_,27 @@
+         }
+     }
+ 
++    // ShreddedPaper start - skip unchanged chunk saves
++    // true when read() keeps everything as stored: nothing to upgrade, blend, retrogen, relight, post-process or rebuild
++    public boolean loadsUnchanged() {
++        if (this.chunkStatus.getChunkType() != ChunkType.LEVELCHUNK || !this.lightCorrect || !this.upgradeData.isEmpty()
++            || this.blendingData != null || this.belowZeroRetrogen != null || !this.entities.isEmpty()) {
++            return false;
++        }
++        for (ShortList list : this.postProcessingSections) {
++            if (list != null && !list.isEmpty()) {
++                return false;
++            }
++        }
++        for (Heightmap.Types types : this.chunkStatus.heightmapsAfter()) {
++            if (!this.heightmaps.containsKey(types)) {
++                return false;
++            }
++        }
++        return true;
++    }
++    // ShreddedPaper end - skip unchanged chunk saves
++
+     // Paper start - starlight
+     private ProtoChunk loadStarlightLightData(final ServerLevel world, final ProtoChunk ret) {
+ 
+@@ -584,7 +_,7 @@
+             CompoundTag compoundTag1 = new CompoundTag(); final CompoundTag sectionNBT = compoundTag1; // Paper - starlight - OBFHELPER
+             LevelChunkSection levelChunkSection = sectionData.chunkSection;
+             if (levelChunkSection != null) {
+-                compoundTag1.store("block_states", codec, levelChunkSection.getStates());
++                compoundTag1.put("block_states", io.multipaper.shreddedpaper.util.FastPaletteCodec.writeBlockStates(levelChunkSection.getStates(), this.containerFactory.blockStatesStrategy())); // ShreddedPaper - write block states without the codec
+                 compoundTag1.store("biomes", codec1, levelChunkSection.getBiomes());
+             }
+ 

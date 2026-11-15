@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/level/levelgen/SurfaceSystem.java
++++ b/net/minecraft/world/level/levelgen/SurfaceSystem.java
+@@ -101,6 +_,7 @@
+         };
+         SurfaceRules.Context context1 = new SurfaceRules.Context(this, randomState, chunk, noiseChunk, biomeManager::getBiome, biomes, context);
+         SurfaceRules.SurfaceRule surfaceRule = ruleSource.apply(context1);
++        if (context1.fast) surfaceRule = SurfaceRuleCompiler.compile(surfaceRule); // Knowledge - surface rule speed-up
+         BlockPos.MutableBlockPos mutableBlockPos1 = new BlockPos.MutableBlockPos();
+ 
+         for (int i = 0; i < 16; i++) {
