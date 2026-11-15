@@ -16,3 +16,74 @@
          FluidState fluidState = blockState.getFluidState();
          FluidState fluidState1 = state.getFluidState();
          if (!blockState.isAir()) {
+@@ -181,6 +_,57 @@
+         return this.tickingFluidCount > 0;
+     }
+ 
++    // ShreddedPaper start - count with plain arrays
++    private static final ThreadLocal<int[]> RECALC_IDS = ThreadLocal.withInitial(() -> new int[16 * 16 * 16]);
++
++    // same counts as the map version; the ticking positions end up in position order instead of palette-map order
++    private void recalcBlockCountsSmallPalette(final Palette<BlockState> palette, final int paletteSize, final net.minecraft.util.BitStorage storage) {
++        final int[] ids = RECALC_IDS.get();
++        storage.unpack(ids);
++        final int[] counts = new int[256];
++        for (final int id : ids) {
++            ++counts[id];
++        }
++        boolean[] ticking = null;
++        int tickingTotal = 0;
++        for (int id = 0; id < 256; ++id) {
++            final int paletteCount = counts[id];
++            if (paletteCount == 0) {
++                continue;
++            }
++            final BlockState state = palette.valueFor(id);
++            if (state.isAir()) {
++                continue;
++            }
++            if (ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isSpecialCollidingBlock(state)) {
++                this.specialCollidingBlocks += (short)paletteCount;
++            }
++            this.nonEmptyBlockCount += (short)paletteCount;
++            if (state.isRandomlyTicking()) {
++                this.tickingBlockCount += (short)paletteCount;
++                if (ticking == null) {
++                    ticking = new boolean[256];
++                }
++                ticking[id] = true;
++                tickingTotal += paletteCount;
++            }
++            final FluidState fluid = state.getFluidState();
++            if (!fluid.isEmpty() && fluid.isRandomlyTicking()) {
++                this.tickingFluidCount += (short)paletteCount;
++            }
++        }
++        if (ticking != null) {
++            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++            tickingBlocks.setMinCapacity(tickingTotal);
++            for (int index = 0; index < ids.length; ++index) {
++                if (ticking[ids[index]]) {
++                    tickingBlocks.add((short)index);
++                }
++            }
++        }
++    }
++    // ShreddedPaper end - count with plain arrays
++
+     public void recalcBlockCounts() {
+         // Paper start - block counting
+         // reset, then recalculate
+@@ -196,6 +_,12 @@
+             final int paletteSize = palette.getSize();
+             final net.minecraft.util.BitStorage storage = data.storage();
+ 
++            // ShreddedPaper start - count with plain arrays and collect positions only for randomly ticking states
++            if (paletteSize > 1 && paletteSize <= 256 && storage.getSize() == 16 * 16 * 16) {
++                this.recalcBlockCountsSmallPalette(palette, paletteSize, storage);
++                return;
++            }
++            // ShreddedPaper end - count with plain arrays
+             final it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<it.unimi.dsi.fastutil.shorts.ShortArrayList> counts;
+             if (paletteSize == 1) {
+                 counts = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(1);

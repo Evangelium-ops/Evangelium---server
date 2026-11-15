@@ -8,7 +8,7 @@ public class ShreddedPaperPermissions {
     private static final String ROOT = "shreddedpaper";
 
     public static void registerCorePermissions() {
-        Permission parent = DefaultPermissions.registerPermission(ROOT, "Gives the user the ability to use all ShreddedPaper utilities and commands");
+        Permission parent = DefaultPermissions.registerPermission(ROOT, "Gives the user the ability to use all Evangelium server utilities and commands");
 
         DefaultPermissions.registerPermission(ROOT + ".maximumtrackerbypass", "Gives the user the ability to see all entities regardless of the maximum tracker config", PermissionDefault.OP, parent);
 

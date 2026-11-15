@@ -26,16 +26,16 @@
                  if (isLongTimeout) {
                      logger.log(Level.SEVERE, "------------------------------");
 -                    logger.log(Level.SEVERE, "The server has stopped responding! This is (probably) not a Purpur bug."); // Paper // Purpur - Rebrand
-+                    logger.log(Level.SEVERE, "The server has stopped responding! This is (probably) not a ShreddedPaper bug."); // Paper // Purpur - Rebrand // ShreddedPaper
++                    logger.log(Level.SEVERE, "The server has stopped responding! This is (probably) caused by a plugin."); // Paper // Purpur - Rebrand // ShreddedPaper
                      logger.log(Level.SEVERE, "If you see a plugin in the Server thread dump below, then please report it to that author");
                      logger.log(Level.SEVERE, "\t *Especially* if it looks like HTTP or MySQL operations are occurring");
                      logger.log(Level.SEVERE, "If you see a world save or edit, then it means you did far more than your server can handle at once");
                      logger.log(Level.SEVERE, "\t If this is the case, consider increasing timeout-time in spigot.yml but note that this will replace the crash with LARGE lag spikes");
 -                    logger.log(Level.SEVERE, "If you are unsure or still think this is a Purpur bug, please report this to https://github.com/PurpurMC/Purpur/issues"); // Purpur - Rebrand
-+                    logger.log(Level.SEVERE, "If you are unsure or still think this is a ShreddedPaper bug, please report this to https://github.com/MultiPaper/ShreddedPaper/issues"); // Purpur - Rebrand // ShreddedPaper
++                    logger.log(Level.SEVERE, "If you are unsure, send this log to support@evangelium.cc"); // Purpur - Rebrand // ShreddedPaper
                      logger.log(Level.SEVERE, "Be sure to include ALL relevant console errors and Minecraft crash reports");
 -                    logger.log(Level.SEVERE, "Purpur version: " + Bukkit.getServer().getVersion()); // Purpur - Rebrand
-+                    logger.log(Level.SEVERE, "ShreddedPaper version: " + Bukkit.getServer().getVersion()); // Purpur - Rebrand // ShreddedPaper
++                    logger.log(Level.SEVERE, "Evangelium server version: " + Bukkit.getServer().getVersion()); // Purpur - Rebrand // ShreddedPaper
  
                      if (net.minecraft.world.level.Level.lastPhysicsProblem != null) {
                          logger.log(Level.SEVERE, "------------------------------");
@@ -44,13 +44,13 @@
                      // Paper end
                  } else {
 -                    logger.log(Level.SEVERE, "--- DO NOT REPORT THIS TO PURPUR - THIS IS NOT A BUG OR A CRASH  - " + Bukkit.getServer().getVersion() + " ---"); // Purpur - Rebrand
-+                    logger.log(Level.SEVERE, "--- DO NOT REPORT THIS TO SHREDDEDPAPER - THIS IS NOT A BUG OR A CRASH  - " + Bukkit.getServer().getVersion() + " ---"); // Purpur - Rebrand // ShreddedPaper
++                    logger.log(Level.SEVERE, "--- THIS IS NOT A BUG OR A CRASH - " + Bukkit.getServer().getVersion() + " ---"); // Purpur - Rebrand // ShreddedPaper
                      logger.log(Level.SEVERE, "The server has not responded for " + (currentTime - lastTick) / 1000 + " seconds! Creating thread dump");
                  }
                  // Paper end - Different message for short timeout
                  logger.log(Level.SEVERE, "------------------------------");
 -                logger.log(Level.SEVERE, "Server thread dump (Look for plugins here before reporting to Purpur!):"); // Paper // Purpur - Rebrand
-+                logger.log(Level.SEVERE, "Server thread dump (Look for plugins here before reporting to ShreddedPaper!):"); // Paper // Purpur - Rebrand // ShreddedPaper
++                logger.log(Level.SEVERE, "Server thread dump (look for plugins here first):"); // Paper // Purpur - Rebrand // ShreddedPaper
                  FeatureHooks.dumpAllChunkLoadInfo(MinecraftServer.getServer(), isLongTimeout); // Paper - log detailed tick information
                  WatchdogThread.dumpThread(ManagementFactory.getThreadMXBean().getThreadInfo(MinecraftServer.getServer().serverThread.threadId(), Integer.MAX_VALUE), logger);
 +                // ShreddedPaper start - Dump stuck worker threads
@@ -66,7 +66,7 @@
                      }
                  } else {
 -                    logger.log(Level.SEVERE, "--- DO NOT REPORT THIS TO PURPUR - THIS IS NOT A BUG OR A CRASH ---"); // Purpur - Rebrand
-+                    logger.log(Level.SEVERE, "--- DO NOT REPORT THIS TO SHREDDEDPAPER - THIS IS NOT A BUG OR A CRASH ---"); // Purpur - Rebrand // ShreddedPaper
++                    logger.log(Level.SEVERE, "--- THIS IS NOT A BUG OR A CRASH ---"); // Purpur - Rebrand // ShreddedPaper
                  }
  
                  logger.log(Level.SEVERE, "------------------------------");
@@ -78,7 +78,7 @@
 +    private List<ThreadInfo> getStuckTickWorkerThreads() {
 +        ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads( true, true );
 +        return Arrays.stream(threads)
-+                .filter(thread -> thread.getThreadName().startsWith("ShreddedPaperTickThread"))
++                .filter(thread -> thread.getThreadName().startsWith("EvangeliumTickThread"))
 +                .filter(thread -> Arrays.stream(thread.getStackTrace()).anyMatch(stack -> !stack.getClassName().startsWith("java") && !stack.getClassName().startsWith("jdk")))
 +                .toList();
 +    }

@@ -10,7 +10,7 @@ public class ShreddedPaperCommandPermissions {
     private static final String PREFIX = ROOT + ".";
 
     public static void registerPermissions(@NotNull Permission parent) {
-        Permission commands = DefaultPermissions.registerPermission(ROOT, "Gives the user the ability to use all ShreddedPaper commands", parent);
+        Permission commands = DefaultPermissions.registerPermission(ROOT, "Gives the user the ability to use all Evangelium server commands", parent);
 
         DefaultPermissions.registerPermission(PREFIX + "mpmap", "MPMap command", PermissionDefault.TRUE, commands);
         DefaultPermissions.registerPermission(PREFIX + "regions", "Regions command (laggy regions)", PermissionDefault.OP, commands); // Knowledge
