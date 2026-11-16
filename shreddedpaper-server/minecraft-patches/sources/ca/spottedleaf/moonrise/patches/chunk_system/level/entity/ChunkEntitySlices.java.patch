@@ -9,11 +9,12 @@
          this.hardCollidingEntities = new EntityCollectionBySection(this);
          this.entitiesByClass = new Reference2ObjectOpenHashMap<>();
          this.entitiesByType = new Reference2ObjectOpenHashMap<>();
-@@ -398,6 +_,18 @@
+@@ -398,6 +_,19 @@
          }
      }
  
 +    // Knowledge start - packed hitboxes (minX, minY, minZ, maxX, maxY, maxZ per slot) beside the entities of a section list
++    private static final boolean PACKED_BOXES = io.multipaper.shreddedpaper.util.DevSwitch.on("packed-entity-boxes");
 +    private static final boolean VERIFY_BOXES = Boolean.getBoolean("shreddedpaper.verifyPackedBoxes"); // test runs: every skip and hit is re-checked
 +
 +    public static void writeBox(final double[] boxes, final int index, final net.minecraft.world.phys.AABB bb) {
@@ -172,7 +173,7 @@
              final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
  
              final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
-+            final boolean packed = this.packed && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.packedEntityBoxes; // Knowledge
++            final boolean packed = this.packed && PACKED_BOXES; // Knowledge
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
@@ -207,7 +208,7 @@
              final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
  
              final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
-+            final boolean packed = this.packed && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.packedEntityBoxes; // Knowledge
++            final boolean packed = this.packed && PACKED_BOXES; // Knowledge
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];

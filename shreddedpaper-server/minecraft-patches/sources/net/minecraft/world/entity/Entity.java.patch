@@ -40,7 +40,7 @@
      public float maxUpStep; // Purpur - Add option to set armorstand step height
      public boolean noPhysics;
      public final RandomSource random; // Paper - Share random for entities to make them more random // Add toggle for RNG manipulation
-@@ -330,6 +_,137 @@
+@@ -330,6 +_,138 @@
      public boolean wasInPowderSnow;
      public Optional<BlockPos> mainSupportingBlockPos = Optional.empty();
      private boolean onGroundNoBlocks = false;
@@ -56,6 +56,7 @@
 +    private @Nullable AABB knowledge$restSupportBox;
 +    private @Nullable Optional<BlockPos> knowledge$restSupport;
 +    private boolean knowledge$restAir, knowledge$restNoFluid;
++    private static final boolean KNOWLEDGE_RESTING_CACHE = io.multipaper.shreddedpaper.util.DevSwitch.on("resting-entity-cache");
 +    private static final boolean KNOWLEDGE_VERIFY_REST = Boolean.getBoolean("shreddedpaper.verifyRestCache"); // tests: recompute every cached answer and throw on a difference
 +
 +    private void knowledge$verifyRest(String what, Object cached, Object fresh) {
@@ -81,7 +82,7 @@
 +    private void knowledge$takeRest(final double moveY) {
 +        this.knowledge$restSections = null;
 +        if (!(this instanceof LivingEntity) || this instanceof net.minecraft.world.entity.player.Player
-+            || !io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.restingEntityCache) return;
++            || !KNOWLEDGE_RESTING_CACHE) return;
 +        if (moveY < -1.0) return; // Knowledge - the scan and the sections below cover a cut-down box at most a block deep
 +        final AABB box = this.getBoundingBox();
 +        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();

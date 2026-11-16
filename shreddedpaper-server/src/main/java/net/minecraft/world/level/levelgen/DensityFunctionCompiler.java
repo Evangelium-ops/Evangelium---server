@@ -37,7 +37,7 @@ import org.slf4j.Logger;
  */
 public final class DensityFunctionCompiler {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String PROPERTY = System.getProperty("shreddedpaper.densityFunctionCompiler");
+    private static final boolean ON = io.multipaper.shreddedpaper.util.DevSwitch.on("density-function-compiler");
     private static final int MAX_NODES = 4000;
     private static final int MAX_TEMPLATES = 20000;
     private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
@@ -62,7 +62,7 @@ public final class DensityFunctionCompiler {
     private DensityFunctionCompiler() {
     }
 
-    /** test hook: when set, wins over the property and the config */
+    /** test hook: when set, wins over DevSwitch */
     static volatile Boolean forced;
 
     public static boolean enabled() {
@@ -70,11 +70,7 @@ public final class DensityFunctionCompiler {
         if (forced != null) {
             return forced;
         }
-        if (PROPERTY != null) {
-            return Boolean.parseBoolean(PROPERTY);
-        }
-        io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.densityFunctionCompiler;
+        return ON && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
     }
 
     /** every function of a NoiseChunk-wrapped router compiled (the caller decides whether the compiler is on) */

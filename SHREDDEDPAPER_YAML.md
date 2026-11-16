@@ -51,17 +51,6 @@ optimizations:
   # impact on performance.
   disable-locator-bar: true
   
-  # Don't wake up the event loop thread when not flushing packets. Set to
-  # 'true' to increase performance. 
-  use-lazy-execute-when-not-flushing: true
-
-  # Flush the players' connection queues in parallel. Set to 'true' to increase
-  # performance.
-  flush-queue-in-parallel: true
-  
-  # Process the track queue in parallel. Set to 'true' to increase performance.
-  process-track-queue-in-parallel: true
-  
   # Maximum number of players to render each entity to. Can be bypassed with the
   # permission 'shreddedpaper.maximumtrackerbypass'
   maximum-trackers-per-entity: 500
@@ -75,10 +64,8 @@ optimizations:
 
   # Cache full chunk packets so that we aren't recreating them every time the
   # same chunk is sent to a new player. Useful when lots of players are in the
-  # same area.
+  # same area. Always on.
   chunk-packet-caching:
-    enabled: true
-    
     # How long to keep the cached packets in ticks. Cached packets automatically
     # expire if the chunk is modified.
     expire-after: 1200

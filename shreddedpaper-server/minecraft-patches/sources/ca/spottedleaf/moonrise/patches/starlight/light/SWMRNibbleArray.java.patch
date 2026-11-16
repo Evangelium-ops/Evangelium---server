@@ -1,18 +1,14 @@
 --- a/ca/spottedleaf/moonrise/patches/starlight/light/SWMRNibbleArray.java
 +++ b/ca/spottedleaf/moonrise/patches/starlight/light/SWMRNibbleArray.java
-@@ -52,6 +_,18 @@
+@@ -52,6 +_,14 @@
          }
      }
  
 +    // ShreddedPaper start - report a change only when the visible light really changed
-+    private static final String UNCHANGED_LIGHT_PROPERTY = System.getProperty("shreddedpaper.skipUnchangedLightUpdates");
++    private static final boolean SKIP_UNCHANGED_LIGHT = io.multipaper.shreddedpaper.util.DevSwitch.on("skip-unchanged-light-updates");
 +
 +    public static boolean onlyReportRealChanges() {
-+        if (UNCHANGED_LIGHT_PROPERTY != null) {
-+            return Boolean.parseBoolean(UNCHANGED_LIGHT_PROPERTY);
-+        }
-+        io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
-+        return config != null && config.optimizations.skipUnchangedLightUpdates;
++        return SKIP_UNCHANGED_LIGHT && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
 +    }
 +    // ShreddedPaper end - report a change only when the visible light really changed
 +

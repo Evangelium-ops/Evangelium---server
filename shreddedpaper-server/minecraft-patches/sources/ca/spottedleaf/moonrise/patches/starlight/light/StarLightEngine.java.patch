@@ -1,6 +1,6 @@
 --- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
 +++ b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
-@@ -276,12 +_,39 @@
+@@ -276,12 +_,35 @@
              final int chunkZ = ((index / 5) % 5) - this.chunkOffsetZ;
              final int ySections = this.maxSection - this.minSection + 1;
              final int chunkY = ((index / (5*5)) % (ySections + 2 + 2)) - this.chunkOffsetY;
@@ -12,14 +12,10 @@
      }
  
 +    // ShreddedPaper start - edge checks ignore corners next to unloaded chunks
-+    private static final String IGNORE_UNLOADED_PROPERTY = System.getProperty("shreddedpaper.lightEdgeChecksIgnoreUnloaded");
++    private static final boolean IGNORE_UNLOADED = io.multipaper.shreddedpaper.util.DevSwitch.on("light-edge-checks-ignore-unloaded");
 +
 +    private static boolean ignoreUnloadedCorners() {
-+        if (IGNORE_UNLOADED_PROPERTY != null) {
-+            return Boolean.parseBoolean(IGNORE_UNLOADED_PROPERTY);
-+        }
-+        final io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
-+        return config != null && config.optimizations.lightEdgeChecksIgnoreUnloaded;
++        return IGNORE_UNLOADED && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
 +    }
 +    // ShreddedPaper end - edge checks ignore corners next to unloaded chunks
 +

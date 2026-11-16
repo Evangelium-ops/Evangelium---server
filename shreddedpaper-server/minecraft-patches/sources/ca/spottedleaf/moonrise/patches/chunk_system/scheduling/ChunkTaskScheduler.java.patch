@@ -20,18 +20,15 @@
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue parallelGenExecutor;
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue loadExecutor;
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue ioExecutor;
-@@ -273,6 +_,17 @@
+@@ -273,6 +_,14 @@
          this.shutdown = shutdown;
      }
  
 +    // Knowledge start - radius queue switch
++    private static final boolean RADIUS_QUEUE_OVERLAP_ONLY = io.multipaper.shreddedpaper.util.DevSwitch.on("radius-queue-overlap-only");
++
 +    private static boolean radiusQueueOverlapOnly() {
-+        final String property = System.getProperty("shreddedpaper.radiusQueueOverlapOnly");
-+        if (property != null) {
-+            return Boolean.parseBoolean(property);
-+        }
-+        final io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
-+        return config == null || config.optimizations.radiusQueueOverlapOnly;
++        return RADIUS_QUEUE_OVERLAP_ONLY;
 +    }
 +    // Knowledge end - radius queue switch
 +

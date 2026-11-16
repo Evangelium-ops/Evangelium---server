@@ -1,5 +1,14 @@
 --- a/net/minecraft/server/level/ServerEntity.java
 +++ b/net/minecraft/server/level/ServerEntity.java
+@@ -49,6 +_,8 @@
+ 
+ public class ServerEntity {
+     private static final Logger LOGGER = LogUtils.getLogger();
++    private static final boolean KNOWLEDGE_SKIP_WATCHED_PLAYER_MOTION = io.multipaper.shreddedpaper.util.DevSwitch.on("skip-watched-player-motion"); // Knowledge
++    private static final boolean KNOWLEDGE_SKIP_WATCHED_PLAYER_OWN_ATTRIBUTES = io.multipaper.shreddedpaper.util.DevSwitch.on("skip-watched-player-own-attributes"); // Knowledge
+     private static final int TOLERANCE_LEVEL_ROTATION = 1;
+     private static final double TOLERANCE_LEVEL_POSITION = 7.6293945E-6F;
+     public static final int FORCED_POS_UPDATE_PERIOD = 60;
 @@ -122,6 +_,7 @@
                  MapId mapId = itemFrame.cachedMapId; // Paper - Perf: Cache map ids on item frames
                  MapItemSavedData savedData = MapItem.getSavedData(mapId, this.level);
@@ -21,7 +30,7 @@
                                      )
                                  );
 -                        } else {
-+                        } else if (!(io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.skipWatchedPlayerMotion && this.entity instanceof ServerPlayer watched && !watched.isFallFlying())) { // Knowledge - watchers move other players only from position packets; knockback (hurtMarked) and elytra motion are still sent
++                        } else if (!(KNOWLEDGE_SKIP_WATCHED_PLAYER_MOTION && this.entity instanceof ServerPlayer watched && !watched.isFallFlying())) { // Knowledge - watchers move other players only from position packets; knockback (hurtMarked) and elytra motion are still sent
                              this.synchronizer.sendToTrackingPlayers(new ClientboundSetEntityMotionPacket(this.entity.getId(), this.lastSentMovement));
                          }
                      }
@@ -39,7 +48,7 @@
                  }
                  // CraftBukkit end
 +                // Knowledge start - speeds, reach and mining attributes only matter to the player's own client; watchers get the rest
-+                if (io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.skipWatchedPlayerOwnAttributes && this.entity instanceof ServerPlayer self) {
++                if (KNOWLEDGE_SKIP_WATCHED_PLAYER_OWN_ATTRIBUTES && this.entity instanceof ServerPlayer self) {
 +                    self.connection.send(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributesToSync));
 +                    List<AttributeInstance> shown = null;
 +                    for (AttributeInstance instance : attributesToSync) {

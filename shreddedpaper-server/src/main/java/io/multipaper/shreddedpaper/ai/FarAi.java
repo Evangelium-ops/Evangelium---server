@@ -38,7 +38,7 @@ public final class FarAi {
     /** Ticks between this mob's goal and target thinking: 1 = every tick (vanilla). */
     public static int interval(Mob mob) {
         ShreddedPaperConfiguration.AiEngine c = ShreddedPaperConfiguration.get().aiEngine;
-        if (!c.enabled || !c.farAiEnabled || exempt(mob)) {
+        if (!AiDiagnostics.engineOn() || !c.farAiEnabled || exempt(mob)) {
             return 1;
         }
         // the nearest player is looked up once a second per mob, staggered by id so not every mob does it in the same tick

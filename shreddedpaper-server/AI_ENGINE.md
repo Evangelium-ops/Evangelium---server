@@ -4,17 +4,12 @@ The `ai-engine` section of `shreddedpaper.yml` uses the existing configuration l
 
 ```yaml
 ai-engine:
-  enabled: true
-  goal-optimization: true
-  spatial-optimization: true
-  navigation-optimization: true
-  brain-optimization: true
   villager-decision-interval: 1
   profiling-enabled: false
   profiling-interval-ticks: 20
 ```
 
-Each flag covers:
+The optimizations below are always on:
 
 - `goal-optimization`: locked-flag cleanup without iterators; a search of `RemoveBlockGoal`
   (zombies and turtle eggs) keeps the chunk it is in instead of looking it up per block.
@@ -29,8 +24,7 @@ Each flag covers:
 
 The Brain ordering fix (sensors after memory expiry) is a correctness fix and has no flag.
 
-Only implemented optimizations have flags. Master disable selects original implementations;
-missing configuration during startup also selects original implementations. Specialized AI,
+Missing configuration during startup selects original implementations. Specialized AI,
 Brain, sensors, physics and activation timing retain existing lifecycle behavior. There is
 no asynchronous navigation; the one scheduler is the optional villager decision interval below.
 

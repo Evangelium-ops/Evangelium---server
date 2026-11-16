@@ -28,6 +28,8 @@ import java.util.concurrent.CompletableFuture;
 public class ShreddedPaperChunkTicker {
 
     private static final Logger LOGGER = LogUtils.getClassLogger();
+    static final boolean PROCESS_TRACK_QUEUE_IN_PARALLEL = io.multipaper.shreddedpaper.util.DevSwitch.on("process-track-queue-in-parallel");
+    public static final boolean FLUSH_QUEUE_IN_PARALLEL = io.multipaper.shreddedpaper.util.DevSwitch.on("flush-queue-in-parallel"); // also read by Connection
 
     private static final ThreadLocal<LevelChunkRegion> currentlyTickingRegion = new ThreadLocal<>();
 
@@ -54,9 +56,9 @@ public class ShreddedPaperChunkTicker {
             future = future.thenRun(() -> { TickTimings.add(TickTimings.Phase.REGIONS_WALL, System.nanoTime() - regionsStart); TickTimings.regionsDone(); });
         }
 
-        if (ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) future = future.thenCompose(v -> timed(TickTimings.Phase.TRACK, () -> this.processTrackQueueInParallel(level)));
+        if (PROCESS_TRACK_QUEUE_IN_PARALLEL) future = future.thenCompose(v -> timed(TickTimings.Phase.TRACK, () -> this.processTrackQueueInParallel(level)));
 
-        if (ShreddedPaperConfiguration.get().optimizations.flushQueueInParallel) future = future.thenCompose(v -> timed(TickTimings.Phase.FLUSH, () -> this.flushQueueInParallel(level)));
+        if (FLUSH_QUEUE_IN_PARALLEL) future = future.thenCompose(v -> timed(TickTimings.Phase.FLUSH, () -> this.flushQueueInParallel(level)));
 
         return future;
     }
@@ -263,7 +265,7 @@ public class ShreddedPaperChunkTicker {
 
             RegionBudget.sliced(RegionBudget.Work.ENTITIES, System.nanoTime() - entitiesStart);
 
-            if (!ShreddedPaperConfiguration.get().optimizations.processTrackQueueInParallel) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
+            if (!PROCESS_TRACK_QUEUE_IN_PARALLEL) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
 
             final long blockEntitiesStart = System.nanoTime();
             level.tickBlockEntities(region.tickingBlockEntities, region.pendingBlockEntityTickers);

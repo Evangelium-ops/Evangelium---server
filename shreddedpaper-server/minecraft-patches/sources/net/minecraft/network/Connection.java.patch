@@ -77,13 +77,20 @@
          if (!connected && !this.preparing) {
              return;
          }
-@@ -448,6 +_,15 @@
+@@ -443,11 +_,22 @@
+         }
+     }
+ 
++    private static final boolean USE_LAZY_EXECUTE_WHEN_NOT_FLUSHING = io.multipaper.shreddedpaper.util.DevSwitch.on("use-lazy-execute-when-not-flushing"); // ShreddedPaper
++
+     private void sendPacket(Packet<?> packet, @Nullable ChannelFutureListener sendListener, boolean flush) {
+         this.sentPackets++;
          if (this.channel.eventLoop().inEventLoop()) {
              this.doSendPacket(packet, sendListener, flush);
          } else {
 +            // ShreddedPaper start - Use lazyExecute if we aren't flushing
 +            // Knowledge: ProtocolLib wraps the event loop in its own proxy, which is no AbstractEventExecutor; it takes the normal path below
-+            if (ShreddedPaperConfiguration.get().optimizations.useLazyExecuteWhenNotFlushing && !flush && this.channel.eventLoop() instanceof AbstractEventExecutor lazy) {
++            if (USE_LAZY_EXECUTE_WHEN_NOT_FLUSHING && !flush && this.channel.eventLoop() instanceof AbstractEventExecutor lazy) {
 +                lazy.lazyExecute(() -> {
 +                    this.doSendPacket(packet, sendListener, flush);
 +                });
@@ -136,7 +143,7 @@
      public void tick() {
 -        this.flushQueue();
 +        if (this.packetListener instanceof ServerGamePacketListenerImpl serverGamePacketListener && !TickThread.isTickThreadFor(serverGamePacketListener.player)) return; // ShreddedPaper
-+        if (!ShreddedPaperConfiguration.get().optimizations.flushQueueInParallel) this.flushQueue(); // ShreddedPaper - Add option to flush queue in parallel
++        if (!io.multipaper.shreddedpaper.threading.ShreddedPaperChunkTicker.FLUSH_QUEUE_IN_PARALLEL) this.flushQueue(); // ShreddedPaper - Add option to flush queue in parallel
          // Paper start - Buffer joins to world
          if (Connection.currTick != net.minecraft.server.MinecraftServer.currentTick) {
              Connection.currTick = net.minecraft.server.MinecraftServer.currentTick;
