@@ -20,7 +20,35 @@
  
  public final class ChunkHolderManager {
  
-@@ -77,7 +_,7 @@
+@@ -71,13 +_,35 @@
+     public static final int MAX_TICKET_LEVEL = ChunkLevel.MAX_LEVEL; // inclusive
+ 
+     public static final TicketType UNLOAD_COOLDOWN = ChunkSystemTicketType.create("chunk_system:unload_cooldown", null, 5L * 20L);
++    // Knowledge start - generation unload grace (timeout fixed at first use, from the config or -D; off by default)
++    private static final String GRACE_PROPERTY = System.getProperty("shreddedpaper.generationUnloadGraceTicks");
++    private static volatile TicketType generationGrace;
++    private static volatile boolean generationGraceOff;
++
++    private static TicketType generationGraceTicket() {
++        final TicketType ret = generationGrace;
++        if (ret != null || generationGraceOff) {
++            return ret;
++        }
++        final ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
++        if (GRACE_PROPERTY == null && config == null) {
++            return null; // config not loaded yet: decide later
++        }
++        final int ticks = GRACE_PROPERTY != null ? Integer.parseInt(GRACE_PROPERTY) : config.optimizations.generationUnloadGraceTicks;
++        if (ticks <= 0) {
++            generationGraceOff = true;
++            return null;
++        }
++        return generationGrace = ChunkSystemTicketType.create("knowledge:generation_unload_grace", null, ticks);
++    }
++    // Knowledge end - generation unload grace
+ 
+     private static final long NO_TIMEOUT_MARKER = Long.MIN_VALUE;
+     public final ReentrantAreaLock ticketLockArea;
  
      private final ConcurrentLong2ReferenceChainedHashTable<TicketSet> tickets = new ConcurrentLong2ReferenceChainedHashTable<>();
      private final ConcurrentLong2ReferenceChainedHashTable<Long2IntOpenHashMap> sectionToChunkToExpireCount = new ConcurrentLong2ReferenceChainedHashTable<>();
@@ -343,6 +371,31 @@
  
                      // run stage 1
                      for (int i = 0, len = stage1.size(); i < len; ++i) {
+@@ -1243,6 +_,24 @@
+                             LOGGER.error("Chunkholder " + chunkHolder + " is not safe to unload but is inside the unload queue?");
+                             continue;
+                         }
++                        // Knowledge start - generation unload grace (off by default): a half generated chunk stays a while (once per
++                        // status) so neighbours asked for soon after reuse it instead of saving + reloading it
++                        final ChunkStatus genStatus = chunkHolder.getCurrentGenStatus();
++                        final boolean halfGenerated = genStatus != null && genStatus != ChunkStatus.FULL && genStatus.isOrAfter(ChunkStatus.STRUCTURE_STARTS);
++                        if (halfGenerated && chunkHolder.unloadGraceStatus != genStatus) {
++                            final TicketType grace = generationGraceTicket();
++                            if (grace != null) {
++                                chunkHolder.unloadGraceStatus = genStatus;
++                                // same as the unload cooldown in stage 3: both locks for this section are held
++                                this.addTicketAtLevel(grace, CoordinateUtils.getChunkKey(chunkHolder.chunkX, chunkHolder.chunkZ), MAX_TICKET_LEVEL, null, false);
++                                if (io.multipaper.shreddedpaper.util.GenStats.ENABLED) io.multipaper.shreddedpaper.util.GenStats.GRACES.incrementAndGet();
++                                continue;
++                            }
++                        }
++                        if (halfGenerated && io.multipaper.shreddedpaper.util.GenStats.ENABLED) {
++                            io.multipaper.shreddedpaper.util.GenStats.PROTO_UNLOADS.incrementAndGet(); // Knowledge - generation counters
++                        }
++                        // Knowledge end - generation unload grace
+                         final NewChunkHolder.UnloadState state = chunkHolder.unloadStage1();
+                         if (state == null) {
+                             // can unload immediately
 @@ -1298,10 +_,12 @@
  
              processedCount += stage1.size();

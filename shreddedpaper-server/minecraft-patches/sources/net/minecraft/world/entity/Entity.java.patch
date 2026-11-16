@@ -40,7 +40,7 @@
      public float maxUpStep; // Purpur - Add option to set armorstand step height
      public boolean noPhysics;
      public final RandomSource random; // Paper - Share random for entities to make them more random // Add toggle for RNG manipulation
-@@ -330,6 +_,102 @@
+@@ -330,6 +_,137 @@
      public boolean wasInPowderSnow;
      public Optional<BlockPos> mainSupportingBlockPos = Optional.empty();
      private boolean onGroundNoBlocks = false;
@@ -78,10 +78,11 @@
 +    }
 +
 +    /** Take the area around a mob that just came to rest: the sections within 2 blocks of its box, plus the answers that only depend on them. */
-+    private void knowledge$takeRest() {
++    private void knowledge$takeRest(final double moveY) {
 +        this.knowledge$restSections = null;
 +        if (!(this instanceof LivingEntity) || this instanceof net.minecraft.world.entity.player.Player
 +            || !io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get().optimizations.restingEntityCache) return;
++        if (moveY < -1.0) return; // Knowledge - the scan and the sections below cover a cut-down box at most a block deep
 +        final AABB box = this.getBoundingBox();
 +        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();
 +        final int sx0 = Mth.floor(box.minX - 2.0) >> 4, sx1 = Mth.floor(box.maxX + 2.0) >> 4;
@@ -108,9 +109,14 @@
 +        boolean air = true, noFluid = true;
 +        final AABB inside = this.makeBoundingBox(this.position()).deflate(1.0E-5F);
 +        final AABB fluidBox = box.deflate(1.0E-3);
-+        for (int x = Mth.floor(box.minX) - 2; x <= Mth.floor(box.maxX) + 2; x++) {
-+            for (int y = Mth.floor(box.minY) - 2; y <= Mth.floor(box.maxY) + 2; y++) {
-+                for (int z = Mth.floor(box.minZ) - 2; z <= Mth.floor(box.maxZ) + 2; z++) {
++        // Knowledge - only the cells the cached answers read (collision scan of the box cut down by moveY, supporting block, inside
++        // and fluid boxes), each range taken a little wider than its reader's: about a third of the old +-2 block cube
++        final int cx0 = Mth.floor(box.minX - 1.0E-6) - 1, cx1 = Mth.floor(box.maxX + 1.0E-6) + 1;
++        final int cz0 = Mth.floor(box.minZ - 1.0E-6) - 1, cz1 = Mth.floor(box.maxZ + 1.0E-6) + 1;
++        final int cy0 = Mth.floor(box.minY + Math.min(moveY, 0.0) - 1.0E-5) - 1, cy1 = Math.max(Mth.floor(box.maxY + 1.0E-6), Mth.floor(box.minY + 1.0E-6) + 1);
++        for (int x = cx0; x <= cx1; x++) {
++            for (int y = cy0; y <= cy1; y++) {
++                for (int z = cz0; z <= cz1; z++) {
 +                    final BlockState state = this.level.getBlockState(pos.set(x, y, z));
 +                    if (!state.isAir()) {
 +                        if (state.getBlock().hasDynamicShape()) return;
@@ -138,6 +144,35 @@
 +        this.knowledge$restAir = air;
 +        this.knowledge$restNoFluid = noFluid;
 +        this.knowledge$restSections = sections;
++    }
++    // Knowledge end
++    // Knowledge start - tickThreadCheckMemo: a region check that passed for the same chunk position (or supporting block) object on the
++    // same thread in the same tick passes again: the region lock is held for the whole region tick and the object did not change
++    private @Nullable Object knowledge$ownChecked, knowledge$supportCheckedFor;
++    private int knowledge$ownCheckedTick = Integer.MIN_VALUE, knowledge$supportCheckedTick = Integer.MIN_VALUE;
++    private @Nullable Thread knowledge$ownCheckedThread, knowledge$supportCheckedThread;
++
++    private boolean knowledge$ownRegionChecked() {
++        return this.knowledge$ownChecked == this.chunkPosition && this.knowledge$ownCheckedTick == net.minecraft.server.MinecraftServer.currentTick
++            && this.knowledge$ownCheckedThread == Thread.currentThread() && PhysicsOptimizations.tickThreadCheckMemo();
++    }
++
++    private void knowledge$ownRegionPassed() {
++        this.knowledge$ownChecked = this.chunkPosition;
++        this.knowledge$ownCheckedTick = net.minecraft.server.MinecraftServer.currentTick;
++        this.knowledge$ownCheckedThread = Thread.currentThread();
++    }
++
++    private boolean knowledge$supportChecked() {
++        return this.knowledge$supportCheckedFor == this.mainSupportingBlockPos && this.knowledge$supportCheckedTick == net.minecraft.server.MinecraftServer.currentTick
++            && this.knowledge$supportCheckedThread == Thread.currentThread() && PhysicsOptimizations.tickThreadCheckMemo();
++    }
++
++    private boolean knowledge$supportPassed() {
++        this.knowledge$supportCheckedFor = this.mainSupportingBlockPos;
++        this.knowledge$supportCheckedTick = net.minecraft.server.MinecraftServer.currentTick;
++        this.knowledge$supportCheckedThread = Thread.currentThread();
++        return true;
 +    }
 +    // Knowledge end
      private float crystalSoundIntensity;
@@ -186,24 +221,81 @@
              if (optional.isPresent() || this.onGroundNoBlocks) {
                  this.mainSupportingBlockPos = optional;
              } else if (movement != null) {
-@@ -1148,7 +_,10 @@
+@@ -1148,8 +_,12 @@
      public void move(MoverType type, Vec3 movement) {
          final Vec3 originalMovement = movement; // Paper - Expose pre-collision velocity
          // Paper start - detailed watchdog information
 -        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread("Cannot move an entity off-main");
-+        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this, "Cannot move an entity off-main"); // ShreddedPaper
+-        synchronized (this.posLock) {
++        if (!this.knowledge$ownRegionChecked()) { ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this, "Cannot move an entity off-main"); this.knowledge$ownRegionPassed(); } // ShreddedPaper // Knowledge - memo
 +        BlockPos newPos = new BlockPos((int) (this.getX() + movement.x), (int) (this.getY() + movement.y), (int) (this.getZ() + movement.z)); // ShreddedPaper - check destination region
 +        if ((newPos.getX() >> 4) != this.chunkPosition.x || (newPos.getZ() >> 4) != this.chunkPosition.z) // Knowledge - same chunk: the check above already passed for it
 +        TickThread.ensureTickThread((ServerLevel) this.level, newPos, "Cannot move an entity into off-main"); // ShreddedPaper - check destination region
-         synchronized (this.posLock) {
++        final boolean knowledgeNoLock = PhysicsOptimizations.noPosLock(); // Knowledge - nothing reads these watchdog fields in this fork
++        if (!knowledgeNoLock) synchronized (this.posLock) {
              this.moveStartX = this.getX();
              this.moveStartY = this.getY();
-@@ -1476,7 +_,7 @@
+             this.moveStartZ = this.getZ();
+@@ -1286,7 +_,7 @@
+         }
+         // Paper start - detailed watchdog information
+         } finally {
+-            synchronized (this.posLock) { // Paper
++            if (!knowledgeNoLock) synchronized (this.posLock) { // Paper // Knowledge
+                 this.moveVector = null;
+             } // Paper
+         }
+@@ -1381,6 +_,10 @@
+             int remainingFireTicks = this.getRemainingFireTicks();
+             this.checkInsideBlocks(movements, this.insideEffectCollector);
+             this.insideEffectCollector.applyAndClear(this);
++            if (this.knowledge$expectWater) { // Knowledge - verifyPhysics: the skipped water effects changed nothing
++                this.knowledge$expectWater = false;
++                PhysicsOptimizations.check(this.remainingFireTicks == this.knowledge$waterFireBefore, "water block walk fire " + this.knowledge$waterFireBefore + " -> " + this.remainingFireTicks, this);
++            }
+             if (this.isInRain()) {
+                 this.clearFire();
+             }
+@@ -1475,8 +_,41 @@
+         return this.getOnPos(1.0E-5F);
      }
  
++    // Knowledge start - onPosMemo: getOnPos(0.2) / getOnPos(0.500001) asked 4-5 times per tick with the same supporting block; the answer
++    // depends on that block's state (block change epoch of this tick thread), the Optional object, position.y and the offset
++    private @Nullable PhysicsCache knowledge$onPosCache;
++    private int knowledge$onPosEpoch;
++    private @Nullable Optional<BlockPos> knowledge$onPosSupport;
++    private double knowledge$onPosY;
++    private float knowledge$onPosOffset0, knowledge$onPosOffset1;
++    private @Nullable BlockPos knowledge$onPos0, knowledge$onPos1;
++
      protected BlockPos getOnPos(float yOffset) {
 -        if (this.mainSupportingBlockPos.isPresent() && this.level().getChunkIfLoadedImmediately(this.mainSupportingBlockPos.get()) != null) { // Paper - ensure no loads
-+        if (this.mainSupportingBlockPos.isPresent() && this.level().getChunkIfLoadedImmediately(this.mainSupportingBlockPos.get()) != null && TickThread.isTickThreadFor((ServerLevel) this.level(), this.mainSupportingBlockPos.get())) { // Paper - ensure no loads // ShreddedPaper - ensure same region
++        if (yOffset > 1.0E-5F && this.mainSupportingBlockPos.isPresent() && PhysicsOptimizations.onPosMemo()) {
++            final PhysicsCache cache = PhysicsCache.tickCache();
++            if (cache != null) {
++                if (this.knowledge$onPosCache != cache || this.knowledge$onPosEpoch != cache.epoch() || this.knowledge$onPosSupport != this.mainSupportingBlockPos || this.knowledge$onPosY != this.position.y) {
++                    this.knowledge$onPosCache = cache; this.knowledge$onPosEpoch = cache.epoch(); this.knowledge$onPosSupport = this.mainSupportingBlockPos; this.knowledge$onPosY = this.position.y;
++                    this.knowledge$onPos0 = null; this.knowledge$onPos1 = null;
++                }
++                BlockPos memo = this.knowledge$onPos0 != null && this.knowledge$onPosOffset0 == yOffset ? this.knowledge$onPos0
++                    : this.knowledge$onPos1 != null && this.knowledge$onPosOffset1 == yOffset ? this.knowledge$onPos1 : null;
++                if (memo != null) {
++                    if (PhysicsOptimizations.VERIFY) PhysicsOptimizations.check(memo.equals(this.knowledge$getOnPos(yOffset)), "onPos memo " + memo, this);
++                    return memo;
++                }
++                memo = this.knowledge$getOnPos(yOffset);
++                if (this.knowledge$onPos0 == null) { this.knowledge$onPos0 = memo; this.knowledge$onPosOffset0 = yOffset; }
++                else { this.knowledge$onPos1 = memo; this.knowledge$onPosOffset1 = yOffset; }
++                return memo;
++            }
++        }
++        return this.knowledge$getOnPos(yOffset);
++    }
++    // Knowledge end
++
++    private BlockPos knowledge$getOnPos(float yOffset) { // Knowledge - the original getOnPos
++        if (this.mainSupportingBlockPos.isPresent() && (this.knowledge$supportChecked() || this.level().getChunkIfLoadedImmediately(this.mainSupportingBlockPos.get()) != null && TickThread.isTickThreadFor((ServerLevel) this.level(), this.mainSupportingBlockPos.get()) && this.knowledge$supportPassed())) { // Paper - ensure no loads // ShreddedPaper - ensure same region // Knowledge - memo
              BlockPos blockPos = this.mainSupportingBlockPos.get();
              if (!(yOffset > 1.0E-5F)) {
                  return blockPos;
@@ -228,7 +320,7 @@
 +        // Knowledge start - came to rest: take the area and remember this answer
 +        if (restHit) this.knowledge$verifyRest("collide", this.knowledge$restMoveOut, collided);
 +        if (restCandidate && collided.y == 0.0) {
-+            if (!this.knowledge$restValid()) this.knowledge$takeRest();
++            if (!this.knowledge$restValid()) this.knowledge$takeRest(movement.y);
 +            if (this.knowledge$restSections != null) {
 +                this.knowledge$restMoveIn = movement;
 +                this.knowledge$restMoveOut = collided;
@@ -238,46 +330,95 @@
  
          final boolean collidedX = collided.x != movement.x;
          final boolean collidedY = collided.y != movement.y;
-@@ -1711,6 +_,7 @@
+@@ -1711,6 +_,24 @@
      }
  
      private void checkInsideBlocks(List<Entity.Movement> movements, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector) {
-+        if (this instanceof net.minecraft.world.entity.item.FallingBlockEntity && this.onlyAirAlong(movements)) return; // Fork
++        // Fork - falling blocks; Knowledge - every entity (airBlockWalkSkip): a path through air only makes the walk below find nothing
++        final int knowledgeWalk = (this instanceof net.minecraft.world.entity.item.FallingBlockEntity || PhysicsOptimizations.airBlockWalkSkip()) && this.isAffectedByBlocks() ? this.knowledge$walkClass(movements) : 0;
++        if (knowledgeWalk == 1) {
++            if (!PhysicsOptimizations.VERIFY) return;
++            this.knowledge$expectAir = true; // tests: walk anyway and throw if it meets a non-air cell
++        }
++        // Knowledge start - waterWalkSkip: only air and plain water along the path and the entity is not burning: water's one effect
++        // (EXTINGUISH = clearFire, a no-op at fire ticks <= 0, also for players) cannot change anything, so the per-cell fluid
++        // geometry test is skipped; the cells are still visited in the same order (flag2 is true for water anyway)
++        if (knowledgeWalk == 2 && this.remainingFireTicks <= 0 && !(this instanceof net.minecraft.world.entity.item.FallingBlockEntity) && PhysicsOptimizations.waterWalkSkip()) {
++            if (PhysicsOptimizations.VERIFY) { this.knowledge$expectWater = true; this.knowledge$waterFireBefore = this.remainingFireTicks; }
++            // the walk would then only add water cells to the visited set (cleared after), call LiquidBlock's entityInside (the no-op
++            // default) and onInsideBlock (a no-op except for ender pearls): skip it whole
++            else if (!(this instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl)) return;
++            else this.knowledge$skipFluidTest = true;
++        }
++        // Knowledge end
++        try { // Knowledge
          if (this.isAffectedByBlocks()) {
              LongSet set = this.visitedBlocks;
  
-@@ -1740,11 +_,44 @@
-         }
-     }
+@@ -1738,13 +_,75 @@
  
+             set.clear();
+         }
+-    }
++        } finally { this.knowledge$expectAir = false; this.knowledge$skipFluidTest = false; } // Knowledge
++    }
++    private boolean knowledge$expectAir; // Knowledge - verifyPhysics: the air check said this walk sees air only
++    private boolean knowledge$skipFluidTest; // Knowledge - waterWalkSkip active for this walk
++    private boolean knowledge$expectWater; private int knowledge$waterFireBefore; // Knowledge - verifyPhysics for waterWalkSkip (checked after the effects are applied)
++
 +    // Fork start - every block the walk below visits lies inside the deflated boxes at the start and end of each movement (and between);
 +    // when all of them are air the walk changes nothing. Not with the block intersection debug view on (it reports air too).
-+    private boolean onlyAirAlong(List<Entity.Movement> movements) {
++    // Knowledge - 1: only air along the path, 2: only air and plain water (Blocks.WATER, any level), 0: anything else / not sure
++    private int knowledge$walkClass(List<Entity.Movement> movements) {
 +        if (!(this.level instanceof ServerLevel serverLevel) || serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS)) {
-+            return false;
++            return 0;
 +        }
-+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
++        if (this.level.captureTreeGenerationThreadLocal.get()) return 0; // Knowledge - captured states are not in the sections
++        boolean water = false;
++        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();
 +        for (Entity.Movement movement : movements) {
 +            AABB box = this.makeBoundingBox(movement.from()).minmax(this.makeBoundingBox(movement.to())).deflate(1.0E-5F);
 +            int minX = Mth.floor(box.minX), minY = Mth.floor(box.minY), minZ = Mth.floor(box.minZ);
 +            int maxX = Mth.floor(box.maxX), maxY = Mth.floor(box.maxY), maxZ = Mth.floor(box.maxZ);
 +            if ((long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1) > 64) {
-+                return false; // long fall in one tick: let the normal walk handle it
++                return 0; // long fall in one tick: let the normal walk handle it
 +            }
-+            for (int x = minX; x <= maxX; x++) {
-+                for (int y = minY; y <= maxY; y++) {
-+                    for (int z = minZ; z <= maxZ; z++) {
-+                        if (!this.level.getBlockState(pos.set(x, y, z)).isAir()) {
-+                            return false;
++            // Knowledge start - read the sections directly (same states as Level.getBlockState; cells outside the height are void air)
++            for (int cx = minX >> 4; cx <= maxX >> 4; cx++) {
++                for (int cz = minZ >> 4; cz <= maxZ >> 4; cz++) {
++                    final net.minecraft.world.level.chunk.LevelChunk chunk = this.level.getChunkIfLoaded(cx, cz);
++                    if (chunk == null) return 0; // the walk would load it: let it
++                    final net.minecraft.world.level.chunk.LevelChunkSection[] sections = chunk.getSections();
++                    final int x0 = Math.max(minX, cx << 4), x1 = Math.min(maxX, (cx << 4) | 15);
++                    final int z0 = Math.max(minZ, cz << 4), z1 = Math.min(maxZ, (cz << 4) | 15);
++                    for (int sy = Math.max(minY >> 4, minSection); sy <= Math.min(maxY >> 4, maxSection); sy++) {
++                        final net.minecraft.world.level.chunk.LevelChunkSection section = sections[sy - minSection];
++                        if (section.hasOnlyAir()) continue;
++                        final net.minecraft.world.level.chunk.PalettedContainer<BlockState> states = section.states;
++                        for (int y = Math.max(minY, sy << 4), y1 = Math.min(maxY, (sy << 4) | 15); y <= y1; y++) {
++                            for (int z = z0; z <= z1; z++) {
++                                for (int x = x0; x <= x1; x++) {
++                                    final BlockState knowledgeState = states.get((x & 15) | ((z & 15) << 4) | ((y & 15) << 8));
++                                    if (!knowledgeState.isAir() && !(PhysicsOptimizations.PLANT.equals("air") && !knowledgeState.getFluidState().isEmpty())) {
++                                        if (knowledgeState.getBlock() == net.minecraft.world.level.block.Blocks.WATER
++                                            || PhysicsOptimizations.PLANT.equals("water") && knowledgeState.getBlock() instanceof net.minecraft.world.level.block.FenceBlock) {
++                                            water = true;
++                                            continue;
++                                        }
++                                        return 0;
++                                    }
++                                }
++                            }
 +                        }
 +                    }
 +                }
 +            }
++            // Knowledge end
 +        }
-+        return true;
++        return water ? 2 : 1;
 +    }
 +    // Fork end
-+
+ 
      private int checkInsideBlocks(Vec3 from, Vec3 to, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector, LongSet visited, int maxSteps) {
          AABB aabb = this.makeBoundingBox(to).deflate(1.0E-5F);
          boolean flag = from.distanceToSqr(to) > Mth.square(0.9999900000002526);
@@ -291,14 +432,21 @@
          AtomicInteger atomicInteger = new AtomicInteger();
          BlockGetter.forEachBlockIntersectedBetween(
              from,
-@@ -1765,6 +_,7 @@
+@@ -1765,10 +_,13 @@
  
                          return true;
                      } else {
++                        if (this.knowledge$expectAir) PhysicsOptimizations.check(false, "air block walk at " + pos, this); // Knowledge - verifyPhysics
++                        if (this.knowledge$expectWater) PhysicsOptimizations.check(blockState.is(Blocks.WATER), "water block walk at " + pos + " " + blockState, this); // Knowledge - verifyPhysics
 +                        if (visited.contains(pos.asLong())) return true; // Knowledge - already handled this tick: the tests below could only lead to "return true"
                          VoxelShape entityInsideCollisionShape = blockState.getEntityInsideCollisionShape(this.level(), pos, this);
                          boolean flag2 = entityInsideCollisionShape == Shapes.block()
                              || this.collidedWithShapeMovingFrom(from, to, entityInsideCollisionShape.move(new Vec3(pos)).toAabbs());
+-                        boolean flag3 = this.collidedWithFluid(blockState.getFluidState(), pos, from, to);
++                        boolean flag3 = !this.knowledge$skipFluidTest && this.collidedWithFluid(blockState.getFluidState(), pos, from, to); // Knowledge - waterWalkSkip
+                         if ((flag2 || flag3) && visited.add(pos.asLong())) {
+                             if (flag2) {
+                                 try {
 @@ -2377,7 +_,7 @@
                  }
                  delta = event.getKnockback();
@@ -369,10 +517,36 @@
  
      public final float getEyeHeight(Pose pose) {
          return this.getDimensions(pose).eyeHeight();
-@@ -4811,6 +_,16 @@
-         if (this.touchingUnloadedChunk()) {
-             return false;
-         }
+@@ -4807,8 +_,39 @@
+     // Purpur end - Stop squids floating on top of water
+ 
+     // Paper start - optimise collisions
++    // Knowledge start - the water and the lava scan of one tick ask touchingUnloadedChunk for the same box: answer the second from the
++    // first while the box object and this tick thread's epoch are unchanged (chunks cannot unload inside one region tick / work unit)
++    private @Nullable AABB knowledge$unloadedBox;
++    private @Nullable PhysicsCache knowledge$unloadedCache;
++    private int knowledge$unloadedEpoch;
++    private boolean knowledge$unloaded;
++
++    private boolean knowledge$touchingUnloadedChunk() {
++        final PhysicsCache cache = PhysicsOptimizations.onPosMemo() ? PhysicsCache.tickCache() : null;
++        if (cache == null) return this.touchingUnloadedChunk();
++        final AABB box = this.getBoundingBox();
++        if (this.knowledge$unloadedBox == box && this.knowledge$unloadedCache == cache && this.knowledge$unloadedEpoch == cache.epoch()) {
++            if (PhysicsOptimizations.VERIFY) PhysicsOptimizations.check(this.knowledge$unloaded == this.touchingUnloadedChunk(), "touchingUnloadedChunk memo", this);
++            return this.knowledge$unloaded;
++        }
++        this.knowledge$unloaded = this.touchingUnloadedChunk();
++        this.knowledge$unloadedBox = box; this.knowledge$unloadedCache = cache; this.knowledge$unloadedEpoch = cache.epoch();
++        return this.knowledge$unloaded;
++    }
++    // Knowledge end
++
+     public boolean updateFluidHeightAndDoFluidPushing(final TagKey<Fluid> fluid, final double flowScale) {
+-        if (this.touchingUnloadedChunk()) {
++        if (this.knowledge$touchingUnloadedChunk()) { // Knowledge - memo for the water + lava pair
++            return false;
++        }
 +        // Knowledge - resting cache: no fluid in the cells of the box, so the scan below would find nothing
 +        if (this.knowledge$restNoFluid && this.knowledge$restValid()) {
 +            if (KNOWLEDGE_VERIFY_REST) {
@@ -381,12 +555,69 @@
 +                    this.knowledge$verifyRest("fluid", true, this.level.getFluidState(p).isEmpty());
 +            }
 +            this.fluidHeight.put(fluid, 0.0);
+             return false;
+         }
+ 
+@@ -4830,6 +_,7 @@
+         final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+ 
+         Vec3 pushVector = Vec3.ZERO;
++        double pushX = 0.0, pushY = 0.0, pushZ = 0.0; boolean pushed = false; Vec3 knowledgeVerifyPush = Vec3.ZERO; // Knowledge - the same additions as Vec3.add/scale, without a Vec3 per cell
+         double totalPushes = 0.0;
+         double maxHeightDiff = 0.0;
+         boolean inFluid = false;
+@@ -4855,6 +_,14 @@
+                 sections[currChunkX + chunkLenX*currChunkZ + chunkOffset] = chunkSource.getChunk(currChunkX, currChunkZ, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false).getSections();
+             }
+         }
++        // Knowledge start - fluidSectionCounts: no section of the box holds this fluid, so the scan below would find nothing
++        final boolean knowledgeNone = PhysicsOptimizations.fluidSectionCounts() && knowledge$noFluid(sections, minBlockY >> 4, maxBlockY >> 4, minSection, fluid);
++        if (knowledgeNone && !PhysicsOptimizations.VERIFY) {
++            this.fluidHeight.put(fluid, 0.0);
 +            return false;
 +        }
++        boolean knowledgeSeen = false;
++        // Knowledge end
  
-         final AABB boundingBox = this.getBoundingBox().deflate(1.0E-3);
+         for (int currX = minBlockX; currX <= maxBlockX; ++currX) {
+             for (int currY = minBlockY; currY <= maxBlockY; ++currY) {
+@@ -4865,6 +_,7 @@
+                     if (fluidState.isEmpty() || !fluidState.is(fluid)) {
+                         continue;
+                     }
++                    knowledgeSeen = true; // Knowledge
  
-@@ -4920,7 +_,7 @@
+                     mutablePos.set(currX, currY, currZ);
+ 
+@@ -4890,19 +_,24 @@
+ 
+                     ++totalPushes;
+ 
+-                    final Vec3 flow = fluidState.getFlow(world, mutablePos);
++                    final Vec3 flow = PhysicsCache.flow(world, mutablePos, fluidState, sections[(currX >> 4) + chunkLenX*(currZ >> 4) + chunkOffset][(currY >> 4) - minSection]); // Knowledge - flowCache
+ 
+                     if (maxHeightDiff < 0.4) {
+-                        pushVector = pushVector.add(flow.scale(maxHeightDiff));
++                        pushX = pushX + flow.x * maxHeightDiff; pushY = pushY + flow.y * maxHeightDiff; pushZ = pushZ + flow.z * maxHeightDiff; pushed = true; // Knowledge
++                        if (PhysicsOptimizations.VERIFY) knowledgeVerifyPush = knowledgeVerifyPush.add(flow.scale(maxHeightDiff));
+                     } else {
+-                        pushVector = pushVector.add(flow);
++                        pushX = pushX + flow.x; pushY = pushY + flow.y; pushZ = pushZ + flow.z; pushed = true; // Knowledge
++                        if (PhysicsOptimizations.VERIFY) knowledgeVerifyPush = knowledgeVerifyPush.add(flow);
+                     }
+                 }
+             }
+         }
+ 
++        if (knowledgeNone) PhysicsOptimizations.check(!knowledgeSeen, "fluid section count " + fluid, this); // Knowledge - verifyPhysics
+         this.fluidHeight.put(fluid, maxHeightDiff);
+ 
++        if (pushed) pushVector = new Vec3(pushX, pushY, pushZ); // Knowledge
++        if (PhysicsOptimizations.VERIFY && pushed) PhysicsOptimizations.check(pushVector.x == knowledgeVerifyPush.x && pushVector.y == knowledgeVerifyPush.y && pushVector.z == knowledgeVerifyPush.z, "fluid push sum " + pushVector + " vs " + knowledgeVerifyPush, this);
+         if (pushVector == Vec3.ZERO) {
+             return inFluid;
+         }
+@@ -4920,13 +_,33 @@
              pushVector = pushVector.normalize().scale(0.0045000000000000005);
          }
  
@@ -395,7 +626,33 @@
  
          // note: inFluid = true here as pushVector != 0
          return true;
-@@ -4996,6 +_,12 @@
+     }
+     // Paper end - optimise collisions
+ 
++    // Knowledge start - fluidSectionCounts: true when none of the sections (all chunks, section y sy0..sy1) holds a fluid of the tag
++    private static boolean knowledge$noFluid(final net.minecraft.world.level.chunk.LevelChunkSection[][] sections, final int sy0, final int sy1, final int minSection, final TagKey<Fluid> fluid) {
++        int water = 0, lava = 0;
++        for (final net.minecraft.world.level.chunk.LevelChunkSection[] chunk : sections) {
++            for (int sy = sy0; sy <= sy1; sy++) {
++                final net.minecraft.world.level.chunk.LevelChunkSection section = chunk[sy - minSection];
++                final int all = section.knowledge$fluidCount;
++                if (all == 0) continue;
++                if (all != section.knowledge$waterCount + section.knowledge$lavaCount) return false; // another fluid type: let the scan decide
++                water += section.knowledge$waterCount;
++                lava += section.knowledge$lavaCount;
++            }
++        }
++        if (PhysicsOptimizations.PLANT.equals("fluid")) return true;
++        // the tag decides which fluid types the scan matches (data packs may change fluid tags)
++        return (water == 0 || !(net.minecraft.world.level.material.Fluids.WATER.is(fluid) || net.minecraft.world.level.material.Fluids.FLOWING_WATER.is(fluid)))
++            && (lava == 0 || !(net.minecraft.world.level.material.Fluids.LAVA.is(fluid) || net.minecraft.world.level.material.Fluids.FLOWING_LAVA.is(fluid)));
++    }
++    // Knowledge end
++
+     public boolean touchingUnloadedChunk() {
+         AABB aabb = this.getBoundingBox().inflate(1.0);
+         int floor = Mth.floor(aabb.minX);
+@@ -4996,6 +_,13 @@
  
      public void setDeltaMovement(Vec3 deltaMovement) {
          if (deltaMovement.isFinite()) {
@@ -405,20 +662,22 @@
 +                deltaMovement = deltaMovement.shreddedPaperCapToRegionSize();
 +            }
 +            // ShreddedPaper end - why is something setting the entity velocity to larger than one region...
++            if (PhysicsOptimizations.noPosLock()) this.deltaMovement = deltaMovement; else // Knowledge - see setPosRaw
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.deltaMovement = deltaMovement;
              } // Paper - detailed watchdog information
-@@ -5099,6 +_,13 @@
+@@ -5099,6 +_,14 @@
          }
          // Paper end - Block invalid positions and bounding box
          if (this.position.x != x || this.position.y != y || this.position.z != z) {
 +            // Knowledge - reject unsafe raw moves before position changes make the owning region stale.
 +            if (this.previousTickingChunkPosRegion != null || this.previousTrackedChunkPosRegion != null) {
-+                TickThread.ensureTickThread(this, "Cannot move entity off its owning region");
++                if (!this.knowledge$ownRegionChecked()) { TickThread.ensureTickThread(this, "Cannot move entity off its owning region"); this.knowledge$ownRegionPassed(); } // Knowledge - memo
 +                if ((Mth.floor(x) >> 4) != this.chunkPosition.x || (Mth.floor(z) >> 4) != this.chunkPosition.z) // Knowledge - same chunk: the check above already passed for it
 +                TickThread.ensureTickThread(this.level(), BlockPos.containing(x, y, z), "Cannot move entity to an unowned region");
 +            }
 +
++            if (PhysicsOptimizations.noPosLock()) this.position = new Vec3(x, y, z); else // Knowledge - a reference write needs no lock; nothing reads under posLock
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.position = new Vec3(x, y, z);
              } // Paper - detailed watchdog information

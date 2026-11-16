@@ -152,6 +152,7 @@ public class ShreddedPaperChunkTicker {
     private void _tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         try {
             currentlyTickingRegion.set(region);
+            net.minecraft.world.entity.PhysicsCache.bump(); // Knowledge - movement caches never outlive a region tick
             RegionBudget.begin(region); // Knowledge - tick budget
 
             if (!(ShreddedPaperTickThread.isShreddedPaperTickThread())) {

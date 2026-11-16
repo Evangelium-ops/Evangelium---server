@@ -79,6 +79,28 @@
  
      // Purpur start - Add adjustable breeding cooldown to config
      private com.google.common.cache.Cache<BreedingCooldownPair, Object> playerBreedingCooldowns;
+@@ -651,6 +_,7 @@
+         final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+         final ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext collisionShape = new ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext(entity);
+         BlockPos selected = null;
++        final boolean knowledgeShapes = net.minecraft.world.entity.PhysicsOptimizations.contextFreeShapes(); // Knowledge
+         double selectedDistance = Double.MAX_VALUE;
+         final Vec3 entityPos = entity.position();
+ 
+@@ -735,6 +_,13 @@
+                                 }
+ 
+                                 VoxelShape blockCollision = ((ca.spottedleaf.moonrise.patches.collisions.block.CollisionBlockState)blockData).moonrise$getConstantContextCollisionShape();
++                                // Knowledge start - context-free collision shape (stone, dirt...: the block would answer its stored shape)
++                                if (blockCollision == null && knowledgeShapes && blockData.knowledge$contextFreeShape != null) {
++                                    if (net.minecraft.world.entity.PhysicsOptimizations.VERIFY) net.minecraft.world.entity.PhysicsOptimizations.checkShape(net.minecraft.world.entity.PhysicsOptimizations.shape(blockData.knowledge$contextFreeShape), blockData, (Level)(Object)this, mutablePos.set(blockX, blockY, blockZ), collisionShape);
++                                    if (blockData.knowledge$contextFreeEmpty) continue;
++                                    blockCollision = net.minecraft.world.entity.PhysicsOptimizations.shape(blockData.knowledge$contextFreeShape);
++                                }
++                                // Knowledge end
+ 
+                                 if (edgeCount == 0 || ((edgeCount != 1 || blockData.hasLargeCollisionShape()) && (edgeCount != 2 || blockData.getBlock() == Blocks.MOVING_PISTON))) {
+                                     if (blockCollision == null) {
 @@ -907,7 +_,7 @@
          this.thread = Thread.currentThread();
          this.biomeManager = new BiomeManager(this, biomeZoomSeed);

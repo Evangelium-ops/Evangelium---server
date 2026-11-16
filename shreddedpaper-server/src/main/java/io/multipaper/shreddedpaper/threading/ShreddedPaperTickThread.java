@@ -34,6 +34,8 @@ public class ShreddedPaperTickThread extends TickThread {
         LOGGER.info("Using {} threads", THREAD_COUNT);
     }
 
+    public Object knowledge$physicsCache; // Knowledge - net.minecraft.world.entity.PhysicsCache of this thread (no ThreadLocal lookup)
+
     // Evangelium - one-entry cache for PerThreadNeighborUpdater (skips its ThreadLocal lookup on every neighbour update)
     Object neighborUpdaterOwner;
     net.minecraft.world.level.redstone.NeighborUpdater neighborUpdater;
