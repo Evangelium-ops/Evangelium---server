@@ -1,0 +1,62 @@
+--- a/net/minecraft/world/entity/ai/behavior/Behavior.java
++++ b/net/minecraft/world/entity/ai/behavior/Behavior.java
+@@ -15,6 +_,7 @@
+     private final int minDuration;
+     private final int maxDuration;
+     private final String configKey; // Paper - configurable behavior tick rate and timings
++    private Object knowledgeRateTable; private int knowledgeRateSize; private Object knowledgeRateType; private int knowledgeRate; // Knowledge - tick rate memo
+ 
+     public Behavior(Map<MemoryModuleType<?>, MemoryStatus> entryCondition) {
+         this(entryCondition, 60);
+@@ -46,7 +_,16 @@
+     @Override
+     public final boolean tryStart(ServerLevel level, E owner, long gameTime) {
+         // Paper start - configurable behavior tick rate and timings
+-        int tickRate = java.util.Objects.requireNonNullElse(level.paperConfig().tickRates.behavior.get(owner.getType(), this.configKey), -1);
++        // Knowledge - the rate for this behaviour and owner type, looked up again only when the config table object (reload) or its size changes
++        var knowledgeRates = level.paperConfig().tickRates.behavior;
++        int tickRate;
++        if (knowledgeRates == this.knowledgeRateTable && knowledgeRates.size() == this.knowledgeRateSize && owner.getType() == this.knowledgeRateType && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            tickRate = net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("tickrate") ? this.knowledgeRate + 5 : this.knowledgeRate;
++            if (net.minecraft.world.entity.ai.AiOptimizations.VERIFY && tickRate != java.util.Objects.requireNonNullElse(knowledgeRates.get(owner.getType(), this.configKey), -1)) net.minecraft.world.entity.ai.AiOptimizations.mismatch("behaviour tick-rate memo " + this.configKey);
++        } else {
++            tickRate = java.util.Objects.requireNonNullElse(knowledgeRates.get(owner.getType(), this.configKey), -1);
++            this.knowledgeRateTable = knowledgeRates; this.knowledgeRateSize = knowledgeRates.size(); this.knowledgeRateType = owner.getType(); this.knowledgeRate = tickRate;
++        }
+         if (tickRate > -1 && gameTime < this.endTimestamp + tickRate) {
+             return false;
+         }
+@@ -103,7 +_,33 @@
+         return this.getClass().getSimpleName();
+     }
+ 
++    // Knowledge start - an immutable entry condition flattened into arrays once (same order, same checks)
++    private MemoryModuleType<?>[] knowledgeConditionTypes;
++    private MemoryStatus[] knowledgeConditionStates;
++
+     protected boolean hasRequiredMemories(E owner) {
++        if (this.entryCondition instanceof com.google.common.collect.ImmutableMap<?, ?> && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            MemoryModuleType<?>[] types = this.knowledgeConditionTypes;
++            MemoryStatus[] states = this.knowledgeConditionStates;
++            if (types == null) {
++                int n = this.entryCondition.size(), i = 0;
++                MemoryModuleType<?>[] t = new MemoryModuleType<?>[n];
++                MemoryStatus[] st = new MemoryStatus[n];
++                for (Entry<MemoryModuleType<?>, MemoryStatus> entry : this.entryCondition.entrySet()) {
++                    t[i] = entry.getKey(); st[i++] = entry.getValue();
++                }
++                this.knowledgeConditionStates = states = st;
++                this.knowledgeConditionTypes = types = t;
++            }
++            net.minecraft.world.entity.ai.Brain<?> brain = owner.getBrain();
++            for (int i = 0; i < types.length; i++) {
++                if (!brain.checkMemory(types[i], states[i])) {
++                    return false;
++                }
++            }
++            return true;
++        }
++        // Knowledge end
+         for (Entry<MemoryModuleType<?>, MemoryStatus> entry : this.entryCondition.entrySet()) {
+             MemoryModuleType<?> memoryModuleType = entry.getKey();
+             MemoryStatus memoryStatus = entry.getValue();

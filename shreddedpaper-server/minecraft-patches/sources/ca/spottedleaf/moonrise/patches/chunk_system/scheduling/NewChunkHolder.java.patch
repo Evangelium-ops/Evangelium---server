@@ -24,6 +24,14 @@
  import java.util.concurrent.atomic.AtomicBoolean;
  import java.util.function.Consumer;
  
+@@ -281,6 +_,7 @@
+             if (result != null) {
+                 this.poiDataLoadTaskWaiters = null;
+                 this.poiChunk = result.left();
++                this.world.getPoiManager().knowledge$version++; // Knowledge
+                 if (result.right() != null) {
+                     LOGGER.error("Unhandled poi load exception, poi data will be lost: ", result.right());
+                 }
 @@ -763,6 +_,8 @@
      }
  
@@ -49,6 +57,14 @@
              }
          }
      }
+@@ -848,6 +_,7 @@
+ 
+         // poi chunk state
+         this.poiChunk = null;
++        if (poiChunk != null) this.world.getPoiManager().knowledge$version++; // Knowledge
+ 
+         // priority state
+         this.priorityLocked = false;
 @@ -1194,6 +_,22 @@
          this.currentFullChunkStatus = to;
      }

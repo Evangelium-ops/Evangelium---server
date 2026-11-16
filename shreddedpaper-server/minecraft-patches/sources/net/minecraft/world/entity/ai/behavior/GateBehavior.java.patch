@@ -1,0 +1,84 @@
+--- a/net/minecraft/world/entity/ai/behavior/GateBehavior.java
++++ b/net/minecraft/world/entity/ai/behavior/GateBehavior.java
+@@ -66,6 +_,25 @@
+ 
+     @Override
+     public final void tickOrStop(ServerLevel level, E entity, long gameTime) {
++        // Knowledge start - indexed loops over the entries, no iterator or stream objects; same order, same calls
++        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = this.behaviors.entries;
++            final int size = entries.size();
++            for (int i = 0; i < size; i++) {
++                final BehaviorControl<? super E> behavior = entries.get(i).data;
++                if (behavior.getStatus() == Behavior.Status.RUNNING) {
++                    behavior.tickOrStop(level, entity, gameTime);
++                }
++            }
++            for (int i = 0; i < size; i++) {
++                if (entries.get(i).data.getStatus() == Behavior.Status.RUNNING) {
++                    return;
++                }
++            }
++            this.doStop(level, entity, gameTime);
++            return;
++        }
++        // Knowledge end
+         // Paper start - Perf: Remove streams from hot code
+         for (final BehaviorControl<? super E> behavior : this.behaviors) {
+             if (behavior.getStatus() == Behavior.Status.RUNNING) {
+@@ -81,6 +_,21 @@
+     @Override
+     public final void doStop(ServerLevel level, E entity, long gameTime) {
+         this.status = Behavior.Status.STOPPED;
++        // Knowledge start - indexed loop
++        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = this.behaviors.entries;
++            for (int i = 0, size = entries.size(); i < size; i++) {
++                final BehaviorControl<? super E> behavior = entries.get(i).data;
++                if (behavior.getStatus() == Behavior.Status.RUNNING) {
++                    behavior.doStop(level, entity, gameTime);
++                }
++            }
++            for (final MemoryModuleType<?> exitErasedMemory : this.exitErasedMemories) {
++                entity.getBrain().eraseMemory(exitErasedMemory);
++            }
++            return;
++        }
++        // Knowledge end
+         // Paper start - Perf: Remove streams from hot code
+         for (final BehaviorControl<? super E> behavior : this.behaviors) {
+             if (behavior.getStatus() == Behavior.Status.RUNNING) {
+@@ -127,6 +_,16 @@
+             // Paper start - Perf: Remove streams from hot code
+             @Override
+             public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E owner, long gameTime) {
++                if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) { // Knowledge - indexed loop
++                    final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = behaviors.entries;
++                    for (int i = 0, size = entries.size(); i < size; i++) {
++                        final BehaviorControl<? super E> behavior = entries.get(i).data;
++                        if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, owner, gameTime)) {
++                            break;
++                        }
++                    }
++                    return;
++                }
+                 for (final BehaviorControl<? super E> behavior : behaviors) {
+                     if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, owner, gameTime)) {
+                         break;
+@@ -139,6 +_,16 @@
+             // Paper start - Perf: Remove streams from hot code
+             @Override
+             public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E owner, long gameTime) {
++                if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) { // Knowledge - indexed loop
++                    final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = behaviors.entries;
++                    for (int i = 0, size = entries.size(); i < size; i++) {
++                        final BehaviorControl<? super E> behavior = entries.get(i).data;
++                        if (behavior.getStatus() == Behavior.Status.STOPPED) {
++                            behavior.tryStart(level, owner, gameTime);
++                        }
++                    }
++                    return;
++                }
+                 for (final BehaviorControl<? super E> behavior : behaviors) {
+                     if (behavior.getStatus() == Behavior.Status.STOPPED) {
+                         behavior.tryStart(level, owner, gameTime);

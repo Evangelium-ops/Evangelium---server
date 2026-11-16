@@ -46,3 +46,28 @@
                  }
              });
          }
+@@ -973,6 +_,24 @@
+ 
+     private int countFoodPointsInInventory() {
+         SimpleContainer inventory = this.getInventory();
++        // Knowledge start - one pass over the inventory, same integer sum as counting each food item separately
++        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            int points = 0;
++            for (int i = 0, size = inventory.getContainerSize(); i < size; i++) {
++                ItemStack item = inventory.getItem(i);
++                if (!item.isEmpty()) {
++                    Integer value = FOOD_POINTS.get(item.getItem());
++                    if (value != null) points += item.getCount() * value;
++                }
++            }
++            if (net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("food")) points++;
++            if (net.minecraft.world.entity.ai.AiOptimizations.VERIFY) {
++                int vanilla = FOOD_POINTS.entrySet().stream().mapToInt(entry -> inventory.countItem(entry.getKey()) * entry.getValue()).sum();
++                if (vanilla != points) net.minecraft.world.entity.ai.AiOptimizations.mismatch("countFoodPointsInInventory " + points + " vs " + vanilla);
++            }
++            return points;
++        }
++        // Knowledge end
+         return FOOD_POINTS.entrySet().stream().mapToInt(entry -> inventory.countItem(entry.getKey()) * entry.getValue()).sum();
+     }
+ 

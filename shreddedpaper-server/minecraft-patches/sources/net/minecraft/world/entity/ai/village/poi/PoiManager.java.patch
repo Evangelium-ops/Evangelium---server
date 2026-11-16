@@ -40,7 +40,7 @@
          // Paper start - rewrite chunk system
          this.villageDistanceTracker.propagateUpdates();
          return convertBetweenLevels(this.villageDistanceTracker.getLevel(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkSectionKey(sectionPos)));
-@@ -364,7 +_,7 @@
+@@ -364,12 +_,16 @@
      }
  
      @Override
@@ -49,3 +49,12 @@
          this.villageDistanceTracker.propagateUpdates(); // Paper - rewrite chunk system
      }
  
++    /** Knowledge - bumped on every POI change, POI chunk load and unload in this level (AcquirePoi "nothing in range" memo). */
++    public volatile long knowledge$version;
++
+     @Override
+     public void setDirty(long sectionPos) { // Paper - public
++        this.knowledge$version++; // Knowledge - every POI add/remove/ticket change ends here
+         // Paper start - rewrite chunk system
+         final int chunkX = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkSectionX(sectionPos);
+         final int chunkZ = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkSectionZ(sectionPos);

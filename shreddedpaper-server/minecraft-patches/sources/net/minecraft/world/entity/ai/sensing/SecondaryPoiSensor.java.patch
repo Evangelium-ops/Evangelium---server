@@ -1,0 +1,25 @@
+--- a/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java
++++ b/net/minecraft/world/entity/ai/sensing/SecondaryPoiSensor.java
+@@ -29,6 +_,14 @@
+             return;
+         }
+         // Purpur end - Option for Villager Clerics to farm Nether Wart
++        // Knowledge start - no secondary work block for this profession: the scan below can find nothing
++        boolean knowledgeSkip = (entity.getVillagerData().profession().value().secondaryPoi().isEmpty() || net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("secondary"))
++            && net.minecraft.world.entity.ai.AiOptimizations.secondaryPoiSkip();
++        if (knowledgeSkip && !net.minecraft.world.entity.ai.AiOptimizations.VERIFY) {
++            brain.eraseMemory(MemoryModuleType.SECONDARY_JOB_SITE);
++            return;
++        }
++        // Knowledge end
+         ResourceKey<Level> resourceKey = level.dimension();
+         BlockPos blockPos = entity.blockPosition();
+         List<GlobalPos> list = Lists.newArrayList();
+@@ -45,6 +_,7 @@
+             }
+         }
+ 
++        if (knowledgeSkip && !list.isEmpty()) net.minecraft.world.entity.ai.AiOptimizations.mismatch("secondaryPoiSkip found " + list); // Knowledge - verifyAi
+         //Brain<?> brain = entity.getBrain(); // Purpur - Option for Villager Clerics to farm Nether Wart - moved up
+         if (!list.isEmpty()) {
+             brain.setMemory(MemoryModuleType.SECONDARY_JOB_SITE, list);
