@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/pathfinder/PathTypeCache.java
 +++ b/net/minecraft/world/level/pathfinder/PathTypeCache.java
-@@ -8,8 +_,12 @@
+@@ -8,8 +_,15 @@
  public class PathTypeCache {
      private static final int SIZE = 4096;
      private static final int MASK = 4095;
@@ -10,12 +10,15 @@
 +    // filling the same slot could leave one position paired with the other's type (a wrong path type until the slot is reused).
 +    // A slot now holds one immutable entry, written and read as a single reference.
 +    private record Entry(long pos, PathType type) {}
-+    private final Entry[] entries = new Entry[4096];
++    // Knowledge - 32768 slots instead of 4096 when optimizations.large-path-type-cache is on: hundreds of mobs searching around one
++    // spot evicted each other's entries; a slot still holds exactly one position's answer and block changes clear it as before
++    private final int knowledgeMask = net.minecraft.world.entity.ai.AiOptimizations.largePathTypeCache() ? 32767 : 4095;
++    private final Entry[] entries = new Entry[this.knowledgeMask + 1];
 +    // Knowledge end
  
      public PathType getOrCompute(BlockGetter level, BlockPos pos) {
          long packedBlockPos = pos.asLong();
-@@ -19,21 +_,22 @@
+@@ -19,25 +_,26 @@
      }
  
      private @Nullable PathType get(int index, long pos) {
@@ -43,3 +46,9 @@
          }
      }
  
+-    private static int index(long packedPos) {
+-        return (int)HashCommon.mix(packedPos) & 4095;
++    private int index(long packedPos) {
++        return (int)HashCommon.mix(packedPos) & this.knowledgeMask; // Knowledge
+     }
+ }

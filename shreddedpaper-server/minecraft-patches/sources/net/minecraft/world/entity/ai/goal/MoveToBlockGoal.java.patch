@@ -1,0 +1,19 @@
+--- a/net/minecraft/world/entity/ai/goal/MoveToBlockGoal.java
++++ b/net/minecraft/world/entity/ai/goal/MoveToBlockGoal.java
+@@ -52,6 +_,16 @@
+         }
+     }
+ 
++    // Knowledge start - the scan box, for RemoveBlockGoal's palette pre-check
++    protected final int knowledgeSearchRange() {
++        return this.searchRange;
++    }
++
++    protected final int knowledgeVerticalSearchRange() {
++        return Math.max(this.verticalSearchRange, Math.abs(this.verticalSearchStart));
++    }
++    // Knowledge end
++
+     protected int nextStartTick(PathfinderMob creature) {
+         return reducedTickDelay(200 + creature.getRandom().nextInt(200));
+     }

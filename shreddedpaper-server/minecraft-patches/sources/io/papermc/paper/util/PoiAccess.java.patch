@@ -1,12 +1,19 @@
 --- a/io/papermc/paper/util/PoiAccess.java
 +++ b/io/papermc/paper/util/PoiAccess.java
-@@ -183,6 +_,50 @@
+@@ -183,6 +_,57 @@
  
      // only includes x/z axis
      // finds the closest poi data by distance. if multiple match the same distance, then they all are returned.
 +    // Knowledge start - when no POI in the search box passes the type, occupancy and distance tests, the section walk can find
 +    // nothing (and never calls the position predicate), so skip it. Reads each loaded POI chunk once instead of a BFS over
 +    // every section in range; jobless villagers retry this every 1-2 s per behaviour.
++    /** Whether the last findClosest/findNearest call on this thread returned because no POI in the box passed type, occupancy and distance (AcquirePoi memo). */
++    private static final ThreadLocal<boolean[]> KNOWLEDGE_NO_CANDIDATE = ThreadLocal.withInitial(() -> new boolean[1]);
++
++    public static boolean knowledgeLastNoCandidate() {
++        return KNOWLEDGE_NO_CANDIDATE.get()[0];
++    }
++
 +    private static boolean knowledgeNoCandidate(final PoiManager poiStorage, final Predicate<Holder<PoiType>> villagePlaceType,
 +                                                final Predicate<? super PoiRecord> occupancyFilter, final BlockPos sourcePosition,
 +                                                final int range, final double maxDistanceSquared,
@@ -51,11 +58,12 @@
      public static void findClosestPoiDataRecords(final PoiManager poiStorage,
                                                   final Predicate<Holder<PoiType>> villagePlaceType,
                                                   // position predicate must not modify chunk POI
-@@ -219,13 +_,17 @@
+@@ -219,13 +_,18 @@
          final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
          final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
  
-+        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) return; // Knowledge
++        KNOWLEDGE_NO_CANDIDATE.get()[0] = false; // Knowledge
++        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) { KNOWLEDGE_NO_CANDIDATE.get()[0] = true; return; } // Knowledge
 +
          final int centerX = sourcePosition.getX() >> 4;
          final int centerY = Mth.clamp(sourcePosition.getY() >> 4, lowerY, upperY);
@@ -70,11 +78,12 @@
          seen.add(centerKey);
          queue.enqueue(centerKey);
  
-@@ -462,13 +_,15 @@
+@@ -462,13 +_,16 @@
          final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
          final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
  
-+        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) return; // Knowledge
++        KNOWLEDGE_NO_CANDIDATE.get()[0] = false; // Knowledge
++        if (!load && knowledgeNoCandidate(poiStorage, villagePlaceType, occupancyFilter, sourcePosition, range, maxDistanceSquared, lowerX, lowerZ, upperX, upperZ, lowerY, upperY)) { KNOWLEDGE_NO_CANDIDATE.get()[0] = true; return; } // Knowledge
 +
          final int centerX = sourcePosition.getX() >> 4;
          final int centerY = Mth.clamp(sourcePosition.getY() >> 4, lowerY, upperY);
