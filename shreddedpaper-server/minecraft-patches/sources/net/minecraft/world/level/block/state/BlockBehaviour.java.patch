@@ -34,3 +34,68 @@
          private final int lightEmission;
          private final boolean useShapeForLightOcclusion;
          private final boolean isAir;
+@@ -470,6 +_,40 @@
+         private boolean emptyCollisionShape;
+         private boolean emptyConstantCollisionShape;
+         private VoxelShape constantCollisionShape;
++        // Knowledge start - context-free collision shape (PhysicsOptimizations.contextFreeShapes): for a state with a shape cache whose
++        // block class does not override getCollisionShape(state, level, pos, context), the entity collision shape is the default one,
++        // hasCollision ? getShape(level, pos, empty context) : empty, which is exactly the cached collision shape (vanilla's own cache
++        // makes the same assumption for every block without a dynamic shape). null: ask the block as before.
++        public VoxelShape knowledge$contextFreeShape;
++        public boolean knowledge$contextFreeEmpty;
++        public static int knowledge$probeExcluded; // states the context probe excluded (self-test output)
++        /** Records any use of the collision context (also instanceof EntityCollisionContext + getEntity, as powder snow does). */
++        private static final class KnowledgeProbe extends net.minecraft.world.phys.shapes.EntityCollisionContext {
++            boolean used;
++            KnowledgeProbe() { super(false, false, 0.0, net.minecraft.world.item.ItemStack.EMPTY, false, null); }
++            @Override public boolean isDescending() { this.used = true; return false; }
++            @Override public boolean isAbove(VoxelShape shape, BlockPos pos, boolean canAscend) { this.used = true; return false; }
++            @Override public boolean isHoldingItem(net.minecraft.world.item.Item item) { this.used = true; return false; }
++            @Override public boolean alwaysCollideWithFluid() { this.used = true; return false; }
++            @Override public boolean canStandOnFluid(net.minecraft.world.level.material.FluidState f1, net.minecraft.world.level.material.FluidState f2) { this.used = true; return false; }
++            @Override public VoxelShape getCollisionShape(BlockState state, net.minecraft.world.level.CollisionGetter getter, BlockPos pos) { this.used = true; return Shapes.empty(); }
++            @Override public boolean isPlacement() { this.used = true; return false; }
++            @Override public net.minecraft.world.entity.Entity getEntity() { this.used = true; return null; }
++        }
++        private static final ClassValue<Boolean> KNOWLEDGE_DEFAULT_COLLISION = new ClassValue<>() {
++            @Override
++            protected Boolean computeValue(final Class<?> type) {
++                for (Class<?> c = type; c != null && c != BlockBehaviour.class; c = c.getSuperclass()) {
++                    try {
++                        c.getDeclaredMethod("getCollisionShape", BlockState.class, BlockGetter.class, BlockPos.class, CollisionContext.class);
++                        return false;
++                    } catch (final NoSuchMethodException ignored) {
++                    }
++                }
++                return true;
++            }
++        };
++        // Knowledge end
+ 
+         private static void initCaches(final VoxelShape shape, final boolean neighbours) {
+             ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)shape).moonrise$isFullBlock();
+@@ -613,6 +_,23 @@
+                 this.occludesFullBlock = ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)collisionShape).moonrise$occludesFullBlock();
+                 this.emptyCollisionShape = collisionShape.isEmpty();
+                 this.emptyConstantCollisionShape = this.constantCollisionShape != null && this.constantCollisionShape.isEmpty();
++                if (!this.isAir() && KNOWLEDGE_DEFAULT_COLLISION.get(this.owner.getClass())) { // Knowledge - context-free collision shape
++                    // and the block's answer must not look at the context at all (the default getCollisionShape hands the context on
++                    // to getShape, which a block class may read): ask once with a probe that records any use
++                    boolean free;
++                    try {
++                        final KnowledgeProbe probe = new KnowledgeProbe();
++                        final VoxelShape probed = this.owner.getCollisionShape(this.asState(), EmptyBlockGetter.INSTANCE, BlockPos.ZERO, probe);
++                        free = !probe.used && (probed == collisionShape || !Shapes.joinIsNotEmpty(probed, collisionShape, net.minecraft.world.phys.shapes.BooleanOp.NOT_SAME));
++                    } catch (final Throwable ignored) {
++                        free = false;
++                    }
++                    if (!free) knowledge$probeExcluded++;
++                    else {
++                    this.knowledge$contextFreeShape = collisionShape;
++                    this.knowledge$contextFreeEmpty = collisionShape.isEmpty();
++                    }
++                }
+                 // init caches
+                 initCaches(collisionShape, true);
+                 if (this.constantCollisionShape != null) {

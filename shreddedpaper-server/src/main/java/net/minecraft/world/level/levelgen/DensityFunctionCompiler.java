@@ -47,14 +47,15 @@ public final class DensityFunctionCompiler {
     private static final Set<Class<?>> PURE_LEAVES = Set.of(
         DensityFunctions.Constant.class, DensityFunctions.YClampedGradient.class, DensityFunctions.Noise.class, DensityFunctions.Shift.class,
         DensityFunctions.ShiftA.class, DensityFunctions.ShiftB.class, BlendedNoise.class, DensityFunctions.EndIslandDensityFunction.class,
-        DensityFunctions.BeardifierMarker.class, Beardifier.class, DensityFunctions.BlendAlpha.class, DensityFunctions.BlendOffset.class
+        DensityFunctions.BeardifierMarker.class, Beardifier.class, DensityFunctions.BlendAlpha.class, DensityFunctions.BlendOffset.class,
+        NoiseChunk.ColumnNoise.class // Knowledge - column noise: a cache of a noise leaf, values only depend on the position
     );
     /** leaves whose vanilla fillArray is exactly contextProvider.fillAllDirectly(array, this) */
     private static final Set<Class<?>> FILL_DIRECTLY_LEAVES = Set.of(
         DensityFunctions.Noise.class, DensityFunctions.Shift.class, DensityFunctions.ShiftA.class, DensityFunctions.ShiftB.class,
         DensityFunctions.YClampedGradient.class, BlendedNoise.class, DensityFunctions.EndIslandDensityFunction.class, DensityFunctions.Spline.class,
         DensityFunctions.FindTopSurface.class, NoiseChunk.FlatCache.class, NoiseChunk.CacheAllInCell.class, NoiseChunk.BlendAlpha.class,
-        NoiseChunk.BlendOffset.class
+        NoiseChunk.BlendOffset.class, NoiseChunk.ColumnNoise.class
     );
     private static volatile boolean failureLogged;
 
@@ -366,6 +367,7 @@ public final class DensityFunctionCompiler {
         private final List<Integer> directIds = new ArrayList<>();
         private final Set<Node> fillNeeded = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
         private int boundCount;
+        private boolean fusedMode; // Knowledge - cell fusion: emitting the k<slot> compute methods of the fused cell loop
         private ClassWriter cw;
 
         Generator(Node root) {
@@ -459,6 +461,28 @@ public final class DensityFunctionCompiler {
 
             mv = this.cw.visitMethod(Opcodes.ACC_PUBLIC, "fillArray", FILL_D, null, null);
             mv.visitCode();
+            if (!(this.root instanceof Leaf) && !this.root.pure() && cellFusable(this.root)) {
+                // Knowledge - cell fusion: while a cell is filled (provider = the chunk itself, fillingCell) every node of this tree is a
+                // pure function of the in-cell position (interpolators read their cell corners), so the whole tree is computed block by
+                // block in one loop, like a pure subtree, instead of one array pass per node: the same values (see cellFusable)
+                Label normal = new Label();
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Object", "getClass", "()Ljava/lang/Class;", false);
+                mv.visitLdcInsn(Type.getObjectType(CHUNK));
+                mv.visitJumpInsn(Opcodes.IF_ACMPNE, normal);
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, CHUNK);
+                mv.visitFieldInsn(Opcodes.GETFIELD, CHUNK, "fillingCell", "Z");
+                mv.visitJumpInsn(Opcodes.IFEQ, normal);
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, CHUNK);
+                mv.visitFieldInsn(Opcodes.GETFIELD, CHUNK, "cellFusion", "Z");
+                mv.visitJumpInsn(Opcodes.IFEQ, normal);
+                this.fusedMode = true;
+                this.directFill(mv, this.root);
+                this.fusedMode = false;
+                mv.visitLabel(normal);
+            }
             mv.visitVarInsn(Opcodes.ALOAD, 0);
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitVarInsn(Opcodes.ALOAD, 2);
@@ -467,6 +491,16 @@ public final class DensityFunctionCompiler {
             mv.visitMaxs(0, 0);
             mv.visitEnd();
 
+            if (!(this.root instanceof Leaf) && !this.root.pure() && cellFusable(this.root)) {
+                // Knowledge - cell fusion: the compute methods of the fused cell loop (same code, interpolators as cellValue())
+                this.fusedMode = true;
+                for (Node node : this.order) {
+                    if (!(node instanceof Leaf)) {
+                        this.computeMethod(node);
+                    }
+                }
+                this.fusedMode = false;
+            }
             this.computeNodeMethod();
             this.cw.visitEnd();
             return this.cw.toByteArray();
@@ -509,6 +543,12 @@ public final class DensityFunctionCompiler {
 
         /** pushes node.compute(context); pushContext pushes the context (evaluated exactly once) */
         private void emitCompute(MethodVisitor mv, Node node, Runnable pushContext) {
+            if (this.fusedMode && isInterpolator(node)) {
+                // Knowledge - cell fusion: in the fused cell loop an interpolator's compute(chunk) is its cell lerp, see NoiseInterpolator.cellValue
+                this.loadField(mv, node);
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, Type.getInternalName(NoiseChunk.NoiseInterpolator.class), "cellValue", "()D", false);
+                return;
+            }
             if (node instanceof Leaf leaf) {
                 this.loadField(mv, node);
                 pushContext.run();
@@ -521,7 +561,7 @@ public final class DensityFunctionCompiler {
             } else {
                 mv.visitVarInsn(Opcodes.ALOAD, 0);
                 pushContext.run();
-                mv.visitMethodInsn(Opcodes.INVOKESPECIAL, SELF, "c" + this.slots.get(node), NODE_COMPUTE_D, false);
+                mv.visitMethodInsn(Opcodes.INVOKESPECIAL, SELF, (this.fusedMode ? "k" : "c") + this.slots.get(node), NODE_COMPUTE_D, false);
             }
         }
 
@@ -546,7 +586,7 @@ public final class DensityFunctionCompiler {
         }
 
         private void computeMethod(Node node) {
-            MethodVisitor mv = this.cw.visitMethod(Opcodes.ACC_PRIVATE, "c" + this.slots.get(node), NODE_COMPUTE_D, null, null);
+            MethodVisitor mv = this.cw.visitMethod(Opcodes.ACC_PRIVATE, (this.fusedMode ? "k" : "c") + this.slots.get(node), NODE_COMPUTE_D, null, null);
             mv.visitCode();
             Runnable ctx = () -> mv.visitVarInsn(Opcodes.ALOAD, 1);
             switch (node) {
@@ -745,6 +785,22 @@ public final class DensityFunctionCompiler {
             return node instanceof Shifted || node.pure();
         }
 
+        /**
+         * Knowledge - cell fusion: every leaf is a pure leaf, an interpolator (in a cell fill: the lerp of its corners at the in-cell
+         * position) or a FlatCache (a table by x/z); then each node's value at a block only depends on the block, and computing the
+         * tree per block gives what the per-node array fills give (same compute()/fill() operations per value, as for pure subtrees).
+         */
+        private static boolean cellFusable(Node node) {
+            return switch (node) {
+                case Leaf leaf -> leaf.pure() || isInterpolator(leaf) || leaf.type() == NoiseChunk.FlatCache.class;
+                case Bin bin -> cellFusable(bin.a()) && cellFusable(bin.b());
+                case Xform x -> cellFusable(x.in());
+                case CtxXform x -> cellFusable(x.in());
+                case Range r -> cellFusable(r.in()) && cellFusable(r.yes()) && cellFusable(r.no());
+                case Shifted s -> cellFusable(s.x()) && cellFusable(s.y()) && cellFusable(s.z());
+            };
+        }
+
         private static boolean isInterpolator(Node node) {
             return node instanceof Leaf leaf && leaf.type() == NoiseChunk.NoiseInterpolator.class;
         }
@@ -793,6 +849,15 @@ public final class DensityFunctionCompiler {
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, interpolator, "noiseChunk", "()L" + CHUNK + ";", false);
                 mv.visitFieldInsn(Opcodes.GETFIELD, CHUNK, "fillingCell", "Z");
                 mv.visitJumpInsn(Opcodes.IFEQ, notFilling);
+                // Knowledge - cell interpolation: the interpolator fills the whole cell itself when it can (same values, see fillCell)
+                Label slowFill = new Label();
+                this.loadField(mv, node);
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, interpolator, "fillCell", "([D" + PROVIDER_D + ")Z", false);
+                mv.visitJumpInsn(Opcodes.IFEQ, slowFill);
+                mv.visitInsn(Opcodes.RETURN);
+                mv.visitLabel(slowFill);
                 this.directFill(mv, node);
                 mv.visitLabel(notFilling);
                 this.loadField(mv, node);

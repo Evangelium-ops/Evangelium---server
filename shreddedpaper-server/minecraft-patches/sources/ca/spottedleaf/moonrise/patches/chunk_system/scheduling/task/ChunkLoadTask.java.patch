@@ -8,10 +8,13 @@
                  // run converters
                  final CompoundTag converted = this.world.getChunkSource().chunkMap.upgradeChunkTag(data);
  
-@@ -357,6 +_,12 @@
+@@ -357,6 +_,15 @@
                      new ChunkPos(this.chunkX, this.chunkZ)
                  );
  
++                if (io.multipaper.shreddedpaper.util.GenStats.ENABLED && chunk != null && !(chunk instanceof net.minecraft.world.level.chunk.ImposterProtoChunk)) {
++                    io.multipaper.shreddedpaper.util.GenStats.PROTO_RELOADS.incrementAndGet(); // Knowledge - generation counters
++                }
 +                // ShreddedPaper start - skip unchanged chunk saves
 +                if (chunk instanceof net.minecraft.world.level.chunk.ImposterProtoChunk imposter && currentVersion
 +                    && net.minecraft.world.level.chunk.LevelChunk.skipUnchangedChunkSaves() && chunkData.loadsUnchanged()) {

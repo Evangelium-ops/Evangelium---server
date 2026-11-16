@@ -1,0 +1,81 @@
+--- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightEngine.java
+@@ -276,12 +_,39 @@
+             final int chunkZ = ((index / 5) % 5) - this.chunkOffsetZ;
+             final int ySections = this.maxSection - this.minSection + 1;
+             final int chunkY = ((index / (5*5)) % (ySections + 2 + 2)) - this.chunkOffsetY;
+-            if ((nibble != null && nibble.updateVisible()) || this.notifyUpdateCache[index]) {
++            if ((nibble != null && nibble.updateVisible() && this.isChunkNibble(chunkX, chunkY, chunkZ, nibble)) || this.notifyUpdateCache[index]) { // ShreddedPaper - skip scratch nibbles
+                 lightAccess.onLightUpdate(this.skylightPropagator ? LightLayer.SKY : LightLayer.BLOCK, SectionPos.of(chunkX, chunkY, chunkZ));
+             }
+         }
+     }
+ 
++    // ShreddedPaper start - edge checks ignore corners next to unloaded chunks
++    private static final String IGNORE_UNLOADED_PROPERTY = System.getProperty("shreddedpaper.lightEdgeChecksIgnoreUnloaded");
++
++    private static boolean ignoreUnloadedCorners() {
++        if (IGNORE_UNLOADED_PROPERTY != null) {
++            return Boolean.parseBoolean(IGNORE_UNLOADED_PROPERTY);
++        }
++        final io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration config = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get();
++        return config != null && config.optimizations.lightEdgeChecksIgnoreUnloaded;
++    }
++    // ShreddedPaper end - edge checks ignore corners next to unloaded chunks
++
++    // ShreddedPaper start - skip scratch nibbles
++    // initNibble(..., initRemovedNibbles = true) puts a new nibble only into the cache (where rewriteNibbleCacheForSkylight removed
++    // a null one); it is never stored on the chunk, so its changes are visible to nobody and must not mark the chunk unsaved or
++    // send a light packet (they did on every load: the edge checks of each neighbour re-create it)
++    private boolean isChunkNibble(final int chunkX, final int chunkY, final int chunkZ, final SWMRNibbleArray nibble) {
++        if (!SWMRNibbleArray.onlyReportRealChanges()) {
++            return true;
++        }
++        final ChunkAccess chunk = this.getChunkInCache(chunkX, chunkZ);
++        final SWMRNibbleArray[] nibbles = chunk == null ? null : this.getNibblesOnChunk(chunk);
++        final int index = chunkY - this.minLightSection;
++        return nibbles == null || index < 0 || index >= nibbles.length || nibbles[index] == nibble;
++    }
++    // ShreddedPaper end - skip scratch nibbles
++
+     protected final void destroyCaches() {
+         Arrays.fill(this.sectionCache, null);
+         Arrays.fill(this.nibbleCache, null);
+@@ -514,6 +_,17 @@
+                 startX = chunkX << 4;
+             }
+ 
++            // ShreddedPaper start - edge checks ignore corners next to unloaded chunks
++            // the first and last column of this edge also touch the chunk beside the corner (on each side); calculateLightValue
++            // reads an unloaded chunk as dark air, so a LOWER answer there is not real: acting on it removed light that came from
++            // the unloaded chunk and came back when it loaded (rewriting both chunks on every visit). A higher answer is still
++            // trusted, and the corner is checked for real when the last of its chunks loads (that chunk checks its own edges).
++            final boolean ignoreUnloaded = ignoreUnloadedCorners();
++            final boolean currLowMissing = ignoreUnloaded && this.getChunkInCache(chunkX - incX, chunkZ - incZ) == null;
++            final boolean currHighMissing = ignoreUnloaded && this.getChunkInCache(chunkX + incX, chunkZ + incZ) == null;
++            final boolean neighbourLowMissing = ignoreUnloaded && this.getChunkInCache(chunkX + neighbourOffX - incX, chunkZ + neighbourOffZ - incZ) == null;
++            final boolean neighbourHighMissing = ignoreUnloaded && this.getChunkInCache(chunkX + neighbourOffX + incX, chunkZ + neighbourOffZ + incZ) == null;
++            // ShreddedPaper end - edge checks ignore corners next to unloaded chunks
+             int centerDelayedChecks = 0;
+             int neighbourDelayedChecks = 0;
+             for (int currY = chunkY << 4, maxY = currY | 15; currY <= maxY; ++currY) {
+@@ -536,13 +_,17 @@
+                     // affect later calculate light value operations. While they don't affect it in a behaviourly significant
+                     // way, they do have a negative performance impact due to simply queueing more values
+ 
+-                    if (this.calculateLightValue(lightAccess, currX, currY, currZ, currentLevel) != currentLevel) {
++                    // ShreddedPaper start - edge checks ignore corners next to unloaded chunks
++                    final int centerCalculated = this.calculateLightValue(lightAccess, currX, currY, currZ, currentLevel);
++                    if (centerCalculated != currentLevel && (centerCalculated > currentLevel || !(i == 0 ? currLowMissing : i == 15 && currHighMissing))) {
+                         this.chunkCheckDelayedUpdatesCenter[centerDelayedChecks++] = currentIndex;
+                     }
+ 
+-                    if (this.calculateLightValue(lightAccess, neighbourX, currY, neighbourZ, neighbourLevel) != neighbourLevel) {
++                    final int neighbourCalculated = this.calculateLightValue(lightAccess, neighbourX, currY, neighbourZ, neighbourLevel);
++                    if (neighbourCalculated != neighbourLevel && (neighbourCalculated > neighbourLevel || !(i == 0 ? neighbourLowMissing : i == 15 && neighbourHighMissing))) {
+                         this.chunkCheckDelayedUpdatesNeighbour[neighbourDelayedChecks++] = neighbourIndex;
+                     }
++                    // ShreddedPaper end - edge checks ignore corners next to unloaded chunks
+                 }
+             }
+ 

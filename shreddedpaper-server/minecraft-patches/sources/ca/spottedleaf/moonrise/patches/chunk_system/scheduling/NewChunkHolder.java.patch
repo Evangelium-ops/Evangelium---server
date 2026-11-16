@@ -24,6 +24,15 @@
  import java.util.concurrent.atomic.AtomicBoolean;
  import java.util.function.Consumer;
  
+@@ -763,6 +_,8 @@
+     }
+ 
+     private boolean inUnloadQueue = false;
++    // Knowledge - generation unload grace: the generation status that last got a grace (one grace per status), under the scheduling lock
++    ChunkStatus unloadGraceStatus;
+ 
+     void removeFromUnloadQueue() {
+         this.inUnloadQueue = false;
 @@ -777,13 +_,13 @@
              // ensure in unload queue
              if (!this.inUnloadQueue) {

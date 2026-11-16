@@ -294,6 +294,7 @@ public final class IntraRegion {
                 LockSupport.park(schedule);
             }
         }
+        net.minecraft.world.entity.PhysicsCache.bump(); // Knowledge - helpers changed blocks in this region: the owner's caches start over
         Throwable t = failure.get();
         if (t instanceof RuntimeException r) {
             throw r;
@@ -319,6 +320,7 @@ public final class IntraRegion {
                     if (TickTimings.enabled()) {
                         counter.incrementAndGet();
                     }
+                    net.minecraft.world.entity.PhysicsCache.bump(); // Knowledge - a new work unit: other threads changed blocks elsewhere meanwhile
                     for (T item : schedule.work.get(i)) {
                         work.run(item);
                     }

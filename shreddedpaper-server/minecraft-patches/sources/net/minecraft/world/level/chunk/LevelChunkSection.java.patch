@@ -1,13 +1,38 @@
 --- a/net/minecraft/world/level/chunk/LevelChunkSection.java
 +++ b/net/minecraft/world/level/chunk/LevelChunkSection.java
-@@ -18,6 +_,7 @@
+@@ -18,6 +_,24 @@
      private short tickingBlockCount;
      private short tickingFluidCount;
      public final PalettedContainer<BlockState> states;
++    // Knowledge start - fluid counts: entity fluid checks skip sections without the fluid they look for (PhysicsOptimizations)
++    public short knowledge$fluidCount, knowledge$waterCount, knowledge$lavaCount;
++    private void knowledge$countFluid(final FluidState fluid, final int delta) {
++        if (fluid.isEmpty()) return;
++        this.knowledge$fluidCount += (short)delta;
++        final net.minecraft.world.level.material.Fluid type = fluid.getType();
++        if (type == net.minecraft.world.level.material.Fluids.WATER || type == net.minecraft.world.level.material.Fluids.FLOWING_WATER) this.knowledge$waterCount += (short)delta;
++        else if (type == net.minecraft.world.level.material.Fluids.LAVA || type == net.minecraft.world.level.material.Fluids.FLOWING_LAVA) this.knowledge$lavaCount += (short)delta;
++    }
++    private static int knowledge$fluidKind(final FluidState fluid) { // 0 none, 1 water, 2 lava, 3 other: the counts only change with the kind
++        if (fluid.isEmpty()) return 0;
++        final net.minecraft.world.level.material.Fluid type = fluid.getType();
++        if (type == net.minecraft.world.level.material.Fluids.WATER || type == net.minecraft.world.level.material.Fluids.FLOWING_WATER) return 1;
++        if (type == net.minecraft.world.level.material.Fluids.LAVA || type == net.minecraft.world.level.material.Fluids.FLOWING_LAVA) return 2;
++        return 3;
++    }
++    // Knowledge end
 +    public int knowledge$changes; // Knowledge - counts block changes, so a resting entity can tell its surroundings are unchanged (Entity resting cache)
      private PalettedContainer<Holder<Biome>> biomes; // CraftBukkit - read/write
  
      // Paper start - block counting
+@@ -48,6 +_,7 @@
+         this.nonEmptyBlockCount = section.nonEmptyBlockCount;
+         this.tickingBlockCount = section.tickingBlockCount;
+         this.tickingFluidCount = section.tickingFluidCount;
++        this.knowledge$fluidCount = section.knowledge$fluidCount; this.knowledge$waterCount = section.knowledge$waterCount; this.knowledge$lavaCount = section.knowledge$lavaCount; // Knowledge
+         this.states = section.states.copy();
+         this.biomes = section.biomes.copy();
+     }
 @@ -136,6 +_,7 @@
              blockState = this.states.getAndSetUnchecked(x, y, z, state);
          }
@@ -16,7 +41,15 @@
          FluidState fluidState = blockState.getFluidState();
          FluidState fluidState1 = state.getFluidState();
          if (!blockState.isAir()) {
-@@ -181,6 +_,57 @@
+@@ -148,6 +_,7 @@
+         if (!!fluidState.isRandomlyTicking()) { // Paper - block counting
+             this.tickingFluidCount--;
+         }
++        if (fluidState != fluidState1 && knowledge$fluidKind(fluidState) != knowledge$fluidKind(fluidState1)) { this.knowledge$countFluid(fluidState, -1); this.knowledge$countFluid(fluidState1, 1); } // Knowledge - level changes of flowing water/lava keep the counts
+ 
+         if (!state.isAir()) {
+             this.nonEmptyBlockCount++;
+@@ -181,6 +_,58 @@
          return this.tickingFluidCount > 0;
      }
  
@@ -58,6 +91,7 @@
 +            if (!fluid.isEmpty() && fluid.isRandomlyTicking()) {
 +                this.tickingFluidCount += (short)paletteCount;
 +            }
++            this.knowledge$countFluid(fluid, paletteCount); // Knowledge
 +        }
 +        if (ticking != null) {
 +            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
@@ -74,6 +108,14 @@
      public void recalcBlockCounts() {
          // Paper start - block counting
          // reset, then recalculate
+@@ -188,6 +_,7 @@
+         this.tickingBlockCount = (short)0;
+         this.tickingFluidCount = (short)0;
+         this.specialCollidingBlocks = (short)0;
++        this.knowledge$fluidCount = this.knowledge$waterCount = this.knowledge$lavaCount = (short)0; // Knowledge
+         this.tickingBlocks.clear();
+ 
+         if (this.maybeHas((final BlockState state) -> !state.isAir())) {
 @@ -196,6 +_,12 @@
              final int paletteSize = palette.getSize();
              final net.minecraft.util.BitStorage storage = data.storage();
@@ -87,3 +129,11 @@
              final it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<it.unimi.dsi.fastutil.shorts.ShortArrayList> counts;
              if (paletteSize == 1) {
                  counts = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(1);
+@@ -236,6 +_,7 @@
+                 }
+ 
+                 final FluidState fluid = state.getFluidState();
++                this.knowledge$countFluid(fluid, paletteCount); // Knowledge
+ 
+                 if (!fluid.isEmpty()) {
+                     //this.nonEmptyBlockCount += count; // fix vanilla bug: make non-empty block count correct
