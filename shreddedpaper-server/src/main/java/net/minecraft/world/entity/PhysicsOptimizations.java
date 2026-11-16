@@ -1,21 +1,22 @@
 package net.minecraft.world.entity;
 
 import io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration;
+import io.multipaper.shreddedpaper.util.DevSwitch;
 
 /**
- * Knowledge - switches of the entity movement speed-ups (shreddedpaper.yml optimizations section). A -Dshreddedpaper.<name>=true/false
- * property wins over the config. All of them give the same movement results; the switches exist to compare and to back out.
+ * Knowledge - the entity movement speed-ups, always on (DevSwitch names for developer benchmarks only). All of them give the same
+ * movement results.
  * -Dshreddedpaper.verifyPhysics=true recomputes every shortcut the vanilla way and throws on a difference (tests only).
  */
 public final class PhysicsOptimizations {
-    private static final String AIR_WALK = System.getProperty("shreddedpaper.airBlockWalkSkip");
-    private static final String FLUID_COUNTS = System.getProperty("shreddedpaper.fluidSectionCounts");
-    private static final String SHAPES = System.getProperty("shreddedpaper.contextFreeShapes");
-    private static final String MEMO = System.getProperty("shreddedpaper.tickThreadCheckMemo");
-    private static final String NO_POS_LOCK = System.getProperty("shreddedpaper.noPosLock");
-    private static final String FLOW = System.getProperty("shreddedpaper.flowCache");
-    private static final String WATER_WALK = System.getProperty("shreddedpaper.waterWalkSkip");
-    private static final String ON_POS = System.getProperty("shreddedpaper.onPosMemo");
+    private static final boolean AIR_WALK = DevSwitch.on("air-block-walk-skip");
+    private static final boolean FLUID_COUNTS = DevSwitch.on("fluid-section-counts");
+    private static final boolean SHAPES = DevSwitch.on("context-free-shapes");
+    private static final boolean MEMO = DevSwitch.on("tick-thread-check-memo");
+    private static final boolean NO_POS_LOCK = DevSwitch.on("no-pos-lock");
+    private static final boolean FLOW = DevSwitch.on("flow-cache");
+    private static final boolean WATER_WALK = DevSwitch.on("water-walk-skip");
+    private static final boolean ON_POS = DevSwitch.on("on-pos-memo");
     public static final boolean VERIFY = Boolean.getBoolean("shreddedpaper.verifyPhysics");
     /** Tests only: deliberately break one shortcut (air, fluid, shape) to prove verifyPhysics catches it. */
     public static final String PLANT = System.getProperty("shreddedpaper.physicsPlantBug", "");
@@ -69,15 +70,11 @@ public final class PhysicsOptimizations {
     }
 
     public static boolean airBlockWalkSkip() {
-        if (AIR_WALK != null) return Boolean.parseBoolean(AIR_WALK);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.airBlockWalkSkip;
+        return AIR_WALK && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean fluidSectionCounts() {
-        if (FLUID_COUNTS != null) return Boolean.parseBoolean(FLUID_COUNTS);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.fluidSectionCounts;
+        return FLUID_COUNTS && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean contextFreeShapes() {
@@ -86,39 +83,27 @@ public final class PhysicsOptimizations {
                 if (!selfTested) { selfTested = true; selfTest(); }
             }
         }
-        if (SHAPES != null) return Boolean.parseBoolean(SHAPES);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.contextFreeShapes;
+        return SHAPES && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean tickThreadCheckMemo() {
-        if (MEMO != null) return Boolean.parseBoolean(MEMO);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.tickThreadCheckMemo;
+        return MEMO && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean noPosLock() {
-        if (NO_POS_LOCK != null) return Boolean.parseBoolean(NO_POS_LOCK);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.noPosLock;
+        return NO_POS_LOCK && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean flowCache() {
-        if (FLOW != null) return Boolean.parseBoolean(FLOW);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.flowCache;
+        return FLOW && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean waterWalkSkip() {
-        if (WATER_WALK != null) return Boolean.parseBoolean(WATER_WALK);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.waterWalkSkip;
+        return WATER_WALK && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean onPosMemo() {
-        if (ON_POS != null) return Boolean.parseBoolean(ON_POS);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.onPosMemo;
+        return ON_POS && ShreddedPaperConfiguration.get() != null;
     }
 
     /** verifyPhysics: the context-free shape of a state equals what the block answers for this entity at this position. */

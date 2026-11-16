@@ -1,19 +1,19 @@
 package net.minecraft.world.level.levelgen;
 
 import io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration;
+import io.multipaper.shreddedpaper.util.DevSwitch;
 
 /**
- * Knowledge - switches of the chunk generation speed-ups in surface rules and biome lookup (shreddedpaper.yml
- * optimizations section). A -Dshreddedpaper.<name>=true/false property wins over the config; the forced fields are test hooks
- * that win over both. All of them give bit-identical terrain; the switches exist to compare and to back out.
+ * Knowledge - the chunk generation speed-ups, always on (DevSwitch names for developer benchmarks only); the forced fields are
+ * test hooks that win over that. All of them give bit-identical terrain.
  */
 public final class WorldgenOptimizations {
-    private static final String SURFACE = System.getProperty("shreddedpaper.surfaceRuleCompiler");
-    private static final String BIOME = System.getProperty("shreddedpaper.biomeLookupCache");
-    private static final String COLUMN_NOISE = System.getProperty("shreddedpaper.columnNoise");
-    private static final String CELL_INTERPOLATION = System.getProperty("shreddedpaper.cellInterpolation");
-    private static final String AQUIFER_CENTRE_CACHE = System.getProperty("shreddedpaper.aquiferCentreCache");
-    private static final String CELL_FUSION = System.getProperty("shreddedpaper.cellFusion");
+    private static final boolean SURFACE = DevSwitch.on("surface-rule-compiler");
+    private static final boolean BIOME = DevSwitch.on("biome-lookup-cache");
+    private static final boolean COLUMN_NOISE = DevSwitch.on("column-noise");
+    private static final boolean CELL_INTERPOLATION = DevSwitch.on("cell-interpolation");
+    private static final boolean AQUIFER_CENTRE_CACHE = DevSwitch.on("aquifer-centre-cache");
+    private static final boolean CELL_FUSION = DevSwitch.on("cell-fusion");
 
     public static volatile Boolean forcedSurface;
     public static volatile Boolean forcedBiome;
@@ -28,48 +28,36 @@ public final class WorldgenOptimizations {
     public static boolean surfaceRules() {
         Boolean forced = forcedSurface;
         if (forced != null) return forced;
-        if (SURFACE != null) return Boolean.parseBoolean(SURFACE);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.surfaceRuleCompiler;
+        return SURFACE && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean biome() {
         Boolean forced = forcedBiome;
         if (forced != null) return forced;
-        if (BIOME != null) return Boolean.parseBoolean(BIOME);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.biomeLookupCache;
+        return BIOME && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean columnNoise() {
         Boolean forced = forcedColumnNoise;
         if (forced != null) return forced;
-        if (COLUMN_NOISE != null) return Boolean.parseBoolean(COLUMN_NOISE);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.columnNoise;
+        return COLUMN_NOISE && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean aquiferCentreCache() {
         Boolean forced = forcedAquiferCentreCache;
         if (forced != null) return forced;
-        if (AQUIFER_CENTRE_CACHE != null) return Boolean.parseBoolean(AQUIFER_CENTRE_CACHE);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.aquiferCentreCache;
+        return AQUIFER_CENTRE_CACHE && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean cellFusion() {
         Boolean forced = forcedCellFusion;
         if (forced != null) return forced;
-        if (CELL_FUSION != null) return Boolean.parseBoolean(CELL_FUSION);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.cellFusion;
+        return CELL_FUSION && ShreddedPaperConfiguration.get() != null;
     }
 
     public static boolean cellInterpolation() {
         Boolean forced = forcedCellInterpolation;
         if (forced != null) return forced;
-        if (CELL_INTERPOLATION != null) return Boolean.parseBoolean(CELL_INTERPOLATION);
-        ShreddedPaperConfiguration config = ShreddedPaperConfiguration.get();
-        return config != null && config.optimizations.cellInterpolation;
+        return CELL_INTERPOLATION && ShreddedPaperConfiguration.get() != null;
     }
 }
