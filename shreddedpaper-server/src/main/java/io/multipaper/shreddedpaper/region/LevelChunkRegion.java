@@ -2,6 +2,7 @@ package io.multipaper.shreddedpaper.region;
 
 import ca.spottedleaf.concurrentutil.executor.queue.PrioritisedTaskQueue;
 import ca.spottedleaf.moonrise.common.list.IteratorSafeOrderedReferenceSet;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -32,7 +33,9 @@ public class LevelChunkRegion {
     private final ServerLevel level;
     private final RegionPos regionPos;
     private final List<LevelChunk> levelChunks = new ArrayList<>(RegionPos.REGION_SIZE * RegionPos.REGION_SIZE);
-    private final LongOpenHashSet playerTickingChunkRequests = new LongOpenHashSet(); // ChunkPos.longKey
+    // Knowledge - ChunkPos.longKey -> how many players request it: every player in range adds and removes his own request (NearbyPlayers
+    // SPAWN_RANGE), so a plain set lost a chunk for everyone when one of two players left, and an AFK player never re-adds it (no natural spawning)
+    private final Long2IntOpenHashMap playerTickingChunkRequests = new Long2IntOpenHashMap();
     private final IteratorSafeOrderedReferenceSet<Entity> tickingEntities = new IteratorSafeOrderedReferenceSet<>(); // Use IteratorSafeOrderedReferenceSet to maintain entity tick order
     private final Set<Entity> trackedEntities = new ObjectOpenHashSet<>();
     private final ConcurrentLinkedQueue<DelayedTask> scheduledTasks = new ConcurrentLinkedQueue<>(); // Writable tasks
@@ -68,20 +71,30 @@ public class LevelChunkRegion {
         }
     }
 
+    private static final boolean PLANT_BUG = Boolean.getBoolean("shreddedpaper.spawnRequestsPlantBug"); // Knowledge - proves SpawnRequestCheck catches the old bug
+
     public synchronized void addPlayerTickingRequest(final ChunkPos chunkPos) {
-        this.playerTickingChunkRequests.add(chunkPos.toLong());
+        this.playerTickingChunkRequests.addTo(chunkPos.toLong(), 1);
     }
 
     public synchronized void removePlayerTickingRequest(final ChunkPos chunkPos) {
-        this.playerTickingChunkRequests.remove(chunkPos.toLong());
+        final long key = chunkPos.toLong();
+        if (this.playerTickingChunkRequests.addTo(key, -1) <= 1 || PLANT_BUG) { // PLANT_BUG: test hook, the old set behaviour
+            this.playerTickingChunkRequests.remove(key);
+        }
     }
 
-    public boolean isPlayerTickingRequested(final ChunkPos chunkPos) {
+    /** Knowledge - a copy of the request counts, for SpawnRequestCheck */
+    public synchronized Long2IntOpenHashMap copyPlayerTickingRequests() {
+        return new Long2IntOpenHashMap(this.playerTickingChunkRequests);
+    }
+
+    public synchronized boolean isPlayerTickingRequested(final ChunkPos chunkPos) {
         if (chunkPos.getRegionPos().toLong() != this.regionPos.toLong()) {
             throw new IllegalStateException("Chunk %s is not in region %s".formatted(chunkPos, this.regionPos));
         }
 
-        return this.playerTickingChunkRequests.contains(chunkPos.toLong());
+        return this.playerTickingChunkRequests.containsKey(chunkPos.toLong());
     }
 
     public synchronized void addTickingEntity(Entity entity) {

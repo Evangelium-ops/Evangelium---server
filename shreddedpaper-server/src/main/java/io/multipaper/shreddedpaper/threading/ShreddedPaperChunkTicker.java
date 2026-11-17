@@ -43,6 +43,7 @@ public class ShreddedPaperChunkTicker {
 
     public CompletableFuture<Void> tickChunks(final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         ServerLevel level = this.serverChunkCache.chunkMap.level;
+        io.multipaper.shreddedpaper.region.SpawnRequestCheck.maybeCheck(level); // Knowledge - test hook -Dshreddedpaper.verifySpawnRequests
         final long timingsStart = System.nanoTime(); // Knowledge - tick timings
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
