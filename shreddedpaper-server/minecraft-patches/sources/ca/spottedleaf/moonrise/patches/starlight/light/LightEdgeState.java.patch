@@ -1,0 +1,162 @@
+--- /dev/null
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/LightEdgeState.java
+@@ -1,0 +_,159 @@
++package ca.spottedleaf.moonrise.patches.starlight.light;
++
++import java.util.Arrays;
++import java.util.concurrent.atomic.AtomicLong;
++
++/**
++ * Per chunk: a light-edge version that changes whenever the chunk's light really changes or a block changes in a way the light
++ * engine is told about, and, per light engine and side, the versions of the 6 chunks a load-time edge check of that side reads
++ * (the chunk, its neighbour and the 4 chunks beside the two corner columns) from the last time that side was checked clean.
++ * Saved in the chunk under {@link #TAG}. Versions come from one counter that starts above the clock at startup and only grows,
++ * so a chunk never gets the same version twice, also after a crash lost some of its newer versions.
++ */
++public final class LightEdgeState {
++
++    public static final String TAG = "shreddedpaper.light_edges";
++    public static final int SIDES = 4;
++    public static final int PER_SIDE = 6;
++    public static final int AROUND = 9;   // the chunk and its 8 neighbours, 0 = not loaded
++    private static final int SIDE_RECORDS = 2 * SIDES * PER_SIDE;   // [engine: 0 sky, 1 block][side][chunk]
++    private static final int RECORDS = SIDE_RECORDS + 2 * AROUND;   // then [engine][9 chunks around]
++    // versions are unique for the whole server (all worlds) across restarts and clock steps: the counter starts at
++    // max(clock << 20, the high-water mark saved by earlier runs) and a block of versions is reserved in the file before any of
++    // it is handed out, so even a crash right after cannot hand out a version twice
++    private static final java.nio.file.Path HIGH_WATER_FILE = java.nio.file.Path.of("shreddedpaper-light-edge-versions.txt");
++    private static final long RESERVE = 1L << 32;
++    private static final AtomicLong NEXT;
++    private static long reservedUntil;
++
++    static {
++        long saved = 0L;
++        try {
++            saved = Long.parseLong(java.nio.file.Files.readString(HIGH_WATER_FILE).trim());
++        } catch (final Exception ignored) {
++            // no file yet (or unreadable): the clock alone
++        }
++        final long start = Math.max(saved, System.currentTimeMillis() << 20);
++        NEXT = new AtomicLong(start);
++        reservedUntil = start;   // nothing of this run is reserved yet; the first save reserves (no file while nothing is saved)
++    }
++
++    private static synchronized void reserve(final long needed) {
++        if (needed < reservedUntil) {
++            return;
++        }
++        final long until = needed + RESERVE;
++        try {
++            final java.nio.file.Path tmp = HIGH_WATER_FILE.resolveSibling(HIGH_WATER_FILE.getFileName() + ".tmp");
++            java.nio.file.Files.writeString(tmp, Long.toString(until));
++            java.nio.file.Files.move(tmp, HIGH_WATER_FILE, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
++        } catch (final java.io.IOException ex) {
++            throw new IllegalStateException("cannot store the light edge version high-water mark", ex);
++        }
++        reservedUntil = until;
++    }
++
++    private static long nextVersion() {
++        return NEXT.incrementAndGet();
++    }
++
++    // measurement counters (side checks of full edge checks): checked, all 6 chunks present, a matching record existed
++    public static final AtomicLong SIDES_CHECKED = new AtomicLong();
++    public static final AtomicLong SIDES_COMPLETE = new AtomicLong();
++    public static final AtomicLong SIDES_MATCHED = new AtomicLong();
++    public static final AtomicLong SIDES_RECORDED = new AtomicLong();
++    // relaxed side rule: chunk and neighbour loaded (the only sides where the check does work), and of those matching
++    public static final AtomicLong SIDES_PAIR = new AtomicLong();
++    public static final AtomicLong SIDES_PAIR_MATCHED = new AtomicLong();
++    // whole-chunk rule: full edge checks with at least one neighbour loaded, and of those the 9 chunks around equal the record
++    public static final AtomicLong CHUNKS_WITH_NEIGHBOUR = new AtomicLong();
++    public static final AtomicLong CHUNKS_STRICT9_MATCHED = new AtomicLong();
++
++    private volatile long version = nextVersion();
++    private final long[] records = new long[RECORDS];   // 0 = no record
++
++    public long version() {
++        return this.version;
++    }
++
++    public void bump() {
++        this.version = nextVersion();
++    }
++
++    // relaxed: slots 0 and 1 (chunk, neighbour) must equal; a corner slot that is 0 now (not loaded) is accepted, a loaded one must equal
++    public synchronized boolean matchesRelaxed(final int engine, final int side, final long[] versions) {
++        final int base = (engine * SIDES + side) * PER_SIDE;
++        if (this.records[base] == 0L || this.records[base] != versions[0] || this.records[base + 1] != versions[1]) {
++            return false;
++        }
++        for (int i = 2; i < PER_SIDE; ++i) {
++            if (versions[i] != 0L && this.records[base + i] != versions[i]) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    public synchronized boolean matchesAround(final int engine, final long[] around) {
++        final int base = SIDE_RECORDS + engine * AROUND;
++        if (this.records[base] == 0L) {
++            return false;
++        }
++        for (int i = 0; i < AROUND; ++i) {
++            if (this.records[base + i] != around[i]) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    public synchronized boolean recordAround(final int engine, final long[] around) {
++        final int base = SIDE_RECORDS + engine * AROUND;
++        final boolean first = this.records[base] == 0L;
++        System.arraycopy(around, 0, this.records, base, AROUND);
++        return first;
++    }
++
++    public synchronized boolean matches(final int engine, final int side, final long[] versions) {
++        final int base = (engine * SIDES + side) * PER_SIDE;
++        if (this.records[base] == 0L) {
++            return false;
++        }
++        for (int i = 0; i < PER_SIDE; ++i) {
++            if (this.records[base + i] != versions[i]) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    // records stay in memory and are saved with the next save the chunk gets for another reason (a stale or missing record on disk
++    // only means that side is checked again); returns whether this was the first record of that side
++    public synchronized boolean record(final int engine, final int side, final long[] versions) {
++        final int base = (engine * SIDES + side) * PER_SIDE;
++        final boolean first = this.records[base] == 0L;
++        System.arraycopy(versions, 0, this.records, base, PER_SIDE);
++        return first;
++    }
++
++    public synchronized long[] save() {
++        reserve(Math.max(this.version, NEXT.get()));   // the high-water mark on disk is above every version that can reach a chunk file
++        final long[] ret = new long[1 + RECORDS];
++        ret[0] = this.version;
++        System.arraycopy(this.records, 0, ret, 1, RECORDS);
++        return ret;
++    }
++
++    // only for light that was loaded as stored (lightCorrect); anything that does not look like ours is ignored
++    public synchronized void load(final long[] saved) {
++        if (saved == null || saved.length != 1 + RECORDS || saved[0] == 0L) {
++            return;
++        }
++        this.version = saved[0];
++        System.arraycopy(saved, 1, this.records, 0, RECORDS);
++    }
++
++    public synchronized void clearRecords() {
++        Arrays.fill(this.records, 0L);
++    }
++}

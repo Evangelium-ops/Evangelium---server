@@ -49,7 +49,7 @@
  
          if (!state.isAir()) {
              this.nonEmptyBlockCount++;
-@@ -181,6 +_,58 @@
+@@ -181,6 +_,120 @@
          return this.tickingFluidCount > 0;
      }
  
@@ -58,6 +58,35 @@
 +
 +    // same counts as the map version; the ticking positions end up in position order instead of palette-map order
 +    private void recalcBlockCountsSmallPalette(final Palette<BlockState> palette, final int paletteSize, final net.minecraft.util.BitStorage storage) {
++        // ShreddedPaper start - count only air when nothing else in the palette needs counting or positions
++        if (storage instanceof net.minecraft.util.SimpleBitStorage simple && countAirOnly()) {
++            boolean onlyAirMatters = true;
++            for (int id = 0; id < paletteSize; ++id) {
++                final BlockState state = palette.valueFor(id);
++                if (!state.isAir() && (state.isRandomlyTicking() || ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isSpecialCollidingBlock(state)
++                    || (!state.getFluidState().isEmpty() && state.getFluidState().isRandomlyTicking()))) {
++                    onlyAirMatters = false;
++                    break;
++                }
++            }
++            if (onlyAirMatters) {
++                int air = 0;
++                for (int id = 0; id < paletteSize; ++id) {
++                    if (palette.valueFor(id).isAir()) {
++                        air += countValue(simple, id);
++                    }
++                }
++                this.nonEmptyBlockCount = (short)(16 * 16 * 16 - air);   // ticking, fluid and special counts stay 0, no ticking positions
++                for (int id = 0; id < paletteSize; ++id) {   // Knowledge fluid counts (water/lava per section) as in the full count below
++                    final FluidState fluid = palette.valueFor(id).getFluidState();
++                    if (!fluid.isEmpty()) {
++                        this.knowledge$countFluid(fluid, countValue(simple, id));
++                    }
++                }
++                return;
++            }
++        }
++        // ShreddedPaper end - count only air when nothing else in the palette needs counting or positions
 +        final int[] ids = RECALC_IDS.get();
 +        storage.unpack(ids);
 +        final int[] counts = new int[256];
@@ -104,6 +133,39 @@
 +        }
 +    }
 +    // ShreddedPaper end - count with plain arrays
++
++    // ShreddedPaper start - count only air when nothing else in the palette needs counting or positions
++    private static final boolean COUNT_AIR_ONLY = io.multipaper.shreddedpaper.util.DevSwitch.on("fast-section-block-counts");
++
++    private static boolean countAirOnly() {
++        return COUNT_AIR_ONLY && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
++    }
++
++    // how many of the storage's entries equal value, straight on the packed longs (SWAR: a field is non-zero after xor with the
++    // value iff its top bit is set in ((x & low) + low) | x, where low holds every bit of a field except its top bit)
++    static int countValue(final net.minecraft.util.SimpleBitStorage storage, final int value) {
++        final int bits = storage.getBits();
++        final int perLong = 64 / bits;
++        long low = 0L, top = 0L, pattern = 0L;
++        for (int i = 0; i < perLong; ++i) {
++            low |= ((1L << (bits - 1)) - 1L) << (i * bits);
++            top |= 1L << (i * bits + bits - 1);
++            pattern |= ((long)value) << (i * bits);
++        }
++        final long[] raw = storage.getRaw();
++        int remaining = storage.getSize();
++        int count = 0;
++        for (int w = 0; w < raw.length && remaining > 0; ++w) {
++            final int fields = Math.min(perLong, remaining);
++            final long fieldTops = fields == perLong ? top : top & ((1L << (fields * bits)) - 1L);
++            final long x = raw[w] ^ pattern;
++            final long nonZero = (((x & low) + low) | x) & fieldTops;
++            count += fields - Long.bitCount(nonZero);
++            remaining -= fields;
++        }
++        return count;
++    }
++    // ShreddedPaper end - count only air when nothing else in the palette needs counting or positions
 +
      public void recalcBlockCounts() {
          // Paper start - block counting

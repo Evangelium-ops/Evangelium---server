@@ -1,6 +1,14 @@
 --- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
 +++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
-@@ -201,12 +_,20 @@
+@@ -93,6 +_,7 @@
+     List<CompoundTag> blockEntities,
+     CompoundTag structureData
+     , net.minecraft.nbt.@Nullable Tag persistentDataContainer // CraftBukkit - persistentDataContainer
++    , long @Nullable [] lightEdges // ShreddedPaper - light edge versions
+ ) {
+     private static final Codec<List<SavedTick<Block>>> BLOCK_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.BLOCK.byNameCodec()).listOf();
+     private static final Codec<List<SavedTick<Fluid>>> FLUID_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.FLUID.byNameCodec()).listOf();
+@@ -201,19 +_,37 @@
                      LevelChunkSection levelChunkSection;
                      if (byteOr >= level.getMinSectionY() && byteOr <= level.getMaxSectionY()) {
                          final BlockState[] presetBlockStates = serverLevel.chunkPacketBlockController.getPresetBlockStates(serverLevel, chunkPos, byteOr); // Paper - Anti-Xray - Add preset block states
@@ -24,10 +32,34 @@
                              )
                              .orElseGet(containerFactory::createForBlockStates);
                          PalettedContainer<Holder<Biome>> palettedContainerRo = compoundTag.getCompound("biomes") // CraftBukkit - read/write
-@@ -261,6 +_,27 @@
+                             .map(
+-                                compoundTag1 -> codec.parse(NbtOps.INSTANCE, compoundTag1)
++                                compoundTag1 -> {
++                                    // ShreddedPaper start - read biomes without the codec; the codec handles everything unusual
++                                    if (io.multipaper.shreddedpaper.util.FastPaletteCodec.fastBiomes()) {
++                                        PalettedContainer<Holder<Biome>> fast = io.multipaper.shreddedpaper.util.FastPaletteCodec.readBiomes(compoundTag1, serverLevel.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BIOME), containerFactory.biomeStrategy(), containerFactory.defaultBiome());
++                                        if (fast != null) {
++                                            return fast;
++                                        }
++                                    }
++                                    // ShreddedPaper end - read biomes without the codec
++                                    return codec.parse(NbtOps.INSTANCE, compoundTag1)
+                                     .promotePartial(string -> logErrors(chunkPos, byteOr, string))
+-                                    .getOrThrow(SerializableChunkData.ChunkReadException::new)
++                                    .getOrThrow(SerializableChunkData.ChunkReadException::new);
++                                }
+                             )
+                             .orElseGet(containerFactory::createForBiomes);
+                         levelChunkSection = new LevelChunkSection(palettedContainer, palettedContainerRo);
+@@ -257,9 +_,31 @@
+                 list4,
+                 compoundOrEmpty
+                 , tag.get("ChunkBukkitValues") // CraftBukkit - ChunkBukkitValues
++                , tag.getLongArray(ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState.TAG).orElse(null) // ShreddedPaper - light edge versions
+             );
          }
      }
- 
++
 +    // ShreddedPaper start - skip unchanged chunk saves
 +    // true when read() keeps everything as stored: nothing to upgrade, blend, retrogen, relight, post-process or rebuild
 +    public boolean loadsUnchanged() {
@@ -48,16 +80,53 @@
 +        return true;
 +    }
 +    // ShreddedPaper end - skip unchanged chunk saves
-+
+ 
      // Paper start - starlight
      private ProtoChunk loadStarlightLightData(final ServerLevel world, final ProtoChunk ret) {
+@@ -394,6 +_,11 @@
+             }
+         }
  
-@@ -584,7 +_,7 @@
++        // ShreddedPaper start - light edge versions: only valid together with the light stored beside them
++        if (this.lightCorrect && this.lightEdges != null && net.minecraft.world.level.chunk.LevelChunk.lightEdgeVersions()) {
++            chunkAccess.shreddedpaper$lightEdges().load(this.lightEdges);
++        }
++        // ShreddedPaper end - light edge versions
+         // CraftBukkit start - load chunk persistent data from nbt - SPIGOT-6814: Already load PDC here to account for 1.17 to 1.18 chunk upgrading.
+         if (this.persistentDataContainer instanceof CompoundTag compoundTag) {
+             chunkAccess.persistentDataContainer.putAll(compoundTag);
+@@ -558,6 +_,7 @@
+                 list1,
+                 compoundTag
+                 , persistentDataContainer // CraftBukkit - persistentDataContainer
++                , net.minecraft.world.level.chunk.LevelChunk.lightEdgeVersions() && chunk.isLightCorrect() ? chunk.shreddedpaper$lightEdges().save() : null // ShreddedPaper - light edge versions
+             );
+         }
+     }
+@@ -584,8 +_,15 @@
              CompoundTag compoundTag1 = new CompoundTag(); final CompoundTag sectionNBT = compoundTag1; // Paper - starlight - OBFHELPER
              LevelChunkSection levelChunkSection = sectionData.chunkSection;
              if (levelChunkSection != null) {
 -                compoundTag1.store("block_states", codec, levelChunkSection.getStates());
 +                compoundTag1.put("block_states", io.multipaper.shreddedpaper.util.FastPaletteCodec.writeBlockStates(levelChunkSection.getStates(), this.containerFactory.blockStatesStrategy())); // ShreddedPaper - write block states without the codec
++                // ShreddedPaper start - write biomes without the codec
++                CompoundTag fastBiomes = io.multipaper.shreddedpaper.util.FastPaletteCodec.fastBiomes() ? io.multipaper.shreddedpaper.util.FastPaletteCodec.writeBiomes(levelChunkSection.getBiomes(), this.containerFactory.biomeStrategy()) : null;
++                if (fastBiomes != null) {
++                    compoundTag1.put("biomes", fastBiomes);
++                } else {
                  compoundTag1.store("biomes", codec1, levelChunkSection.getBiomes());
++                }
++                // ShreddedPaper end - write biomes without the codec
              }
  
+             if (sectionData.blockLight != null) {
+@@ -639,6 +_,9 @@
+         compoundTag.put("Heightmaps", compoundTag2);
+         compoundTag.put("structures", this.structureData);
+         // CraftBukkit start - store chunk persistent data in nbt
++        if (this.lightEdges != null) { // ShreddedPaper - light edge versions
++            compoundTag.putLongArray(ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState.TAG, this.lightEdges); // ShreddedPaper - light edge versions
++        } // ShreddedPaper - light edge versions
+         if (this.persistentDataContainer != null) { // SPIGOT-6814: Always save PDC to account for 1.17 to 1.18 chunk upgrading.
+             compoundTag.put("ChunkBukkitValues", this.persistentDataContainer);
+         }
