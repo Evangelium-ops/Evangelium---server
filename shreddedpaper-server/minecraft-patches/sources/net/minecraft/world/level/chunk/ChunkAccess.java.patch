@@ -1,0 +1,17 @@
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -327,6 +_,14 @@
+         return true;
+     }
+ 
++    // ShreddedPaper start - light edge versions
++    private final ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState lightEdgeState = new ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState();
++
++    public ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState shreddedpaper$lightEdges() {
++        return this.lightEdgeState;
++    }
++    // ShreddedPaper end - light edge versions
++
+     public void markUnsaved() {
+         this.unsaved = true;
+     }

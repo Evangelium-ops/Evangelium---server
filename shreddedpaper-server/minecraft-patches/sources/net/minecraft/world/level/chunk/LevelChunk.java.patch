@@ -35,7 +35,7 @@
      private LevelChunk.UnsavedListener unsavedListener = chunkPos -> {};
      // CraftBukkit start
      public boolean mustNotSave;
-@@ -236,6 +_,30 @@
+@@ -236,6 +_,38 @@
          return this.level.paperConfig().chunks.fixedChunkInhabitedTime < 0 ? super.getInhabitedTime() : this.level.paperConfig().chunks.fixedChunkInhabitedTime;
      }
      // Paper end
@@ -48,6 +48,14 @@
 +    public static boolean skipUnchangedChunkSaves() {
 +        return SKIP_UNCHANGED_SAVES && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
 +    }
++
++    // ShreddedPaper start - light edge versions
++    private static final boolean LIGHT_EDGE_VERSIONS = io.multipaper.shreddedpaper.util.DevSwitch.on("light-edge-versions");
++
++    public static boolean lightEdgeVersions() {
++        return LIGHT_EDGE_VERSIONS && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
++    }
++    // ShreddedPaper end - light edge versions
 +
 +    // a chunk read from disk with nothing to upgrade or fix starts out saved: what is on disk is exactly what was loaded
 +    public void markLoadedUnchanged() {
@@ -74,6 +82,24 @@
                  Block block = state.getBlock();
                  this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING).update(i, y, i2, state);
                  this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES).update(i, y, i2, state);
+@@ -385,7 +_,7 @@
+                 this.heightmaps.get(Heightmap.Types.WORLD_SURFACE).update(i, y, i2, state);
+                 boolean hasOnlyAir1 = section.hasOnlyAir();
+                 if (hasOnlyAir != hasOnlyAir1) {
+-                    this.level.getChunkSource().getLightEngine().updateSectionStatus(pos, hasOnlyAir1);
++                    this.level.getChunkSource().getLightEngine().updateSectionStatus(pos, hasOnlyAir1); this.shreddedpaper$lightEdges().bump(); // ShreddedPaper - light edge versions
+                     this.level.getChunkSource().onSectionEmptinessChanged(this.chunkPos.x, SectionPos.blockToSectionCoord(y), this.chunkPos.z, hasOnlyAir1);
+                 }
+ 
+@@ -394,7 +_,7 @@
+                     profilerFiller.push("updateSkyLightSources");
+                     // Paper - rewrite chunk system
+                     profilerFiller.popPush("queueCheckLight");
+-                    this.level.getChunkSource().getLightEngine().checkBlock(pos);
++                    this.level.getChunkSource().getLightEngine().checkBlock(pos); this.shreddedpaper$lightEdges().bump(); // ShreddedPaper - light edge versions
+                     profilerFiller.pop();
+                 }
+ 
 @@ -421,7 +_,7 @@
                  if (!section.getBlockState(i, i1, i2).is(block)) {
                      return null;

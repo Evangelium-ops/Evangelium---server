@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.LongStream;
 import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -14,6 +15,7 @@ import net.minecraft.nbt.LongArrayTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -145,5 +147,73 @@ public final class FastPaletteCodec {
 
     private static <T extends Comparable<T>> String name(BlockState state, Property<T> property) {
         return property.getName(state.getValue(property));
+    }
+
+    // biomes: the same idea as block states (holderByNameCodec reads an Identifier and looks it up, writes the reference's key)
+    private static final boolean SWITCH_ON = io.multipaper.shreddedpaper.util.DevSwitch.on("fast-biome-codec");
+    private static volatile Registry<Biome> biomeRegistry;
+    private static final ConcurrentHashMap<String, Holder.Reference<Biome>> BIOMES_BY_NAME = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Holder.Reference<Biome>, StringTag> BIOME_NAMES = new ConcurrentHashMap<>();
+
+    public static boolean fastBiomes() {
+        return SWITCH_ON && io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.get() != null;
+    }
+
+    public static PalettedContainer<Holder<Biome>> readBiomes(CompoundTag tag, Registry<Biome> registry, Strategy<Holder<Biome>> strategy, Holder<Biome> defaultBiome) {
+        if (!(tag.get("palette") instanceof ListTag paletteTag) || paletteTag.isEmpty()) {
+            return null;
+        }
+        if (registry != biomeRegistry) {   // one registry per server; a new one (another server instance in tests) starts a new cache
+            BIOMES_BY_NAME.clear();
+            biomeRegistry = registry;
+        }
+        List<Holder<Biome>> palette = new ArrayList<>(paletteTag.size());
+        for (int i = 0, n = paletteTag.size(); i < n; i++) {
+            if (!(paletteTag.get(i) instanceof StringTag(String name))) {
+                return null;
+            }
+            Holder.Reference<Biome> biome = BIOMES_BY_NAME.get(name);
+            if (biome == null) {
+                Identifier id = Identifier.tryParse(name);
+                Optional<Holder.Reference<Biome>> holder = id == null ? Optional.empty() : registry.get(id);
+                if (holder.isEmpty()) {
+                    return null;   // the codec reports unknown biomes and falls back to the default
+                }
+                biome = holder.get();
+                BIOMES_BY_NAME.put(name, biome);
+            }
+            palette.add(biome);
+        }
+        Tag data = tag.get("data");
+        Optional<LongStream> storage;
+        if (data == null) {
+            storage = Optional.empty();
+        } else if (data instanceof LongArrayTag longs) {
+            storage = Optional.of(LongStream.of(longs.getAsLongArray()));
+        } else {
+            return null;
+        }
+        return PalettedContainer.unpack(strategy, new PalettedContainerRO.PackedData<>(palette, storage), defaultBiome, null).result().orElse(null);
+    }
+
+    public static CompoundTag writeBiomes(PalettedContainerRO<Holder<Biome>> container, Strategy<Holder<Biome>> strategy) {
+        PalettedContainerRO.PackedData<Holder<Biome>> packed = container.pack(strategy);
+        List<Holder<Biome>> entries = packed.paletteEntries();
+        ListTag palette = new ListTag();
+        for (int i = 0, n = entries.size(); i < n; i++) {
+            if (!(entries.get(i) instanceof Holder.Reference<Biome> reference)) {
+                return null;   // the codec reports unregistered holders
+            }
+            StringTag name = BIOME_NAMES.get(reference);
+            if (name == null) {
+                name = StringTag.valueOf(reference.key().identifier().toString());   // string tags are immutable, so one is shared
+                BIOME_NAMES.put(reference, name);
+            }
+            palette.add(name);
+        }
+        CompoundTag tag = new CompoundTag();
+        tag.put("palette", palette);
+        packed.storage().ifPresent(longs -> tag.put("data", new LongArrayTag(longs.toArray())));
+        return tag;
     }
 }
