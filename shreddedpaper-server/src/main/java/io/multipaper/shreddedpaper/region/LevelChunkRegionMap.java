@@ -52,6 +52,23 @@ public class LevelChunkRegionMap {
         });
     }
 
+    /**
+     * Knowledge - a player ticking request (natural spawning) must land in the region object that stays in the map: a region with no
+     * chunks, idle for 20 ticks, is dropped by its tick thread, and a request added to it after it was taken out would be lost for good.
+     * remove() re-checks emptiness under the write lock, so the request either keeps the region or is moved to the new one here.
+     */
+    public void addPlayerTickingRequest(net.minecraft.world.level.ChunkPos chunkPos) {
+        final RegionPos regionPos = chunkPos.getRegionPos();
+        while (true) {
+            final LevelChunkRegion region = getOrCreate(regionPos);
+            region.addPlayerTickingRequest(chunkPos);
+            if (get(regionPos) == region) {
+                return;
+            }
+            region.removePlayerTickingRequest(chunkPos); // dropped in between: undo and use the region that is in the map now
+        }
+    }
+
     public void remove(RegionPos regionPos) {
         regionsLock.write(() -> {
             LevelChunkRegion region = regions.remove(regionPos.longKey);
