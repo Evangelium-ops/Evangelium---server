@@ -1,6 +1,44 @@
 --- a/net/minecraft/world/level/NaturalSpawner.java
 +++ b/net/minecraft/world/level/NaturalSpawner.java
-@@ -177,7 +_,9 @@
+@@ -53,6 +_,37 @@
+ import org.slf4j.Logger;
+ 
+ public final class NaturalSpawner {
++    // Knowledge - near-first natural spawning without a serial walk. Paper (per-player mob spawns) tries a player's chunks nearest first, so
++    // when the monster cap is almost full the last free room goes to the chunks next to him (an AFK farm) and far chunks only get what the
++    // near ones left. Regions here spawn in parallel, so far chunks raced the near ones (a nether roof gold farm next to the player got about
++    // 40% fewer mobs). Emulated statistically: only when the room left (cap - count, the smallest over the players in range) is at most one
++    // pack, a chunk at Chebyshev chunk distance d > 2 from the nearest player in range tries with probability R^(d-2) (R fitted against
++    // Paper's spawn rates per distance ring, corner and centre of a region). With clear room nothing changes, so totals stay vanilla.
++    private static final boolean KNOWLEDGE_NEAR_FIRST = io.multipaper.shreddedpaper.util.DevSwitch.on("spawn-distance-gate");
++    private static final double KNOWLEDGE_GATE_R = Double.parseDouble(System.getProperty("shreddedpaper.spawnGateR", "0.75")); // hidden benchmark hook
++    private static final int KNOWLEDGE_GATE_PACK = Integer.getInteger("shreddedpaper.spawnGatePack", 4); // the usual largest monster pack; hidden benchmark hook
++
++    private static boolean knowledgeGatePasses(ServerLevel level, SpawnState state, MobCategory category, int room, ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange, ChunkPos pos) {
++        if (!KNOWLEDGE_NEAR_FIRST || category != MobCategory.MONSTER || room > KNOWLEDGE_GATE_PACK || inRange == null) {
++            return true;
++        }
++        int band = Integer.MAX_VALUE;
++        final long[] chunks = state.knowledgePlayerChunks(level);
++        if (chunks.length < inRange.size()) { // a crowd: each chunk players stand in once
++            for (int k = 0; k < chunks.length && band > 2; k++) {
++                band = Math.min(band, Math.max(Math.abs(ChunkPos.getX(chunks[k]) - pos.x), Math.abs(ChunkPos.getZ(chunks[k]) - pos.z)));
++            }
++        } else {
++            final net.minecraft.server.level.ServerPlayer[] raw = inRange.getRawDataUnchecked();
++            for (int k = 0, len = Math.min(inRange.size(), raw.length); k < len && band > 2; k++) {
++                final net.minecraft.server.level.ServerPlayer player = raw[k];
++                if (player == null) continue;
++                final ChunkPos at = player.chunkPosition();
++                band = Math.min(band, Math.max(Math.abs(at.x - pos.x), Math.abs(at.z - pos.z)));
++            }
++        }
++        return band <= 2 || java.util.concurrent.ThreadLocalRandom.current().nextDouble() < Math.pow(KNOWLEDGE_GATE_R, Math.min(band, 8) - 2);
++    }
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final int MIN_SPAWN_DISTANCE = 24;
+     public static final int SPAWN_DISTANCE_CHUNK = 8;
+@@ -177,12 +_,14 @@
                  if (inRange != null) {
                      final net.minecraft.server.level.ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
                      for (int k = 0, len = inRange.size(); k < len; k++) {
@@ -10,3 +48,30 @@
                      }
                  }
  
+                 maxSpawns = (minDiff == Integer.MAX_VALUE) ? 0 : minDiff;
+-                canSpawn = maxSpawns > 0;
++                canSpawn = maxSpawns > 0 && knowledgeGatePasses(level, spawnState, mobCategory, maxSpawns, inRange, chunk.getPos()); // Knowledge - near-first spawning
+             } else {
+                 canSpawn = spawnState.canSpawnForCategoryLocal(mobCategory, chunk.getPos());
+             }
+@@ -574,6 +_,20 @@
+     }
+ 
+     public static class SpawnState {
++        private volatile long[] knowledgePlayerChunks; // Knowledge - near-first spawning: the distinct chunks players stand in, this spawn tick
++
++        long[] knowledgePlayerChunks(ServerLevel level) { // built once by the first region thread that needs it (a race only builds it twice)
++            long[] chunks = this.knowledgePlayerChunks;
++            if (chunks == null) {
++                final it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet set = new it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet();
++                for (net.minecraft.server.level.ServerPlayer player : level.players()) {
++                    set.add(player.chunkPosition().toLong());
++                }
++                this.knowledgePlayerChunks = chunks = set.toLongArray();
++            }
++            return chunks;
++        }
++
+         private final int spawnableChunkCount;
+         private final Object2IntOpenHashMap<MobCategory> mobCategoryCounts;
+         private final PotentialCalculator spawnPotential;
