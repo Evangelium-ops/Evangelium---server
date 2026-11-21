@@ -9,10 +9,8 @@ import java.util.List;
 public class ShreddedPaperConfiguration extends ConfigurationPart {
 
     public static final String HEADER = """
-            This is the main configuration file for ShreddedPaper.
-            There's quite alot to configure. Read the docs for more information.
-
-            Docs: https://github.com/MultiPaper/ShreddedPaper/blob/main/SHREDDEDPAPER_YAML.md\s
+            Settings of the Evangelium server (multithreading and optimizations).
+            The Evangelium launcher sets most of these for you; change them only if you know why.
             """;
 
     private static ShreddedPaperConfiguration instance;

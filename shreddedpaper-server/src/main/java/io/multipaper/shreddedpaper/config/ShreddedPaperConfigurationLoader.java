@@ -25,7 +25,22 @@ import static io.leangen.geantyref.GenericTypeReflector.erase;
 
 public class ShreddedPaperConfigurationLoader {
 
+    /** The settings file was shreddedpaper.yml before it was renamed to evangelium.yml: an old one is moved to the new name. */
+    static void migrate(File file) {
+        File old = new File(file.getAbsoluteFile().getParentFile(), "shreddedpaper.yml");
+        if (!file.exists() && file.getName().equals("evangelium.yml") && old.isFile()) {
+            try {
+                Files.move(old.toPath(), file.toPath());
+                File backup = new File(old.getPath() + ".pre-launcher-optimize");
+                if (backup.isFile()) Files.move(backup.toPath(), new File(file.getPath() + ".pre-launcher-optimize").toPath());
+            } catch (java.io.IOException e) {
+                throw new RuntimeException("Could not rename shreddedpaper.yml to evangelium.yml", e);
+            }
+        }
+    }
+
     public static void init(File file) {
+        migrate(file);
         try {
             YamlConfigurationLoader.Builder loaderBuilder = ConfigurationLoaders.naturallySorted();
             loaderBuilder.defaultOptions(options -> options.header(ShreddedPaperConfiguration.HEADER));
@@ -60,7 +75,7 @@ public class ShreddedPaperConfigurationLoader {
 
             ShreddedPaperConfiguration.set(instance);
         } catch (ConfigurateException e) {
-            throw new RuntimeException("Could not load shreddedpaper.yml", e);
+            throw new RuntimeException("Could not load " + file.getName(), e);
         }
     }
 

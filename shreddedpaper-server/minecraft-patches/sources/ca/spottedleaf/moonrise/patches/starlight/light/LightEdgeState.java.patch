@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/ca/spottedleaf/moonrise/patches/starlight/light/LightEdgeState.java
-@@ -1,0 +_,159 @@
+@@ -1,0 +_,170 @@
 +package ca.spottedleaf.moonrise.patches.starlight.light;
 +
 +import java.util.Arrays;
@@ -24,7 +24,18 @@
 +    // versions are unique for the whole server (all worlds) across restarts and clock steps: the counter starts at
 +    // max(clock << 20, the high-water mark saved by earlier runs) and a block of versions is reserved in the file before any of
 +    // it is handed out, so even a crash right after cannot hand out a version twice
-+    private static final java.nio.file.Path HIGH_WATER_FILE = java.nio.file.Path.of("shreddedpaper-light-edge-versions.txt");
++    private static final java.nio.file.Path HIGH_WATER_FILE = migrateHighWaterFile(java.nio.file.Path.of("evangelium-light-edge-versions.txt"));
++
++    /** the file had the ShreddedPaper name before: an old one is moved to the new name */
++    private static java.nio.file.Path migrateHighWaterFile(final java.nio.file.Path file) {
++        final java.nio.file.Path old = java.nio.file.Path.of("shreddedpaper-light-edge-versions.txt");
++        try {
++            if (!java.nio.file.Files.exists(file) && java.nio.file.Files.isRegularFile(old)) java.nio.file.Files.move(old, file);
++        } catch (final java.io.IOException ignored) {
++            // a new count starts; that only costs a little extra light work once
++        }
++        return file;
++    }
 +    private static final long RESERVE = 1L << 32;
 +    private static final AtomicLong NEXT;
 +    private static long reservedUntil;

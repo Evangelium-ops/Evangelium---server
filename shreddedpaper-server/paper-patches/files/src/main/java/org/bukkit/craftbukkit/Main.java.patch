@@ -5,10 +5,10 @@
                  // Purpur end - Purpur config files
  
 +                // ShreddedPaper start
-+                acceptsAll(asList("shreddedpaper", "shreddedpaper-settings"), "File for shreddedpaper settings")
++                acceptsAll(asList("evangelium", "evangelium-settings", "shreddedpaper", "shreddedpaper-settings"), "File for the Evangelium server settings")
 +                        .withRequiredArg()
 +                        .ofType(File.class)
-+                        .defaultsTo(new File("shreddedpaper.yml"))
++                        .defaultsTo(new File("evangelium.yml"))
 +                        .describedAs("Yml file");
 +                // ShreddedPaper end
 +

@@ -62,7 +62,7 @@
 -            ObjectSet<ServerPlayer> set = DistanceManager.this.playersPerChunk.get(chunkPos);
 -            return set != null && !set.isEmpty();
 +            // ShreddedPaper start - Remove unused DistanceManager methods
-+            throw new UnsupportedOperationException("REPORT THIS STACK TRACE TO SHREDDEDPAPER"); // ShreddedPaper - Remove unused DistanceManager methods
++            throw new UnsupportedOperationException("REPORT THIS STACK TRACE TO PROJECT EVANGELIUM"); // ShreddedPaper - Remove unused DistanceManager methods
 +//            ObjectSet<ServerPlayer> set = DistanceManager.this.playersPerChunk.get(chunkPos);
 +//            return set != null && !set.isEmpty();
 +            // ShreddedPaper end - Remove unused DistanceManager methods

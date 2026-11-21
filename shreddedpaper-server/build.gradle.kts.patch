@@ -54,16 +54,16 @@
          attributes(
              "Main-Class" to "org.bukkit.craftbukkit.Main",
 -            "Implementation-Title" to "Purpur", // Purpur
-+            "Implementation-Title" to "ShreddedPaper", // Purpur // ShreddedPaper
++            "Implementation-Title" to "Evangelium", // Purpur // ShreddedPaper
              "Implementation-Version" to implementationVersion,
              "Implementation-Vendor" to date,
 -            "Specification-Title" to "Purpur", // Purpur
-+            "Specification-Title" to "ShreddedPaper", // Purpur // ShreddedPaper
++            "Specification-Title" to "Evangelium", // Purpur // ShreddedPaper
              "Specification-Version" to project.version,
 -            "Specification-Vendor" to "Purpur Team", // Purpur
 -            "Brand-Id" to "purpurmc:purpur", // Purpur
 -            "Brand-Name" to "Purpur", // Purpur
-+            "Specification-Vendor" to "ShreddedPaper Team", // Purpur // ShreddedPaper
++            "Specification-Vendor" to "Project Evangelium", // Purpur // ShreddedPaper
 +            "Brand-Id" to "shreddedpaper:shreddedpaper", // Purpur // ShreddedPaper
 +            "Brand-Name" to "Project Evangelium", // Purpur // ShreddedPaper // Knowledge
              "Build-Number" to (build ?: ""),
