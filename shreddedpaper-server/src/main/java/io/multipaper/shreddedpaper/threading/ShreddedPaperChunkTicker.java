@@ -126,8 +126,7 @@ public class ShreddedPaperChunkTicker {
         try {
             this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
         } catch (Throwable e) {
-            LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
-            MinecraftServer.getServer().moonrise$setChunkSystemCrash(new RuntimeException("Ticking thread crash while ticking region " + region.getRegionPos(), e));
+            REGION_FAILED.apply(region, e);
         } finally {
             final long took = System.nanoTime() - started;
             TickTimings.region(took);
@@ -148,12 +147,18 @@ public class ShreddedPaperChunkTicker {
                 RegionBudget.cost(region, System.nanoTime() - started); // Evangelium - kept in both modes
                 RegionBudget.end(region, System.nanoTime() - started); // Knowledge - tick budget
             }
-        }).exceptionally(e -> {
-            LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
-            MinecraftServer.getServer().moonrise$setChunkSystemCrash(new RuntimeException("Ticking thread crash while ticking region " + region.getRegionPos(), e));
-            return null;
-        });
+        }).exceptionally(e -> REGION_FAILED.apply(region, e));
     }
+
+    /**
+     * The one place a region failure crashes the server, used by both tick paths. The launcher's RegionGuard agent patches exactly this
+     * lambda (one static lambda taking the region and the Throwable) so a failing region is frozen for a moment instead.
+     */
+    private static final java.util.function.BiFunction<LevelChunkRegion, Throwable, Void> REGION_FAILED = (region, e) -> {
+        LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
+        MinecraftServer.getServer().moonrise$setChunkSystemCrash(new RuntimeException("Ticking thread crash while ticking region " + region.getRegionPos(), e));
+        return null;
+    };
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void presense(net.minecraft.world.entity.LivingEntity living) {

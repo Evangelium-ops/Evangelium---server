@@ -32,8 +32,8 @@ final class RegionTickDispatcher {
 
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getClassLogger();
 
-    /** -Dshreddedpaper.regionDispatcher=false: one pool task per region as before (A/B switch). */
-    static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("shreddedpaper.regionDispatcher", "true"));
+    /** -Dshreddedpaper.regionDispatcher=true turns the dispatcher on. Off by default until the launcher's RegionGuard (frozen regions, hang watch) also covers the dispatcher path; with it off every region tick goes through tickRegion, where RegionGuard hooks in. */
+    static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("shreddedpaper.regionDispatcher", "false"));
     /**
      * -Dshreddedpaper.neighbourBatching ("two regions become one"): "false" (default) = never; "best" = after a region the slot takes the
      * most expensive waiting region it could start now, where a neighbour counts as startable when the lock can move to it; "eager" =
