@@ -50,16 +50,44 @@
      private final Long2ByteMap chunkTypeCache = new Long2ByteOpenHashMap();
      // Paper - rewrite chunk system
      public int serverViewDistance;
-@@ -262,7 +_,9 @@
+@@ -262,9 +_,35 @@
  
          final ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
          for (int i = 0, len = inRange.size(); i < len; i++) {
 +            try { // ShreddedPaper - concurrent modification
              ++(backingSet[i].mobCounts[index]);
+-        }
+-    }
 +            } catch (IndexOutOfBoundsException | NullPointerException ignored) {} // ShreddedPaper - concurrent modification
-         }
-     }
++        }
++    }
++
++    // Evangelium start - updatePlayerMobTypeMap for the parallel spawn-state count: the same players, counted atomically
++    private static final java.lang.invoke.VarHandle KNOWLEDGE_INT_ARRAY = java.lang.invoke.MethodHandles.arrayElementVarHandle(int[].class);
++
++    public void updatePlayerMobTypeMapAtomic(final Entity entity) {
++        if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) {
++            return;
++        }
++
++        final int index = entity.getType().getCategory().ordinal();
++        final ca.spottedleaf.moonrise.common.list.ReferenceList<ServerPlayer> inRange =
++            this.level.moonrise$getNearbyPlayers().getPlayers(entity.chunkPosition(), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE);
++        if (inRange == null) {
++            return;
++        }
++
++        final ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
++        for (int i = 0, len = inRange.size(); i < len; i++) {
++            try {
++            KNOWLEDGE_INT_ARRAY.getAndAdd(backingSet[i].mobCounts, index, 1);
++            } catch (IndexOutOfBoundsException | NullPointerException ignored) {} // ShreddedPaper - concurrent modification
++        }
++    }
++    // Evangelium end
  
+     // Paper start - per player mob count backoff
+     public void updateFailurePlayerMobTypeMap(int chunkX, int chunkZ, net.minecraft.world.entity.MobCategory mobCategory) {
 @@ -279,7 +_,9 @@
          }
          final ServerPlayer[] backingSet = inRange.getRawDataUnchecked();

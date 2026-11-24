@@ -216,6 +216,62 @@ public class ShreddedPaperRegionLocker {
         return lock;
     }
 
+    // Evangelium start - region tick dispatcher (RegionTickDispatcher)
+    /**
+     * A cheap look (no writes) whether the 3x3 around centerPos is free for the current thread right now. Only a hint: the real
+     * tryTakeLockNow may still fail, and it is the one that counts.
+     */
+    public boolean looksFree(RegionPos centerPos) {
+        final Thread me = Thread.currentThread();
+        for (int x = -REGION_LOCK_RADIUS; x <= REGION_LOCK_RADIUS; x++) {
+            for (int z = -REGION_LOCK_RADIUS; z <= REGION_LOCK_RADIUS; z++) {
+                LockedRegion lockedRegion = this.lockedRegions.get(x == 0 && z == 0 ? centerPos : new RegionPos(centerPos.x + x, centerPos.z + z));
+                if (lockedRegion != null && lockedRegion.owner() != me) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Whether no region of the 3x3 around centerPos is locked by anyone (the current thread included) right now. Only a hint. */
+    public boolean looksUnlocked(RegionPos centerPos) {
+        for (int x = -REGION_LOCK_RADIUS; x <= REGION_LOCK_RADIUS; x++) {
+            for (int z = -REGION_LOCK_RADIUS; z <= REGION_LOCK_RADIUS; z++) {
+                if (this.lockedRegions.containsKey(x == 0 && z == 0 ? centerPos : new RegionPos(centerPos.x + x, centerPos.z + z))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Moves a lock taken with tryTakeLockNow to the 3x3 around newCenter (a region next to the old centre): the regions both need stay
+     * locked the whole time, the missing ones are taken, the ones only the old centre needed are released. Returns the new lock, or null
+     * when a missing region is held by someone else; then the old lock is unchanged and still held. "Two regions become one" without
+     * ever releasing what the next tick needs.
+     */
+    @Nullable
+    public RegionLock tryMoveLock(RegionLock lock, RegionPos newCenter) {
+        if (!(lock instanceof WriteRegionLock writeLock)) {
+            throw new IllegalArgumentException("Only a lock from tryTakeLockNow can be moved: " + lock);
+        }
+        return writeLock.moveTo(newCenter);
+    }
+
+    private void release(List<LockedRegion> regions) {
+        for (LockedRegion lockedRegion : regions) {
+            this.lockedRegions.remove(lockedRegion.regionPos(), lockedRegion);
+            this.localLocks.get().remove(lockedRegion.regionPos());
+            this.readOnlyLocks.get().remove(lockedRegion.regionPos());
+        }
+        for (LockedRegion lockedRegion : regions) {
+            lockedRegion.complete();
+        }
+    }
+    // Evangelium end
+
     @Nullable
     public CompletableFuture<Void> onUnlock(RegionPos centerPos, Supplier<CompletableFuture<Void>> nextTask) {
         for (int x = -REGION_LOCK_RADIUS; x <= REGION_LOCK_RADIUS; x++) {
@@ -288,6 +344,47 @@ public class ShreddedPaperRegionLocker {
             return this.thread;
         }
 
+        /** Evangelium - see ShreddedPaperRegionLocker#tryMoveLock. On success this lock is empty afterwards (do not unlock it). */
+        @Nullable
+        ReadOnlyRegionLock moveTo(RegionPos newCenter, int lockRadius) {
+            if (this.thread != Thread.currentThread()) {
+                throw new IllegalStateException("Cannot move a lock from a different thread [expected=%s,got=%s]".formatted(thread, Thread.currentThread()));
+            }
+            final ReadOnlyRegionLock moved = new ReadOnlyRegionLock(lockRadius);
+            moved.globalLockStamp = this.globalLockStamp; // carried over: tryLockRegion takes no second global read lock
+            final List<LockedRegion> kept = new ArrayList<>(this.readLocks.size());
+            for (int x = -lockRadius; x <= lockRadius; x++) {
+                for (int z = -lockRadius; z <= lockRadius; z++) {
+                    RegionPos regionPos = x == 0 && z == 0 ? newCenter : new RegionPos(newCenter.x + x, newCenter.z + z);
+                    LockedRegion mine = null;
+                    for (LockedRegion lockedRegion : this.readLocks) {
+                        if (lockedRegion.regionPos().equals(regionPos)) {
+                            mine = lockedRegion;
+                            break;
+                        }
+                    }
+                    if (mine != null) {
+                        kept.add(mine);
+                    } else if (!moved.tryLockRegion(regionPos)) {
+                        // someone else holds it: give back only what was taken just now, the old lock stays as it was
+                        ShreddedPaperRegionLocker.this.release(moved.readLocks);
+                        return null;
+                    }
+                }
+            }
+            final List<LockedRegion> dropped = new ArrayList<>(this.readLocks.size());
+            for (LockedRegion lockedRegion : this.readLocks) {
+                if (!kept.contains(lockedRegion)) {
+                    dropped.add(lockedRegion);
+                }
+            }
+            moved.readLocks.addAll(kept);
+            this.readLocks.clear();
+            this.globalLockStamp = 0;
+            ShreddedPaperRegionLocker.this.release(dropped);
+            return moved;
+        }
+
         public void unlock() {
             if (this.thread != Thread.currentThread()) {
                 throw new IllegalStateException("Cannot unlock a lock from a different thread [expected=%s,got=%s]".formatted(thread, Thread.currentThread()));
@@ -333,6 +430,19 @@ public class ShreddedPaperRegionLocker {
             return this.superLock.owner();
         }
 
+        /** Evangelium - see ShreddedPaperRegionLocker#tryMoveLock */
+        @Nullable
+        WriteRegionLock moveTo(RegionPos newCenter) {
+            final ReadOnlyRegionLock moved = this.superLock.moveTo(newCenter, REGION_LOCK_RADIUS);
+            if (moved == null) {
+                return null;
+            }
+            // the regions kept are put back into the write set by the new WriteRegionLock; the dropped ones were released above
+            ShreddedPaperRegionLocker.this.writeLocks.get().removeAll(this.writeLocks);
+            this.writeLocks.clear();
+            return new WriteRegionLock(moved);
+        }
+
         @Override
         public void unlock() {
             ShreddedPaperRegionLocker.this.writeLocks.get().removeAll(this.writeLocks);
@@ -345,7 +455,6 @@ public class ShreddedPaperRegionLocker {
         private final RegionPos regionPos;
         private final Thread owner;
         private final CompletableFuture<Void> headUnlockFuture = new CompletableFuture<>();
-        private CompletableFuture<Void> tailUnlockFuture = headUnlockFuture;
 
         private LockedRegion(RegionPos regionPos, Thread owner) {
             this.regionPos = regionPos;
@@ -365,7 +474,9 @@ public class ShreddedPaperRegionLocker {
         }
 
         public CompletableFuture<Void> onUnlock(Supplier<CompletableFuture<Void>> nextTask) {
-            return tailUnlockFuture = tailUnlockFuture.thenCompose(v -> nextTask.get());
+            // Evangelium - every waiter hangs on the unlock itself. The old chain (tail = tail.thenCompose(...)) made waiter 2 wait until
+            // waiter 1's whole retry had finished (a convoy), and the tail field was written by several threads without being volatile
+            return headUnlockFuture.thenCompose(v -> nextTask.get());
         }
     }
 

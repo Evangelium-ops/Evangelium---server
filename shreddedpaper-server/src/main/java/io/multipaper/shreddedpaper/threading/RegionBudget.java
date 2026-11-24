@@ -99,6 +99,9 @@ public final class RegionBudget {
         /** shown to the players in the region while it is slowed */
         net.kyori.adventure.bossbar.BossBar bar;
 
+        /** Evangelium - recent cost of one tick of this region (moving average, always kept, also with the budget off): RegionTickDispatcher order */
+        volatile long tickCostNanos;
+
         public int divisor() {
             return this.divisor;
         }
@@ -274,6 +277,17 @@ public final class RegionBudget {
     static boolean sampleComplete(int ticks, long nanos, int divisor) {
         // A quiet window must include the throttled work's turn before it can justify speeding up.
         return ticks >= Math.max(20, divisor) || (divisor == 1 && nanos >= 1_000_000_000L);
+    }
+
+    /** Evangelium - every region tick, budget on or off: keeps the cost estimate the dispatcher sorts by. */
+    public static void cost(LevelChunkRegion region, long nanos) {
+        State s = region.budget;
+        long before = s.tickCostNanos;
+        s.tickCostNanos = before == 0 ? nanos : before - (before >> 2) + (nanos >> 2);
+    }
+
+    public static long cost(LevelChunkRegion region) {
+        return region.budget.tickCostNanos;
     }
 
     /** Assess a full work cycle, keeping the player bar current between assessments. */

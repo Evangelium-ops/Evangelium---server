@@ -279,9 +279,17 @@ public final class IntraRegion {
         final AtomicInteger active = new AtomicInteger();   // helpers between taking part and having flushed their changes
         final AtomicReference<Throwable> failure = new AtomicReference<>();
         final Thread owner = Thread.currentThread();
-        int wanted = Math.min(HELPERS, schedule.size - 1);
+        // Evangelium - helper back-pressure: queue only as many helper tasks as there are helpers free right now. A task queued while every
+        // helper is busy with other regions would only start after the owner already did everything (a stale no-op), and those piled up
+        int wanted = reserveHelpers(Math.min(HELPERS, schedule.size - 1));
         for (int i = 0; i < wanted; i++) {
-            POOL.execute(() -> helper(level, region, loan, schedule, work, active, failure, owner));
+            POOL.execute(() -> {
+                try {
+                    helper(level, region, loan, schedule, work, active, failure, owner);
+                } finally {
+                    FREE_HELPERS.incrementAndGet();
+                }
+            });
         }
         work(schedule, work, failure, TickTimings.OWNER_CHUNKS);
         // the chunks still running on helpers, and their change broadcasts: every helper unparks the owner when it is done, so a plain park
@@ -302,6 +310,32 @@ public final class IntraRegion {
             throw e;
         } else if (t != null) {
             throw new RuntimeException(t);
+        }
+    }
+
+    /** Evangelium - helpers neither running nor queued; a helper task holds one from being queued until it ends. */
+    private static final AtomicInteger FREE_HELPERS = new AtomicInteger(Math.max(0, HELPERS));
+    /** -Dshreddedpaper.helperBackPressure=false queues helper tasks as before (A/B switch). */
+    private static final boolean BACK_PRESSURE = Boolean.parseBoolean(System.getProperty("shreddedpaper.helperBackPressure", "true"));
+
+    /** Takes up to {@code wanted} free helpers; returns how many were taken (0 when all are busy: the owner works alone). */
+    private static int reserveHelpers(int wanted) {
+        if (wanted <= 0) {
+            return 0;
+        }
+        if (!BACK_PRESSURE) {
+            FREE_HELPERS.addAndGet(-wanted);   // keeps the counter balanced with the increments of the tasks
+            return wanted;
+        }
+        while (true) {
+            int free = FREE_HELPERS.get();
+            int take = Math.min(wanted, free);
+            if (take <= 0) {
+                return 0;
+            }
+            if (FREE_HELPERS.compareAndSet(free, free - take)) {
+                return take;
+            }
         }
     }
 

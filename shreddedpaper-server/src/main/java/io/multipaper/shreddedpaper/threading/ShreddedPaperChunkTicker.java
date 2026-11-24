@@ -45,13 +45,22 @@ public class ShreddedPaperChunkTicker {
         ServerLevel level = this.serverChunkCache.chunkMap.level;
         io.multipaper.shreddedpaper.region.SpawnRequestCheck.maybeCheck(level); // Knowledge - test hook -Dshreddedpaper.verifySpawnRequests
         final long timingsStart = System.nanoTime(); // Knowledge - tick timings
+        CompletableFuture<Void> future;
+        if (RegionTickDispatcher.ENABLED) {
+            // Evangelium - lock-aware dispatcher: most expensive free region first, neighbours under a moved lock (RegionTickDispatcher)
+            final List<LevelChunkRegion> regions = new ArrayList<>();
+            level.chunkSource.tickingRegions.forEach(regions::add);
+            future = RegionTickDispatcher.tickAll(level.chunkScheduler.getRegionLocker(), regions,
+                    region -> this.tickRegionLocked(level, region, timingsStart, timeInhabited, filteredSpawningCategories, spawnState));
+        } else {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         level.chunkSource.tickingRegions.forEach(
                 region -> futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState))
         );
 
-        CompletableFuture<Void> future = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+        future = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
+        }
         if (TickTimings.enabled()) { // Knowledge - tick timings
             final long regionsStart = timingsStart;
             future = future.thenRun(() -> { TickTimings.add(TickTimings.Phase.REGIONS_WALL, System.nanoTime() - regionsStart); TickTimings.regionsDone(); });
@@ -110,6 +119,23 @@ public class ShreddedPaperChunkTicker {
         return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
     }
 
+    /** Evangelium - one region tick for RegionTickDispatcher: the caller holds the 3x3; failures are reported here as in tickRegion. */
+    private void tickRegionLocked(final ServerLevel level, final LevelChunkRegion region, final long scheduledAt, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+        final long started = System.nanoTime();
+        TickTimings.add(TickTimings.Phase.REGION_LOCK_WAIT, started - scheduledAt);
+        try {
+            this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
+        } catch (Throwable e) {
+            LogUtils.getClassLogger().error("Exception ticking region {}", region.getRegionPos(), e);
+            MinecraftServer.getServer().moonrise$setChunkSystemCrash(new RuntimeException("Ticking thread crash while ticking region " + region.getRegionPos(), e));
+        } finally {
+            final long took = System.nanoTime() - started;
+            TickTimings.region(took);
+            RegionBudget.cost(region, took);
+            RegionBudget.end(region, took); // Knowledge - tick budget
+        }
+    }
+
     private CompletableFuture<Void> tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         final long scheduledAt = System.nanoTime(); // Knowledge - tick timings
         return level.chunkScheduler.schedule(region.getRegionPos(), () -> {
@@ -119,6 +145,7 @@ public class ShreddedPaperChunkTicker {
                 this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
             } finally {
                 TickTimings.region(System.nanoTime() - started);
+                RegionBudget.cost(region, System.nanoTime() - started); // Evangelium - kept in both modes
                 RegionBudget.end(region, System.nanoTime() - started); // Knowledge - tick budget
             }
         }).exceptionally(e -> {

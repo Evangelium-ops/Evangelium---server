@@ -8,6 +8,17 @@
  
          public void advanceStep(int step, net.minecraft.core.BlockPos pos) { // Paper - track position inside effect was triggered on
              this.currentBlockPos = pos; // Paper - track position inside effect was triggered on
+@@ -52,6 +_,10 @@
+ 
+         public void applyAndClear(Entity entity) {
+             this.flushStep();
++            if (this.finalEffects.isEmpty()) { // Evangelium - nothing to apply (most ticks): no iterator
++                this.lastStep = -1;
++                return;
++            }
+ 
+             for (Consumer<Entity> consumer : this.finalEffects) {
+                 if (!entity.isAlive()) {
 @@ -66,6 +_,12 @@
          }
  

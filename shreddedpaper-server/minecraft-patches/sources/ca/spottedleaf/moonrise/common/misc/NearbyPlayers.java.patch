@@ -115,37 +115,37 @@
  
      public TrackedChunk getChunk(final ChunkPos pos) {
 -        return this.byChunk.get(CoordinateUtils.getChunkKey(pos));
-+        return this.byChunkLock.optimisticRead(() -> this.byChunk.get(CoordinateUtils.getChunkKey(pos))); // ShreddedPaper
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(pos)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public TrackedChunk getChunk(final BlockPos pos) {
 -        return this.byChunk.get(CoordinateUtils.getChunkKey(pos));
-+        return this.byChunkLock.optimisticRead(() -> this.byChunk.get(CoordinateUtils.getChunkKey(pos))); // ShreddedPaper
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(pos)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public TrackedChunk getChunk(final int chunkX, final int chunkZ) {
 -        return this.byChunk.get(CoordinateUtils.getChunkKey(chunkX, chunkZ));
-+        return this.byChunkLock.optimisticRead(() -> this.byChunk.get(CoordinateUtils.getChunkKey(chunkX, chunkZ))); // ShreddedPaper
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(chunkX, chunkZ)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public ReferenceList<ServerPlayer> getPlayers(final BlockPos pos, final NearbyMapType type) {
 -        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos));
-+        return this.directByChunkLock[type.ordinal()].optimisticRead(() -> this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos))); // ShreddedPaper
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(pos)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public ReferenceList<ServerPlayer> getPlayers(final ChunkPos pos, final NearbyMapType type) {
 -        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos));
-+        return this.directByChunkLock[type.ordinal()].optimisticRead(() -> this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos))); // ShreddedPaper
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(pos)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public ReferenceList<ServerPlayer> getPlayersByChunk(final int chunkX, final int chunkZ, final NearbyMapType type) {
 -        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(chunkX, chunkZ));
-+        return this.directByChunkLock[type.ordinal()].optimisticRead(() -> this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(chunkX, chunkZ))); // ShreddedPaper
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(chunkX, chunkZ)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public ReferenceList<ServerPlayer> getPlayersByBlock(final int blockX, final int blockZ, final NearbyMapType type) {
 -        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(blockX >> 4, blockZ >> 4));
-+        return this.directByChunkLock[type.ordinal()].optimisticRead(() -> this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(blockX >> 4, blockZ >> 4))); // ShreddedPaper
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(blockX >> 4, blockZ >> 4)); // ShreddedPaper // Evangelium - no lambda
      }
  
      public static final class TrackedChunk {

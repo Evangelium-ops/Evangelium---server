@@ -18,6 +18,14 @@
  import net.minecraft.network.protocol.game.ClientboundOpenSignEditorPacket;
  import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
  import net.minecraft.network.protocol.game.ClientboundPlayerCombatEndPacket;
+@@ -202,6 +_,7 @@
+ import org.slf4j.Logger;
+ 
+ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patches.chunk_system.player.ChunkSystemServerPlayer { // Paper - rewrite chunk system
++    public volatile double knowledgeIndexX = Double.NaN, knowledgeIndexZ = Double.NaN; // Evangelium - position copy of the nearby player index
+     private static final Logger LOGGER = LogUtils.getLogger();
+     public long lastSave = MinecraftServer.currentTick; // Paper - Incremental chunk and player saving
+     private static final int NEUTRAL_MOB_DEATH_NOTIFICATION_RADII_XZ = 32;
 @@ -247,6 +_,7 @@
      private @Nullable Entity camera;
      public boolean isChangingDimension;
@@ -84,6 +92,16 @@
      // Paper start - cancellable death event
      public boolean queueHealthUpdatePacket;
      public net.minecraft.network.protocol.game.@Nullable ClientboundSetHealthPacket queuedHealthUpdatePacket;
+@@ -499,7 +_,8 @@
+         this.wardenSpawnTracker = input.read("warden_spawn_tracker", WardenSpawnTracker.CODEC).orElseGet(WardenSpawnTracker::new);
+         this.enteredNetherPosition = input.read("entered_nether_pos", Vec3.CODEC).orElse(null);
+         this.seenCredits = input.getBooleanOr("seenCredits", false);
+-        input.read("recipeBook", ServerRecipeBook.Packed.CODEC)
++        ServerRecipeBook.Packed preloadedRecipeBook = io.multipaper.shreddedpaper.player.JoinPreload.recipeBookFor(this.getUUID()); // Knowledge - join preload: decoded on the loader thread
++        (preloadedRecipeBook != null ? java.util.Optional.of(preloadedRecipeBook) : input.read("recipeBook", ServerRecipeBook.Packed.CODEC)) // Knowledge - join preload
+             .ifPresent(packed -> this.recipeBook.loadUntrusted(packed, key -> this.server.getRecipeManager().byKey(key).isPresent()));
+         this.getBukkitEntity().readExtraData(input); // CraftBukkit
+         if (this.isSleeping()) {
 @@ -637,12 +_,15 @@
          if (!optional.isEmpty()) {
              ServerLevel level = this.level().getServer().getLevel(optional.get());

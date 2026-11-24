@@ -39,7 +39,7 @@ public class LevelChunkRegion {
     private final IteratorSafeOrderedReferenceSet<Entity> tickingEntities = new IteratorSafeOrderedReferenceSet<>(); // Use IteratorSafeOrderedReferenceSet to maintain entity tick order
     private final Set<Entity> trackedEntities = new ObjectOpenHashSet<>();
     private final ConcurrentLinkedQueue<DelayedTask> scheduledTasks = new ConcurrentLinkedQueue<>(); // Writable tasks
-    private final PrioritisedTaskQueue internalTasks = new PrioritisedTaskQueue(); // Read-only tasks
+    private final PrioritisedTaskQueue internalTasks; // Read-only tasks
     private final ObjectOpenHashSet<ServerPlayer> players = new ObjectOpenHashSet<>();
     public final LongLinkedOpenHashSet unloadQueue = new LongLinkedOpenHashSet();
     public final List<TickingBlockEntity> tickingBlockEntities = new ReferenceArrayList<>();
@@ -51,8 +51,14 @@ public class LevelChunkRegion {
     public ArrayDeque<RedstoneTorchBlock.Toggle> redstoneUpdateInfos;
 
     public LevelChunkRegion(ServerLevel level, RegionPos regionPos) {
+        this(level, regionPos, null);
+    }
+
+    /** Evangelium - the map is told after each task is queued (the hook runs once the task is visible), see LevelChunkRegionMap#regionsWithTasks */
+    public LevelChunkRegion(ServerLevel level, RegionPos regionPos, LevelChunkRegionMap map) {
         this.level = level;
         this.regionPos = regionPos;
+        this.internalTasks = map == null ? new PrioritisedTaskQueue() : new PrioritisedTaskQueue(new java.util.concurrent.atomic.AtomicLong(), 0L, task -> map.markHasTasks(this));
 
         this.bumpLastAccess();
     }

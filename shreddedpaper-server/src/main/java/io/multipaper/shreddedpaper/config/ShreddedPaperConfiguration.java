@@ -65,6 +65,12 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public long trackerFullUpdateFrequency = 20;
         public long purgeStaleTicketsFrequency = 20;
         public boolean writePlayerSavesAsync = true;
+        @Comment("Read a joining player's data file, stats and advancements on a background thread while the player is in the configuration phase, and reuse them at spawn (the tick threads then only apply them). -Dshreddedpaper.joinPreload=false overrides this.")
+        public boolean preloadJoinData = true;
+        @Comment("Build the registry and tag packets of the configuration phase once per known-packs set (rebuilt after a datapack reload) instead of once per join on the main thread. -Dshreddedpaper.cacheRegistrySync=false overrides this.")
+        public boolean cacheRegistrySync = true;
+        @Comment("Spawn work of joining players allowed per tick (ms, measured average per spawn). Players beyond it wait a tick or two longer in the joining screen instead of making one long tick for everybody. 0 = off (default: no measured gain, see notes/joins.md). -Dshreddedpaper.joinSpawnBudgetMs overrides this.")
+        public long joinSpawnBudgetMs = 0;
         public ChunkPacketCaching chunkPacketCaching;
 
         public class ChunkPacketCaching extends ConfigurationPart {

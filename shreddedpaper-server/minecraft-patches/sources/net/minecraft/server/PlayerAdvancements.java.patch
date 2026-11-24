@@ -1,0 +1,260 @@
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -18,6 +_,7 @@
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.LinkedHashMap;
++import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+ import java.util.Map.Entry;
+@@ -71,6 +_,149 @@
+         this.load(manager);
+     }
+ 
++    // Knowledge start - join preload: the advancements file read and DataFixed off the tick threads
++    /** A parsed advancements file (data == null: there is no file). */
++    public static final class Preparsed {
++        final PlayerAdvancements.@Nullable Data data;
++        /** Progress applied and listeners registered on the loader thread (null: do that on the player's thread). */
++        public @Nullable PlayerAdvancements detached;
++
++        Preparsed(PlayerAdvancements.@Nullable Data data) {
++            this.data = data;
++        }
++    }
++
++    // Before the ServerPlayer exists: apply the progress and register the criterion listeners (both only touch this object; Paper keeps
++    // the listeners in criterionData here, not in the triggers). Only for the vanilla trigger classes, whose addPlayerListener does
++    // exactly that; any other trigger type throws and the caller does it all on the player's thread. The automatic triggers (they
++    // award, fire events and grant rewards) run in attach() on the player's thread. They only concern advancements without criteria,
++    // which have no listeners, so running them after the registration ends in the same state.
++    private @Nullable ServerAdvancementManager detachedFor;
++
++    public static PlayerAdvancements detached(DataFixer dataFixer, PlayerList playerList, ServerAdvancementManager manager, Path playerSavePath, Preparsed preparsed) {
++        for (AdvancementHolder holder : manager.getAllAdvancements()) {
++            for (Criterion<?> criterion : holder.value().criteria().values()) {
++                CriterionTrigger<?> trigger = criterion.trigger();
++                if (!(trigger instanceof net.minecraft.advancements.criterion.SimpleCriterionTrigger<?>) && !(trigger instanceof net.minecraft.advancements.criterion.ImpossibleTrigger)) {
++                    throw new IllegalStateException("custom criterion trigger " + trigger.getClass().getName());
++                }
++            }
++        }
++        return new PlayerAdvancements(dataFixer, playerList, manager, playerSavePath, preparsed, true);
++    }
++
++    private PlayerAdvancements(DataFixer dataFixer, PlayerList playerList, ServerAdvancementManager manager, Path playerSavePath, Preparsed preparsed, boolean detached) {
++        this.playerList = playerList;
++        this.playerSavePath = playerSavePath;
++        this.player = null;
++        this.tree = manager.tree();
++        this.codec = DataFixTypes.ADVANCEMENTS.wrapCodec(PlayerAdvancements.Data.CODEC, dataFixer, 1343);
++        if (preparsed.data != null) {
++            this.applyFrom(manager, preparsed.data);
++        }
++        this.registerListeners(manager);
++        this.detachedFor = manager;
++        this.precomputeFirstFlush();
++    }
++
++    // The first full advancement packet (visibility of every touched tree, the progress of what is visible) worked out here on the
++    // loader thread, exactly as flushDirty would on the player's first tick. Sent as is if nothing changed since (attach's automatic
++    // triggers, a plugin award on join); otherwise the state is put back and flushDirty does the usual full first flush.
++    private @Nullable Set<AdvancementNode> firstRoots;
++    private @Nullable Set<AdvancementHolder> firstChanged;
++    private @Nullable List<AdvancementHolder> firstAdded;
++    private @Nullable Set<Identifier> firstRemoved;
++    private @Nullable Map<Identifier, AdvancementProgress> firstProgress;
++
++    private void precomputeFirstFlush() {
++        this.firstRoots = new HashSet<>(this.rootsToUpdate);
++        this.firstChanged = new HashSet<>(this.progressChanged);
++        Set<AdvancementHolder> set = new HashSet<>();
++        Set<Identifier> set1 = new HashSet<>();
++        for (AdvancementNode advancementNode : this.rootsToUpdate) {
++            this.updateTreeVisibility(advancementNode, set, set1);
++        }
++        this.rootsToUpdate.clear();
++        Map<Identifier, AdvancementProgress> map = new HashMap<>();
++        for (AdvancementHolder advancementHolder : this.progressChanged) {
++            if (this.visible.contains(advancementHolder)) {
++                map.put(advancementHolder.id(), this.progress.get(advancementHolder));
++            }
++        }
++        this.progressChanged.clear();
++        this.firstAdded = sortedById(set);
++        this.firstRemoved = set1;
++        this.firstProgress = map;
++    }
++
++    /** True if the precomputed first packet was used (or was empty, like the original would have been). */
++    private boolean flushPrecomputedFirst(ServerPlayer player, boolean showAdvancements) {
++        if (this.firstAdded == null) {
++            return false;
++        }
++        List<AdvancementHolder> added = this.firstAdded;
++        Set<Identifier> removed = this.firstRemoved;
++        Map<Identifier, AdvancementProgress> map = this.firstProgress;
++        Set<AdvancementNode> roots = this.firstRoots;
++        Set<AdvancementHolder> changed = this.firstChanged;
++        this.firstAdded = null; this.firstRemoved = null; this.firstProgress = null; this.firstRoots = null; this.firstChanged = null;
++        if (!this.rootsToUpdate.isEmpty() || !this.progressChanged.isEmpty()) {
++            // something changed after the precomputation: back to the state before it, the caller does the full first flush
++            this.visible.clear();
++            this.rootsToUpdate.addAll(roots);
++            this.progressChanged.addAll(changed);
++            return false;
++        }
++        if (!map.isEmpty() || !added.isEmpty() || !removed.isEmpty()) {
++            player.connection.send(new ClientboundUpdateAdvancementsPacket(true, added, removed, map, showAdvancements));
++        }
++        this.isFirstPacket = false;
++        return true;
++    }
++
++    /** On the player's thread: binds the player and runs the automatic triggers. False if the advancements were reloaded since (do not use this object then). */
++    public boolean attach(ServerPlayer player, ServerAdvancementManager manager) {
++        if (this.detachedFor != manager || this.tree != manager.tree()) {
++            return false;
++        }
++        this.detachedFor = null;
++        this.player = player;
++        long advTimer = io.multipaper.shreddedpaper.util.TickTimings.start();
++        this.checkForAutomaticTriggers(manager);
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_LISTEN, advTimer);
++        return true;
++    }
++
++    /** Reads and parses like load() does; throws on a read or parse error (the caller then falls back to load(), which logs it). */
++    public static Preparsed preparse(DataFixer dataFixer, Path playerSavePath) throws IOException {
++        if (!Files.isRegularFile(playerSavePath)) {
++            return new Preparsed(null);
++        }
++        Codec<PlayerAdvancements.Data> codec = DataFixTypes.ADVANCEMENTS.wrapCodec(PlayerAdvancements.Data.CODEC, dataFixer, 1343);
++        try (Reader bufferedReader = Files.newBufferedReader(playerSavePath, StandardCharsets.UTF_8)) {
++            JsonElement jsonElement = StrictJsonParser.parse(bufferedReader);
++            return new Preparsed(codec.parse(JsonOps.INSTANCE, jsonElement).getOrThrow(JsonParseException::new));
++        }
++    }
++
++    public PlayerAdvancements(DataFixer dataFixer, PlayerList playerList, ServerAdvancementManager manager, Path playerSavePath, ServerPlayer player, Preparsed preparsed) {
++        this.playerList = playerList;
++        this.playerSavePath = playerSavePath;
++        this.player = player;
++        this.tree = manager.tree();
++        this.codec = DataFixTypes.ADVANCEMENTS.wrapCodec(PlayerAdvancements.Data.CODEC, dataFixer, 1343);
++        long advTimer = io.multipaper.shreddedpaper.util.TickTimings.start();
++        if (preparsed.data != null) {
++            this.applyFrom(manager, preparsed.data);
++        }
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_READ, advTimer);
++        advTimer = io.multipaper.shreddedpaper.util.TickTimings.start();
++        this.checkForAutomaticTriggers(manager);
++        this.registerListeners(manager);
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_LISTEN, advTimer);
++    }
++    // Knowledge end - join preload
++
+     public void setPlayer(ServerPlayer player) {
+         this.player = player;
+     }
+@@ -82,6 +_,7 @@
+     }
+ 
+     public void reload(ServerAdvancementManager manager) {
++        this.firstAdded = null; this.firstRemoved = null; this.firstProgress = null; this.firstRoots = null; this.firstChanged = null; // Knowledge - join preload
+         this.stopListening();
+         this.progress.clear();
+         this.visible.clear();
+@@ -110,6 +_,7 @@
+     }
+ 
+     private void load(ServerAdvancementManager manager) {
++        long advTimer = io.multipaper.shreddedpaper.util.TickTimings.start(); // Knowledge - join timings
+         if (Files.isRegularFile(this.playerSavePath)) {
+             try (Reader bufferedReader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
+                 JsonElement jsonElement = StrictJsonParser.parse(bufferedReader);
+@@ -122,14 +_,18 @@
+             }
+         }
+ 
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_READ, advTimer); // Knowledge - join timings
++        advTimer = io.multipaper.shreddedpaper.util.TickTimings.start(); // Knowledge - join timings
+         this.checkForAutomaticTriggers(manager);
+         this.registerListeners(manager);
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_LISTEN, advTimer); // Knowledge - join timings
+     }
+ 
+     public void save() {
+         if (org.spigotmc.SpigotConfig.disableAdvancementSaving) return; // Spigot
+         JsonElement jsonElement = this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow();
+-
++        final String saveKey = this.player.getStringUUID(); // Knowledge - join preload
++        io.multipaper.shreddedpaper.player.JoinPreload.beginSave(saveKey); // Knowledge - join preload
+         try {
+             FileUtil.createDirectoriesSafe(this.playerSavePath.getParent());
+ 
+@@ -138,7 +_,7 @@
+             }
+         } catch (JsonIOException | IOException var7) {
+             LOGGER.error("Couldn't save player advancements to {}", this.playerSavePath, var7);
+-        }
++        } finally { io.multipaper.shreddedpaper.player.JoinPreload.endSave(saveKey); } // Knowledge - join preload
+     }
+ 
+     private void applyFrom(ServerAdvancementManager advancementManager, PlayerAdvancements.Data data) {
+@@ -264,10 +_,39 @@
+         criterion.trigger().removePlayerListener(this, new CriterionTrigger.Listener<>(criterion.triggerInstance(), advancement, criterionKey));
+     }
+ 
++    // Knowledge start - Paper's order (a TreeSet by id().toString()), but each id string is built once and the list sorted once
++    // (the TreeSet built two strings per comparison: ~30 000 strings for a player with every advancement)
++    private static final boolean PRECOMPUTED_FIRST_PACKET = Boolean.parseBoolean(System.getProperty("shreddedpaper.joinPreloadFirstAdvancementPacket", "true"));
++
++    private static List<AdvancementHolder> sortedById(Set<AdvancementHolder> set) {
++        int n = set.size();
++        String[] keys = new String[n];
++        AdvancementHolder[] holders = set.toArray(new AdvancementHolder[0]);
++        Integer[] order = new Integer[n];
++        for (int i = 0; i < n; i++) {
++            keys[i] = holders[i].id().toString();
++            order[i] = i;
++        }
++        java.util.Arrays.sort(order, (x, y) -> keys[x].compareTo(keys[y]));
++        List<AdvancementHolder> sorted = new java.util.ArrayList<>(n);
++        String last = null;
++        for (Integer i : order) {
++            if (!keys[i].equals(last)) { // the TreeSet kept one holder per id string
++                sorted.add(holders[i]);
++                last = keys[i];
++            }
++        }
++        return sorted;
++    }
++    // Knowledge end
++
+     public void flushDirty(ServerPlayer player, boolean showAdvancements) {
++        final long firstPacketTimer = this.isFirstPacket ? io.multipaper.shreddedpaper.util.TickTimings.start() : 0L; // Knowledge - join timings
++        try { // Knowledge - join timings
++        if (this.isFirstPacket && PRECOMPUTED_FIRST_PACKET && this.flushPrecomputedFirst(player, showAdvancements)) return; // Knowledge - join preload: first packet worked out on the loader thread
+         if (this.isFirstPacket || !this.rootsToUpdate.isEmpty() || !this.progressChanged.isEmpty()) {
+             Map<Identifier, AdvancementProgress> map = new HashMap<>();
+-            Set<AdvancementHolder> set = new java.util.TreeSet<>(java.util.Comparator.comparing(adv -> adv.id().toString())); // Paper - Changed from HashSet to TreeSet ordered alphabetically.
++            Set<AdvancementHolder> set = new HashSet<>(); // Paper - Changed from HashSet to TreeSet ordered alphabetically. // Knowledge - collected unordered, sorted once below (same order)
+             Set<Identifier> set1 = new HashSet<>();
+ 
+             for (AdvancementNode advancementNode : this.rootsToUpdate) {
+@@ -284,11 +_,12 @@
+ 
+             this.progressChanged.clear();
+             if (!map.isEmpty() || !set.isEmpty() || !set1.isEmpty()) {
+-                player.connection.send(new ClientboundUpdateAdvancementsPacket(this.isFirstPacket, set, set1, map, showAdvancements));
++                player.connection.send(new ClientboundUpdateAdvancementsPacket(this.isFirstPacket, sortedById(set), set1, map, showAdvancements)); // Knowledge - sorted by id string like Paper's TreeSet
+             }
+         }
+ 
+         this.isFirstPacket = false;
++        } finally { io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_ADV_PACKET, firstPacketTimer); } // Knowledge - join timings
+     }
+ 
+     public void setSelectedTab(@Nullable AdvancementHolder advancement) {

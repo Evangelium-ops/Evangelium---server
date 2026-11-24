@@ -38,6 +38,16 @@
      public @Nullable String collideRuleTeamName; // Paper - Configurable player collision
  
      public PlayerList(
+@@ -238,7 +_,9 @@
+         player.containerMenu.transferTo(player.containerMenu, bukkitPlayer);
+ 
+         org.bukkit.event.player.PlayerJoinEvent playerJoinEvent = new org.bukkit.event.player.PlayerJoinEvent(bukkitPlayer, io.papermc.paper.adventure.PaperAdventure.asAdventure(mutableComponent)); // Paper - Adventure
++        final long joinEventTimer = io.multipaper.shreddedpaper.util.TickTimings.start(); // Knowledge - join timings
+         this.cserver.getPluginManager().callEvent(playerJoinEvent);
++        io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_EVENT, joinEventTimer); // Knowledge - join timings
+ 
+         if (!player.connection.isAcceptingMessages()) {
+             return;
 @@ -490,7 +_,9 @@
          for (ThrownEnderpearl thrownEnderpearl : player.getEnderPearls()) {
              // Paper start - Allow using old ender pearl behavior
@@ -92,6 +102,43 @@
          for (int i = 0; i < this.players.size(); i++) {
              ServerPlayer serverPlayer = this.players.get(i);
              // CraftBukkit start - Test if player receiving packet can see the source of the packet
+@@ -1205,12 +_,17 @@
+         }
+     }
+     public ServerStatsCounter getPlayerStats(GameProfile gameProfile) {
++            final long statsTimer = io.multipaper.shreddedpaper.util.TickTimings.start(); // Knowledge - join timings
++            ServerStatsCounter preloaded = io.multipaper.shreddedpaper.player.JoinPreload.statsFor(this.server, gameProfile); // Knowledge - join preload
++            if (preloaded != null) { io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_STATS, statsTimer); return preloaded; } // Knowledge - join preload
+             Path path = this.locateStatsFile(gameProfile);
+-            return new ServerStatsCounter(this.server, path);
++            ServerStatsCounter counter = new ServerStatsCounter(this.server, path);
++            io.multipaper.shreddedpaper.util.TickTimings.since(io.multipaper.shreddedpaper.util.TickTimings.Phase.JOIN_STATS, statsTimer); // Knowledge - join timings
++            return counter;
+     }
+     // CraftBukkit end
+ 
+-    private Path locateStatsFile(GameProfile profile) {
++    public Path locateStatsFile(GameProfile profile) { // Knowledge - public for the join preload
+         Path worldPath = this.server.getWorldPath(LevelResource.PLAYER_STATS_DIR);
+         Path path = worldPath.resolve(profile.id() + ".json");
+         if (Files.exists(path)) {
+@@ -1238,7 +_,15 @@
+         PlayerAdvancements playerAdvancements = player.getAdvancements(); // CraftBukkit
+         if (playerAdvancements == null) {
+             Path path = this.server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR).resolve(uuid + ".json");
+-            playerAdvancements = new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player);
++            PlayerAdvancements.Preparsed preparsed = io.multipaper.shreddedpaper.player.JoinPreload.advancementsFor(uuid, path); // Knowledge - join preload
++            // Knowledge start - join preload
++            if (preparsed != null && preparsed.detached != null) {
++                PlayerAdvancements detached = preparsed.detached;
++                preparsed.detached = null;
++                playerAdvancements = detached.attach(player, this.server.getAdvancements()) ? detached : new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player);
++            } else
++            // Knowledge end - join preload
++            playerAdvancements = preparsed != null ? new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player, preparsed) : new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player); // Knowledge - join preload
+             // this.advancements.put(uuid, playerAdvancements); // CraftBukkit
+         }
+ 
 @@ -1269,7 +_,7 @@
      }
  

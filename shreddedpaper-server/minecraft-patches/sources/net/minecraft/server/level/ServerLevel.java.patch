@@ -32,12 +32,13 @@
  import java.util.function.BooleanSupplier;
  import java.util.function.Function;
  import java.util.function.Predicate;
-@@ -190,11 +_,11 @@
+@@ -190,11 +_,12 @@
      private static final Logger LOGGER = LogUtils.getLogger();
      private static final int EMPTY_TIME_NO_TICK = 300;
      private static final int MAX_SCHEDULED_TICKS_PER_TICK = 65536;
 -    final List<ServerPlayer> players = Lists.newArrayList();
 +    final List<ServerPlayer> players = new CopyOnWriteArrayList<>(); // ShreddedPaper - thread-safe (players should not be changing worlds often, thus copy-on-write is sufficient)
++    public final io.multipaper.shreddedpaper.player.NearbyPlayerIndex knowledgePlayerIndex = new io.multipaper.shreddedpaper.player.NearbyPlayerIndex(this.players); // Evangelium - nearest-player searches without walking every player
      public final ServerChunkCache chunkSource;
      private final MinecraftServer server;
      public final net.minecraft.world.level.storage.PrimaryLevelData serverLevelData; // CraftBukkit - type
@@ -628,8 +629,52 @@
          // CraftBukkit end
          this.getServer().overworld().getDataStorage().set(MapItemSavedData.type(mapId), data);
      }
-@@ -2408,15 +_,16 @@
+@@ -2406,17 +_,60 @@
+         return this.players;
+     }
  
++    // Evangelium start - nearby player index: the same answers as the EntityGetter / ServerEntityGetter defaults, without walking every player
++    @Override
++    public @Nullable Player getNearestPlayer(double x, double y, double z, double distance, java.util.function.@Nullable Predicate<Entity> predicate) {
++        return this.knowledgePlayerIndex.getNearestPlayer(x, y, z, distance, predicate);
++    }
++
++    @Override
++    @SuppressWarnings("unchecked")
++    public <T extends LivingEntity> @Nullable T getNearestEntity(List<? extends T> entities, net.minecraft.world.entity.ai.targeting.TargetingConditions targetingConditions, @Nullable LivingEntity source, double x, double y, double z) {
++        if (entities == this.players) {
++            return (T) this.knowledgePlayerIndex.getNearestTargetedPlayer(this, targetingConditions, source, x, y, z);
++        }
++        double d = -1.0;
++        T livingEntity = null;
++        for (T livingEntity1 : entities) {
++            if (targetingConditions.test(this, source, livingEntity1)) {
++                double d1 = livingEntity1.distanceToSqr(x, y, z);
++                if (d == -1.0 || d1 < d) {
++                    d = d1;
++                    livingEntity = livingEntity1;
++                }
++            }
++        }
++        return livingEntity;
++    }
++
++    @Override
++    public List<Player> getNearbyPlayers(net.minecraft.world.entity.ai.targeting.TargetingConditions targetingConditions, LivingEntity source, AABB area) {
++        return this.knowledgePlayerIndex.getNearbyPlayers(this, targetingConditions, source, area);
++    }
++
++    @Override
++    public boolean hasNearbyAlivePlayerThatAffectsSpawning(double x, double y, double z, double range) {
++        return this.knowledgePlayerIndex.hasNearbyAlivePlayerThatAffectsSpawning(x, y, z, range);
++    }
++
++    @Override
++    public boolean hasNearbyAlivePlayer(double x, double y, double z, double distance) {
++        return this.knowledgePlayerIndex.hasNearbyAlivePlayer(x, y, z, distance);
++    }
++    // Evangelium end
++
      @Override
      public void updatePOIOnBlockStateChange(BlockPos pos, BlockState oldState, BlockState newState) {
 +        if (!oldState.evangeliumHasPoi() && !newState.evangeliumHasPoi()) return; // Evangelium - neither is a POI: both lookups below would be empty
@@ -733,7 +778,7 @@
              // Paper start - Reset pearls when they stop being ticked
              if (ServerLevel.this.paperConfig().fixes.disableUnloadedChunkEnderpearlExploit && ServerLevel.this.paperConfig().misc.legacyEnderPearlBehavior && entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl pearl) {
                  pearl.setOwner(null);
-@@ -2872,10 +_,11 @@
+@@ -2872,10 +_,12 @@
  
          @Override
          public void onTrackingStart(Entity entity) {
@@ -742,6 +787,7 @@
              // ServerLevel.this.getChunkSource().addEntity(entity); // Paper - ignore and warn about illegal addEntity calls instead of crashing server; moved down below valid=true
              if (entity instanceof ServerPlayer serverPlayer) {
                  ServerLevel.this.players.add(serverPlayer);
++                ServerLevel.this.knowledgePlayerIndex.invalidate(); // Evangelium - nearby player index
 +                ServerLevel.this.getChunkSource().tickingRegions.addPlayer(serverPlayer); // ShreddedPaper - add player to region
                  if (serverPlayer.isReceivingWaypoints()) {
                      ServerLevel.this.getWaypointManager().addPlayer(serverPlayer);
@@ -785,12 +831,13 @@
                      }
                  }
              }
-@@ -2953,20 +_,21 @@
+@@ -2953,20 +_,22 @@
              // Spigot end
              ServerLevel.this.getChunkSource().removeEntity(entity);
              if (entity instanceof ServerPlayer serverPlayer) {
 +                ServerLevel.this.getChunkSource().tickingRegions.removePlayer(serverPlayer); // ShreddedPaper - remove player from region
                  ServerLevel.this.players.remove(serverPlayer);
++                ServerLevel.this.knowledgePlayerIndex.invalidate(); // Evangelium - nearby player index
                  ServerLevel.this.getWaypointManager().removePlayer(serverPlayer);
                  ServerLevel.this.updateSleepingPlayerList();
              }

@@ -18,7 +18,28 @@ public final class TickTimings {
     public static final int INTERVAL = Integer.getInteger("shreddedpaper.timings", 0);
 
     public enum Phase {
-        TICK, MAIN_BEFORE_WORLDS, WAIT_FOR_WORLDS, MAIN_AFTER_WORLDS, WORLD, REGIONS_WALL, REGION_SUM, REGION_LARGEST, REGION_LOCK_WAIT, TRACK, FLUSH, PHASED
+        TICK, MAIN_BEFORE_WORLDS, WAIT_FOR_WORLDS, MAIN_AFTER_WORLDS, WORLD, REGIONS_WALL, REGION_SUM, REGION_LARGEST, REGION_LOCK_WAIT, TRACK, FLUSH, PHASED,
+        // joins (one sample per join, not per tick): main thread PrepareSpawnTask.start / poll of the preload, registry + tag sync,
+        // the whole spawn on the region thread and its parts: ServerPlayer constructor (stats, advancements read + listeners),
+        // the player file read + load, placeNewPlayer, PlayerJoinEvent inside it, the first full advancement packet
+        JOIN_MAIN, JOIN_REGSYNC, JOIN_SPAWN, JOIN_CTOR, JOIN_STATS, JOIN_ADV_READ, JOIN_ADV_LISTEN, JOIN_LOAD, JOIN_PLACE, JOIN_EVENT, JOIN_ADV_PACKET
+    }
+
+    private static final AtomicLong JOINS = new AtomicLong();
+
+    /** nanoTime when timings are on, else 0 (so callers pay nothing when off). */
+    public static long start() {
+        return INTERVAL > 0 ? System.nanoTime() : 0L;
+    }
+
+    /** Adds the time since {@link #start()} to the phase (no-op when timings are off). */
+    public static void since(Phase phase, long start) {
+        if (INTERVAL > 0 && start != 0L) {
+            add(phase, System.nanoTime() - start);
+            if (phase == Phase.JOIN_SPAWN) {
+                JOINS.incrementAndGet();
+            }
+        }
     }
 
     private static final AtomicLong[] TOTAL = new AtomicLong[Phase.values().length];
@@ -28,6 +49,8 @@ public final class TickTimings {
     private static long ticks;
     public static final AtomicLong OWNER_CHUNKS = new AtomicLong();
     public static final AtomicLong HELPER_CHUNKS = new AtomicLong();
+    public static final AtomicLong BATCHED = new AtomicLong();      // Evangelium - neighbour regions ticked under a moved lock
+    public static final AtomicLong SLOT_WAITS = new AtomicLong();   // Evangelium - dispatcher slots that found no free region and waited
 
     static {
         for (int i = 0; i < TOTAL.length; i++) {
@@ -85,8 +108,10 @@ public final class TickTimings {
             line.append(' ').append(p.name().toLowerCase()).append(' ')
                     .append(String.format("%.2f/%.1f", total / 1e6 / INTERVAL, max / 1e6));
         }
+        line.append(" joins ").append(JOINS.getAndSet(0));
         line.append(" regions/tick ").append(String.format("%.1f", REGIONS.getAndSet(0) / (double) INTERVAL));
         line.append(" chunks by owner/helpers ").append(OWNER_CHUNKS.getAndSet(0)).append('/').append(HELPER_CHUNKS.getAndSet(0));
+        line.append(" batched ").append(BATCHED.getAndSet(0)).append(" slotwaits ").append(SLOT_WAITS.getAndSet(0));
         LOGGER.info(line.toString());
     }
 }

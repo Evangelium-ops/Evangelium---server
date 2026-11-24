@@ -39,7 +39,7 @@ public class LevelChunkRegionMap {
             return levelChunkRegion;
         }
 
-        return regionsLock.write(() -> regions.computeIfAbsent(regionPos.longKey, k -> new LevelChunkRegion(level, regionPos)));
+        return regionsLock.write(() -> regions.computeIfAbsent(regionPos.longKey, k -> new LevelChunkRegion(level, regionPos, this)));
     }
 
     public LevelChunkRegion get(RegionPos regionPos) {
@@ -86,6 +86,63 @@ public class LevelChunkRegionMap {
     public void removeTickingChunk(LevelChunk levelChunk) {
         getOrCreate(RegionPos.forChunk(levelChunk.getPos())).remove(levelChunk);
     }
+
+    // Evangelium start - regions that may have queued internal tasks (a superset: a region is added after a task is queued and only taken
+    // out by forEachWithTasks after it was seen empty), so a thread waiting for a chunk visits those instead of every ticking region
+    private final java.util.Set<LevelChunkRegion> regionsWithTasks = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** -Dshreddedpaper.taskRegionSet=false walks every ticking region as before (A/B switch). */
+    public static final boolean TASK_REGION_SET = Boolean.parseBoolean(System.getProperty("shreddedpaper.taskRegionSet", "true"));
+
+    private int withTasksCalls; // racy on purpose: only spaces out the safety-net walks
+
+    void markHasTasks(LevelChunkRegion region) {
+        this.regionsWithTasks.add(region);
+    }
+
+    /**
+     * The regions that have queued internal tasks, in no particular order. A region is taken out of the set first and checked after, and a
+     * producer queues first and adds after, so a region with a queued task is never left out. Regions no longer in the map are dropped.
+     */
+    public void forEachWithTasks(Consumer<LevelChunkRegion> consumer) {
+        // safety net: every 64th call walks every region as before (also re-adds a region that remove() put back into the map just after
+        // this method saw it missing and dropped it)
+        if (!TASK_REGION_SET || (++this.withTasksCalls & 63) == 0) {
+            forEach(region -> {
+                if (!region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                    if (TASK_REGION_SET) this.regionsWithTasks.add(region);
+                    consumer.accept(region);
+                }
+            });
+            return;
+        }
+        if (this.regionsWithTasks.isEmpty()) {
+            return;
+        }
+        List<LevelChunkRegion> withTasks = null;
+        for (java.util.Iterator<LevelChunkRegion> it = this.regionsWithTasks.iterator(); it.hasNext(); ) {
+            LevelChunkRegion region = it.next();
+            if (region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                it.remove();
+                if (region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                    continue;
+                }
+                this.regionsWithTasks.add(region); // a task came in between: keep it
+            }
+            if (withTasks == null) withTasks = new ArrayList<>();
+            withTasks.add(region);
+        }
+        if (withTasks != null) {
+            for (LevelChunkRegion region : withTasks) {
+                // no bumpLastAccess here (get() would keep idle regions alive); a region dropped from the map is forgotten, as before
+                if (regionsLock.optimisticRead(() -> regions.get(region.getRegionPos().longKey)) == region) {
+                    consumer.accept(region);
+                } else {
+                    this.regionsWithTasks.remove(region);
+                }
+            }
+        }
+    }
+    // Evangelium end
 
     public void forEach(Consumer<LevelChunkRegion> consumer) {
         List<LevelChunkRegion> regionsCopy = new ArrayList<>(regions.size());

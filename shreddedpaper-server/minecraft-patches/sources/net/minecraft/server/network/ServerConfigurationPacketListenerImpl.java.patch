@@ -1,0 +1,18 @@
+--- a/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerConfigurationPacketListenerImpl.java
+@@ -188,6 +_,7 @@
+     @Override
+     public void handleConfigurationFinished(ServerboundFinishConfigurationPacket packet) {
+         PacketUtils.ensureRunningOnSameThread(packet, this, this.server.packetProcessor());
++        if (io.papermc.paper.util.KeepAlive.DEBUG) this.keepAlive.note("finish configuration acknowledged"); // Evangelium - keepalive debug
+         this.finishCurrentTask(JoinWorldTask.TYPE);
+         this.connection.setupOutboundProtocol(GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(this.server.registryAccess())));
+ 
+@@ -238,6 +_,7 @@
+             ConfigurationTask configurationTask = this.configurationTasks.poll();
+             if (configurationTask != null) {
+                 this.currentTask = configurationTask;
++                if (io.papermc.paper.util.KeepAlive.DEBUG && configurationTask instanceof JoinWorldTask) this.keepAlive.note("finish configuration sent"); // Evangelium - keepalive debug
+ 
+                 try {
+                     configurationTask.start(this::send);

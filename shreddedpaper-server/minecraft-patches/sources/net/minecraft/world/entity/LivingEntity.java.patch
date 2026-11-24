@@ -22,6 +22,14 @@
                  AttributeInstance attribute = this.getAttribute(Attributes.MOVEMENT_SPEED);
                  if (attribute == null) {
                      return;
+@@ -1360,6 +_,7 @@
+ 
+     private void refreshDirtyAttributes() {
+         Set<AttributeInstance> attributesToUpdate = this.getAttributes().getAttributesToUpdate();
++        if (attributesToUpdate.isEmpty()) return; // Evangelium - nothing changed (almost every tick): no iterator, no clear
+ 
+         for (AttributeInstance attributeInstance : attributesToUpdate) {
+             this.onAttributeUpdated(attributeInstance.getAttribute());
 @@ -3811,7 +_,8 @@
          if (this.level() instanceof ServerLevel serverLevel) {
              profilerFiller.push("freezing");

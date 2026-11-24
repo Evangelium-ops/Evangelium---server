@@ -244,3 +244,11 @@
      }
  
      // Paper start - per world respawn data - read "server global" respawn data from overworld dimension reference
+@@ -2342,6 +_,7 @@
+                     );
+                     this.worldData.setDataConfiguration(worldDataConfiguration);
+                     this.resources.managers.updateStaticRegistryTags();
++                    io.multipaper.shreddedpaper.player.RegistrySyncCache.invalidate(); // Knowledge - datapack reload: rebuild the cached configuration packets
+                     this.resources.managers.getRecipeManager().finalizeRecipeLoading(this.worldData.enabledFeatures());
+                     this.potionBrewing = this.potionBrewing.reload(this.worldData.enabledFeatures()); // Paper - Custom Potion Mixes
+                     if (Thread.currentThread() != this.serverThread) return; // Paper

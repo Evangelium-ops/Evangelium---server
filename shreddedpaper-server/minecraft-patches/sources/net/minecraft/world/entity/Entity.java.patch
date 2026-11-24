@@ -667,7 +667,7 @@
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.deltaMovement = deltaMovement;
              } // Paper - detailed watchdog information
-@@ -5099,6 +_,14 @@
+@@ -5099,6 +_,15 @@
          }
          // Paper end - Block invalid positions and bounding box
          if (this.position.x != x || this.position.y != y || this.position.z != z) {
@@ -678,6 +678,7 @@
 +                TickThread.ensureTickThread(this.level(), BlockPos.containing(x, y, z), "Cannot move entity to an unowned region");
 +            }
 +
++            if (this instanceof net.minecraft.server.level.ServerPlayer knowledgePlayer) io.multipaper.shreddedpaper.player.NearbyPlayerIndex.moved(knowledgePlayer, x, z); // Evangelium - nearby player index
 +            if (PhysicsOptimizations.noPosLock()) this.position = new Vec3(x, y, z); else // Knowledge - a reference write needs no lock; nothing reads under posLock
              synchronized (this.posLock) { // Paper - detailed watchdog information
              this.position = new Vec3(x, y, z);

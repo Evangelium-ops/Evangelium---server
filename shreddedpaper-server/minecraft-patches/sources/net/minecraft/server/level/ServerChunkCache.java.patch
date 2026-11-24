@@ -158,7 +158,12 @@
          if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
              // re-set mob counts
              for (ServerPlayer player : this.level.players) {
-@@ -551,11 +_,13 @@
+@@ -547,15 +_,17 @@
+                 }
+                 // Paper end - per player mob spawning backoff
+             }
+-            spawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, null, true);
++            spawnState = NaturalSpawner.createStateParallel(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, true); // Evangelium - counted on the tick threads
          } else {
              spawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
          }
@@ -275,13 +280,14 @@
          }
      }
  
-@@ -823,12 +_,27 @@
+@@ -823,12 +_,28 @@
  
          @Override
          public boolean pollTask() {
 +            // ShreddedPaper start - run all region tasks cause the worker threads might be deadlocked and not get to them
 +            if ((!MinecraftServer.getServer().executingMidTickTasks.get() && TickThread.isTickThread()) || TickThread.isShutdownThread()) {
-+                level.getChunkSource().tickingRegions.forEach(region -> {
++                // Evangelium - only the regions with queued tasks (the old walk copied and visited every ticking region on each wake-up)
++                level.getChunkSource().tickingRegions.forEachWithTasks(region -> {
 +                    if (TickThread.isShutdownThread()) {
 +                        // We're trying to shut down the server, just execute all the tasks
 +                        region.getInternalTaskQueue().executeTask();
