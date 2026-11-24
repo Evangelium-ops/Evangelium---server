@@ -274,6 +274,36 @@ public final class NearbyPlayerIndex {
         return list;
     }
 
+    // ------------------------------------------------------------------------------------------------ natural spawning (SpawnPlayerProbe)
+
+    /** Every player that passes the predicate and is within {@code reach} (3D, live position) of (x, y, z), in no particular order. */
+    public void forPlayersWithin(double x, double y, double z, double reach, @Nullable Predicate<Entity> predicate, java.util.function.Consumer<Player> out) {
+        final double reach2 = reach * reach;
+        if (ENABLED) {
+            final double outer = reach + DRIFT;
+            final double outer2 = outer * outer;
+            final Snapshot s = this.snapshot();
+            final double[] xz = s.xz;
+            for (int i = 0, n = s.players.length; i < n; i++) {
+                double dx = xz[2 * i] - x;
+                double dz = xz[2 * i + 1] - z;
+                if (dx * dx + dz * dz >= outer2) {
+                    continue;
+                }
+                Player player = s.players[i];
+                if ((predicate == null || predicate.test(player)) && player.distanceToSqr(x, y, z) <= reach2) {
+                    out.accept(player);
+                }
+            }
+            return;
+        }
+        for (Player player : this.players) {
+            if ((predicate == null || predicate.test(player)) && player.distanceToSqr(x, y, z) <= reach2) {
+                out.accept(player);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------ "is a player near" checks
 
     /** EntityGetter.hasNearbyAlivePlayerThatAffectsSpawning (spawners). */

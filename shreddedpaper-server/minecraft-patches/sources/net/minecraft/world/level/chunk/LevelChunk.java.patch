@@ -17,6 +17,14 @@
  import net.minecraft.server.level.FullChunkStatus;
  import net.minecraft.server.level.ServerLevel;
  import net.minecraft.util.ProblemReporter;
+@@ -64,6 +_,7 @@
+ import org.slf4j.Logger;
+ 
+ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemLevelChunk, ca.spottedleaf.moonrise.patches.starlight.chunk.StarlightChunk, ca.spottedleaf.moonrise.patches.getblock.GetBlockChunk { // Paper - rewrite chunk system // Paper - get block chunk optimisation
++    public io.multipaper.shreddedpaper.spawn.SpawnSkip.@org.jspecify.annotations.Nullable Hood knowledge$spawnHood; // Evangelium - natural spawn skip: summary of the 5x5 chunks around (written and read by the chunk's region thread)
+     static final Logger LOGGER = LogUtils.getLogger();
+     private static final TickingBlockEntity NULL_TICKER = new TickingBlockEntity() {
+         @Override
 @@ -85,7 +_,7 @@
              return "<null>";
          }
@@ -74,7 +82,14 @@
  
      @Override
      public void markUnsaved() {
-@@ -378,6 +_,7 @@
+@@ -375,9 +_,14 @@
+             int i1 = y & 15;
+             int i2 = pos.getZ() & 15;
+             BlockState blockState = section.setBlockState(i, i1, i2, state);
++            if (section.knowledge$waterLayers != -1 && (section.knowledge$waterLayers & (1 << i1)) == 0 && state.getFluidState().is(net.minecraft.tags.FluidTags.WATER)) { // Evangelium - natural spawn skip: first water in a scanned layer
++                section.knowledge$waterLayers |= 1 << i1;
++                io.multipaper.shreddedpaper.spawn.SpawnSkip.WET_EPOCH.incrementAndGet();
++            }
              if (blockState == state) {
                  return null;
              } else {

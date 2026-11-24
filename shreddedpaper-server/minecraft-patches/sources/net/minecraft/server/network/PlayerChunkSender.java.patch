@@ -22,7 +22,7 @@
      public static final float MIN_CHUNKS_PER_TICK = 0.01F;
      public static final float MAX_CHUNKS_PER_TICK = 64.0F;
      private static final float START_CHUNKS_PER_TICK = 9.0F;
-@@ -81,7 +_,16 @@
+@@ -81,7 +_,22 @@
      public static void sendChunk(ServerGamePacketListenerImpl packetListener, ServerLevel level, LevelChunk chunk) { // Paper - rewrite chunk system - public
          // Paper start - Anti-Xray
          final boolean shouldModify = level.chunkPacketBlockController.shouldModify(packetListener.player, chunk);
@@ -30,10 +30,16 @@
 +        // ShreddedPaper start - Cache chunk packet
 +        Reference<ClientboundLevelChunkWithLightPacket> cachedChunkPacket = chunk.cachedChunkPacket;
 +        ClientboundLevelChunkWithLightPacket chunkPacket;
-+        if (cachedChunkPacket == null || (chunkPacket = chunk.cachedChunkPacket.get()) == null || chunkPacket.modifyBlocks != shouldModify) {
++        if (cachedChunkPacket == null || (chunkPacket = cachedChunkPacket.get()) == null || chunkPacket.modifyBlocks != shouldModify) {
++            final long buildStart = io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.ON ? System.nanoTime() : 0L; // Knowledge - cache counters
 +            chunkPacket = new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify);
++            if (io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.ON) { // Knowledge start - cache counters
++                io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.BUILD_NANOS.add(System.nanoTime() - buildStart);
++                ClientboundLevelChunkWithLightPacket was = cachedChunkPacket == null ? null : cachedChunkPacket.get();
++                (cachedChunkPacket == null ? io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.MISS_EMPTY : was == null ? io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.MISS_CLEARED : io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.MISS_MODIFY).increment();
++            } // Knowledge end - cache counters
 +            if (CHUNK_PACKET_CACHING) chunk.cachedChunkPacket = ShreddedPaperConfiguration.get().optimizations.chunkPacketCaching.useSoftReferences ? new SoftReference<>(chunkPacket) : new WeakReference<>(chunkPacket);
-+        }
++        } else if (io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.ON) io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.hit(level.getGameTime() - chunk.cachedChunkPacketLastAccessed); // Knowledge - cache counters
 +        chunk.cachedChunkPacketLastAccessed = level.getGameTime();
 +        packetListener.send(chunkPacket);
 +        // ShreddedPaper end - Cache chunk packet

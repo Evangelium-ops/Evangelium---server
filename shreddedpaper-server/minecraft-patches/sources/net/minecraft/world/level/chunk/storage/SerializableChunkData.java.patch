@@ -8,6 +8,19 @@
  ) {
      private static final Codec<List<SavedTick<Block>>> BLOCK_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.BLOCK.byNameCodec()).listOf();
      private static final Codec<List<SavedTick<Fluid>>> FLUID_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.FLUID.byNameCodec()).listOf();
+@@ -166,8 +_,10 @@
+                     compoundTag1.getLongArray(types.getSerializationKey()).ifPresent(longs1 -> map.put(types, longs1));
+                 }
+             });
+-            List<SavedTick<Block>> list = SavedTick.filterTickListForChunk(tag.read("block_ticks", BLOCK_TICKS_CODEC).orElse(List.of()), chunkPos);
+-            List<SavedTick<Fluid>> list1 = SavedTick.filterTickListForChunk(tag.read("fluid_ticks", FLUID_TICKS_CODEC).orElse(List.of()), chunkPos);
++            // Evangelium start - packed ticks: read block_ticks/fluid_ticks without codec objects (clean case only, else the codec)
++            List<SavedTick<Block>> list = io.multipaper.shreddedpaper.ticks.PackedTicks.IO ? readTicks(tag, "block_ticks", BLOCK_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.BLOCK, chunkPos) : SavedTick.filterTickListForChunk(tag.read("block_ticks", BLOCK_TICKS_CODEC).orElse(List.of()), chunkPos);
++            List<SavedTick<Fluid>> list1 = io.multipaper.shreddedpaper.ticks.PackedTicks.IO ? readTicks(tag, "fluid_ticks", FLUID_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.FLUID, chunkPos) : SavedTick.filterTickListForChunk(tag.read("fluid_ticks", FLUID_TICKS_CODEC).orElse(List.of()), chunkPos);
++            // Evangelium end
+             ChunkAccess.PackedTicks packedTicks = new ChunkAccess.PackedTicks(list, list1);
+             ListTag listOrEmpty = tag.getListOrEmpty("PostProcessing");
+             ShortList[] lists = new ShortList[listOrEmpty.size()];
 @@ -201,19 +_,37 @@
                      LevelChunkSection levelChunkSection;
                      if (byteOr >= level.getMinSectionY() && byteOr <= level.getMaxSectionY()) {
@@ -130,3 +143,50 @@
          if (this.persistentDataContainer != null) { // SPIGOT-6814: Always save PDC to account for 1.17 to 1.18 chunk upgrading.
              compoundTag.put("ChunkBukkitValues", this.persistentDataContainer);
          }
+@@ -655,9 +_,46 @@
+     }
+ 
+     private static void saveTicks(CompoundTag tag, ChunkAccess.PackedTicks ticks) {
++        // Evangelium start - packed ticks: write PackedTickList straight to NBT (same tags), anything else through the codec
++        if (io.multipaper.shreddedpaper.ticks.PackedTicks.IO) {
++            writeTicks(tag, "block_ticks", BLOCK_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.BLOCK, ticks.blocks());
++            writeTicks(tag, "fluid_ticks", FLUID_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.FLUID, ticks.fluids());
++            return;
++        }
++        // Evangelium end
+         tag.store("block_ticks", BLOCK_TICKS_CODEC, ticks.blocks());
+         tag.store("fluid_ticks", FLUID_TICKS_CODEC, ticks.fluids());
+     }
++
++    // Evangelium start - packed ticks
++    private static <T> List<SavedTick<T>> readTicks(CompoundTag tag, String key, Codec<List<SavedTick<T>>> codec, net.minecraft.core.Registry<T> registry, ChunkPos chunkPos) {
++        List<SavedTick<T>> fast = io.multipaper.shreddedpaper.ticks.PackedTickIO.read(tag, key, registry, chunkPos);
++        if (fast == null || io.multipaper.shreddedpaper.ticks.PackedTicks.VERIFY) {
++            List<SavedTick<T>> slow = SavedTick.filterTickListForChunk(tag.read(key, codec).orElse(List.of()), chunkPos);
++            if (fast == null) {
++                return slow;
++            }
++            io.multipaper.shreddedpaper.ticks.PackedTicks.check();
++            if (!io.multipaper.shreddedpaper.ticks.PackedTicks.sameSaved(fast, slow)) {
++                io.multipaper.shreddedpaper.ticks.PackedTicks.mismatch("read " + key + " " + chunkPos + " fast=" + fast + " codec=" + slow);
++            }
++        }
++        return fast;
++    }
++
++    private static <T> void writeTicks(CompoundTag tag, String key, Codec<List<SavedTick<T>>> codec, net.minecraft.core.Registry<T> registry, List<SavedTick<T>> ticks) {
++        if (!io.multipaper.shreddedpaper.ticks.PackedTickIO.write(tag, key, registry, ticks)) {
++            tag.store(key, codec, ticks);
++        } else if (io.multipaper.shreddedpaper.ticks.PackedTicks.VERIFY) {
++            CompoundTag slow = new CompoundTag();
++            slow.store(key, codec, new java.util.ArrayList<>(ticks));
++            io.multipaper.shreddedpaper.ticks.PackedTicks.check();
++            if (!java.util.Objects.equals(slow.get(key), tag.get(key))) {
++                io.multipaper.shreddedpaper.ticks.PackedTicks.mismatch("write " + key + " fast=" + tag.get(key) + " codec=" + slow.get(key));
++            }
++        }
++    }
++    // Evangelium end
+ 
+     public static ChunkStatus getChunkStatusFromTag(@Nullable CompoundTag tag) {
+         return tag != null ? tag.read("Status", ChunkStatus.CODEC).orElse(ChunkStatus.EMPTY) : ChunkStatus.EMPTY;

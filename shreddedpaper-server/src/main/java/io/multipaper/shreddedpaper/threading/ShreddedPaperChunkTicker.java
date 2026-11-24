@@ -238,6 +238,7 @@ public class ShreddedPaperChunkTicker {
                     }
                 }
                 RegionBudget.sliced(RegionBudget.Work.RANDOM, System.nanoTime() - randomStart);
+                io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.RANDOM_TICKS, System.nanoTime() - randomStart); // Evangelium - benchmark timings (no-op when off)
 
                 // Knowledge - tick budget: block events (pistons, note blocks, bells) are redstone's other half: they run in their turn too
                 if (RegionBudget.ticksRegionWork()) {
@@ -341,6 +342,7 @@ public class ShreddedPaperChunkTicker {
         // ShreddedPaper start - clear chunk packet cache
         if (levelChunk.cachedChunkPacket != null && levelChunk.cachedChunkPacketLastAccessed < world.getGameTime() - ShreddedPaperConfiguration.get().optimizations.chunkPacketCaching.expireAfter) {
             levelChunk.cachedChunkPacket = null;
+            if (io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.ON) io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.EXPIRED.increment(); // Knowledge - cache counters
         }
         // ShreddedPaper end - clear chunk packet cache
 

@@ -415,6 +415,36 @@
      }
  
      // Paper start - optimise random ticking
+@@ -982,6 +_,29 @@
+                 continue;
+             }
+ 
++            // Evangelium start - ticking-block set (list or 4096 bits): each ticking block still has chance 1/4096 per try
++            if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) {
++                if (io.multipaper.shreddedpaper.util.TickingBlockVerify.VERIFY && (simpleRandom.nextInt() & 63) == 0) section.knowledge$verifyTickingTruth();
++                for (int i = 0; i < tickSpeed; ++i) {
++                    final int location = section.knowledge$pickTicking(simpleRandom.nextInt() & ((16 * 16 * 16) - 1));
++                    if (location < 0) {
++                        // most of the time we fall here
++                        continue;
++                    }
++                    final BlockState state = states.get(location);
++                    final BlockPos pos = new BlockPos((location & 15) | offsetX, ((location >>> (4 + 4)) & 15) | offsetY, ((location >>> 4) & 15) | offsetZ);
++                    state.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                    if (doubleTickFluids) {
++                        final FluidState fluidState = state.getFluidState();
++                        if (fluidState.isRandomlyTicking()) {
++                            fluidState.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                        }
++                    }
++                }
++                continue;
++            }
++            // Evangelium end - ticking-block set
++
+             final ca.spottedleaf.moonrise.common.list.ShortList tickList = ((ca.spottedleaf.moonrise.patches.block_counting.BlockCountingChunkSection)section).moonrise$getTickingBlockList();
+ 
+             for (int i = 0; i < tickSpeed; ++i) {
 @@ -1182,7 +_,7 @@
      }
  

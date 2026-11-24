@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/chunk/LevelChunkSection.java
 +++ b/net/minecraft/world/level/chunk/LevelChunkSection.java
-@@ -18,6 +_,24 @@
+@@ -18,6 +_,25 @@
      private short tickingBlockCount;
      private short tickingFluidCount;
      public final PalettedContainer<BlockState> states;
@@ -21,10 +21,68 @@
 +        return 3;
 +    }
 +    // Knowledge end
++    public int knowledge$waterLayers = -1; // Evangelium - natural spawn skip: bit y set = layer y may hold water (-1 = not scanned yet; bits are only added, see SpawnSkip)
 +    public int knowledge$changes; // Knowledge - counts block changes, so a resting entity can tell its surroundings are unchanged (Entity resting cache)
      private PalettedContainer<Holder<Biome>> biomes; // CraftBukkit - read/write
  
      // Paper start - block counting
+@@ -31,7 +_,46 @@
+     private boolean isClient;
+     private static final short CLIENT_FORCED_SPECIAL_COLLIDING_BLOCKS = (short)9999;
+     private short specialCollidingBlocks;
+-    private final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = new ca.spottedleaf.moonrise.common.list.ShortList();
++    // Evangelium start - ticking-block set: list or 4096 bits, nothing while the section has no randomly ticking block
++    // null, short[] list or long[] bits (TickingBlockSet); Moonrise's ShortList when the switch is off (one field for both keeps the section at 48 bytes)
++    private Object knowledge$tickingData = io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED ? null : new ca.spottedleaf.moonrise.common.list.ShortList();
++
++    /** Moonrise's list: the data itself with the switch off, a side copy in verify mode, else null. */
++    private ca.spottedleaf.moonrise.common.list.ShortList knowledge$oldList() {
++        if (!io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) return (ca.spottedleaf.moonrise.common.list.ShortList)this.knowledge$tickingData;
++        return io.multipaper.shreddedpaper.util.TickingBlockVerify.VERIFY ? io.multipaper.shreddedpaper.util.TickingBlockVerify.oldList(this) : null;
++    }
++    private short knowledge$tickingSize; // kept here so a random tick try that hits nothing reads only the section
++
++    /** The position (x | z << 4 | y << 8) to random tick for r in [0, 4096), or -1 (each ticking block has chance 1/4096). */
++    public final int knowledge$pickTicking(final int r) {
++        final int size = this.knowledge$tickingSize;
++        return r >= size ? -1 : io.multipaper.shreddedpaper.util.TickingBlockSet.get(this.knowledge$tickingData, size, r);
++    }
++
++    private void knowledge$addTicking(final short position) {
++        final int size = this.knowledge$tickingSize;
++        final Object data = this.knowledge$tickingData;
++        if (io.multipaper.shreddedpaper.util.TickingBlockSet.contains(data, size, position)) return;
++        if (io.multipaper.shreddedpaper.util.TickingBlockVerify.PLANT_BUG > 0 && io.multipaper.shreddedpaper.util.TickingBlockVerify.plantBug()) return; // verify self-test only
++        this.knowledge$tickingData = io.multipaper.shreddedpaper.util.TickingBlockSet.addNew(data, size, position);
++        this.knowledge$tickingSize = (short)(size + 1);
++    }
++
++    private void knowledge$removeTicking(final short position) {
++        final int size = this.knowledge$tickingSize;
++        final Object data = this.knowledge$tickingData;
++        if (!io.multipaper.shreddedpaper.util.TickingBlockSet.contains(data, size, position)) return;
++        this.knowledge$tickingData = io.multipaper.shreddedpaper.util.TickingBlockSet.remove(data, size, position);
++        this.knowledge$tickingSize = (short)(size - 1);
++    }
++
++    /** Verify mode: the set against the block states themselves (catches update paths that both old and new structures miss). */
++    public final void knowledge$verifyTickingTruth() {
++        if (this.isClient) return;
++        io.multipaper.shreddedpaper.util.TickingBlockVerify.truth(this.states, this.knowledge$tickingData, this.knowledge$tickingSize, this.tickingBlockCount);
++    }
++    // Evangelium end - ticking-block set
+ 
+     @Override
+     public final boolean moonrise$hasSpecialCollidingBlocks() {
+@@ -40,7 +_,7 @@
+ 
+     @Override
+     public final ca.spottedleaf.moonrise.common.list.ShortList moonrise$getTickingBlockList() {
+-        return this.tickingBlocks;
++        return this.knowledge$oldList(); // Evangelium - null with the ticking-block set (outside verify mode)
+     }
+     // Paper end - block counting
+ 
 @@ -48,6 +_,7 @@
          this.nonEmptyBlockCount = section.nonEmptyBlockCount;
          this.tickingBlockCount = section.tickingBlockCount;
@@ -33,6 +91,27 @@
          this.states = section.states.copy();
          this.biomes = section.biomes.copy();
      }
+@@ -116,14 +_,17 @@
+         final boolean oldTicking = oldState.isRandomlyTicking();
+         final boolean newTicking = newState.isRandomlyTicking();
+         if (oldTicking != newTicking) {
+-            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.knowledge$oldList();
+             final short position = (short)(x | (z << 4) | (y << (4+4)));
+ 
+             if (oldTicking) {
+-                tickingBlocks.remove(position);
++                if (tickingBlocks != null) tickingBlocks.remove(position); // Evangelium - null with the ticking-block set
++                if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) this.knowledge$removeTicking(position); // Evangelium
+             } else {
+-                tickingBlocks.add(position);
++                if (tickingBlocks != null) tickingBlocks.add(position); // Evangelium - null with the ticking-block set
++                if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) this.knowledge$addTicking(position); // Evangelium
+             }
++            if (io.multipaper.shreddedpaper.util.TickingBlockVerify.VERIFY) io.multipaper.shreddedpaper.util.TickingBlockVerify.compare(tickingBlocks, this.knowledge$tickingData, this.knowledge$tickingSize, this.tickingBlockCount, "set"); // Evangelium
+         }
+     }
+     // Paper end - block counting
 @@ -136,6 +_,7 @@
              blockState = this.states.getAndSetUnchecked(x, y, z, state);
          }
@@ -49,7 +128,7 @@
  
          if (!state.isAir()) {
              this.nonEmptyBlockCount++;
-@@ -181,6 +_,120 @@
+@@ -181,6 +_,136 @@
          return this.tickingFluidCount > 0;
      }
  
@@ -123,13 +202,29 @@
 +            this.knowledge$countFluid(fluid, paletteCount); // Knowledge
 +        }
 +        if (ticking != null) {
-+            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.knowledge$oldList();
++            if (tickingBlocks != null) { // Evangelium - null with the ticking-block set
 +            tickingBlocks.setMinCapacity(tickingTotal);
 +            for (int index = 0; index < ids.length; ++index) {
 +                if (ticking[ids[index]]) {
 +                    tickingBlocks.add((short)index);
 +                }
 +            }
++            } // Evangelium
++            // Evangelium start - ticking-block set
++            if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) {
++                Object data = io.multipaper.shreddedpaper.util.TickingBlockSet.withCapacity(tickingTotal);
++                int size = 0;
++                for (int index = 0; index < ids.length; ++index) {
++                    if (ticking[ids[index]]) {
++                        data = io.multipaper.shreddedpaper.util.TickingBlockSet.addNew(data, size++, index);
++                    }
++                }
++                this.knowledge$tickingData = data;
++                this.knowledge$tickingSize = (short)size;
++            }
++            if (io.multipaper.shreddedpaper.util.TickingBlockVerify.VERIFY) io.multipaper.shreddedpaper.util.TickingBlockVerify.compare(tickingBlocks, this.knowledge$tickingData, this.knowledge$tickingSize, this.tickingBlockCount, "recalc");
++            // Evangelium end - ticking-block set
 +        }
 +    }
 +    // ShreddedPaper end - count with plain arrays
@@ -170,14 +265,18 @@
      public void recalcBlockCounts() {
          // Paper start - block counting
          // reset, then recalculate
-@@ -188,6 +_,7 @@
+@@ -188,7 +_,10 @@
          this.tickingBlockCount = (short)0;
          this.tickingFluidCount = (short)0;
          this.specialCollidingBlocks = (short)0;
+-        this.tickingBlocks.clear();
 +        this.knowledge$fluidCount = this.knowledge$waterCount = this.knowledge$lavaCount = (short)0; // Knowledge
-         this.tickingBlocks.clear();
++        final ca.spottedleaf.moonrise.common.list.ShortList oldTickingList = this.knowledge$oldList(); // Evangelium - null with the ticking-block set
++        if (oldTickingList != null) oldTickingList.clear();
++        if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) { this.knowledge$tickingData = null; this.knowledge$tickingSize = 0; } // Evangelium - ticking-block set
  
          if (this.maybeHas((final BlockState state) -> !state.isAir())) {
+             final PalettedContainer.Data<BlockState> data = this.states.data;
 @@ -196,6 +_,12 @@
              final int paletteSize = palette.getSize();
              final net.minecraft.util.BitStorage storage = data.storage();
@@ -191,7 +290,36 @@
              final it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<it.unimi.dsi.fastutil.shorts.ShortArrayList> counts;
              if (paletteSize == 1) {
                  counts = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(1);
-@@ -236,6 +_,7 @@
+@@ -225,17 +_,35 @@
+                     final short[] raw = coordinates.elements();
+                     final int rawLen = raw.length;
+ 
+-                    final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++                    final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.knowledge$oldList();
+ 
++                    if (tickingBlocks != null) { // Evangelium - null with the ticking-block set
+                     tickingBlocks.setMinCapacity(Math.min((rawLen + tickingBlocks.size()) * 3 / 2, 16*16*16));
+ 
+                     java.util.Objects.checkFromToIndex(0, paletteCount, raw.length);
+                     for (int i = 0; i < paletteCount; ++i) {
+                         tickingBlocks.add(raw[i]);
+                     }
++                    } // Evangelium
++                    // Evangelium start - ticking-block set
++                    if (io.multipaper.shreddedpaper.util.TickingBlockSet.ENABLED) {
++                        int tickSize = this.knowledge$tickingSize;
++                        Object tickData = this.knowledge$tickingData;
++                        if (tickData == null) {
++                            tickData = io.multipaper.shreddedpaper.util.TickingBlockSet.withCapacity(paletteCount);
++                        }
++                        java.util.Objects.checkFromToIndex(0, paletteCount, raw.length);
++                        for (int i = 0; i < paletteCount; ++i) {
++                            tickData = io.multipaper.shreddedpaper.util.TickingBlockSet.addNew(tickData, tickSize++, raw[i] & 0xFFFF);
++                        }
++                        this.knowledge$tickingData = tickData;
++                        this.knowledge$tickingSize = (short)tickSize;
++                    }
++                    // Evangelium end - ticking-block set
                  }
  
                  final FluidState fluid = state.getFluidState();
@@ -199,3 +327,11 @@
  
                  if (!fluid.isEmpty()) {
                      //this.nonEmptyBlockCount += count; // fix vanilla bug: make non-empty block count correct
+@@ -244,6 +_,7 @@
+                     }
+                 }
+             }
++            if (io.multipaper.shreddedpaper.util.TickingBlockVerify.VERIFY) io.multipaper.shreddedpaper.util.TickingBlockVerify.compare(this.knowledge$oldList(), this.knowledge$tickingData, this.knowledge$tickingSize, this.tickingBlockCount, "recalc"); // Evangelium
+         }
+         // Paper end - block counting
+     }

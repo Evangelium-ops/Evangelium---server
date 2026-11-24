@@ -90,11 +90,14 @@
          LevelChunk tickingChunk = this.playersSentChunkTo.size() == 0 ? null : this.getChunkToSend(); // Paper - rewrite chunk system
          if (tickingChunk == null) {
              return false;
-@@ -274,6 +_,7 @@
+@@ -274,6 +_,10 @@
  
      public void broadcastChanges(LevelChunk chunk) {
          if (this.hasChangesToBroadcast()) {
-+            if (chunk.cachedChunkPacket != null) chunk.cachedChunkPacket = null; // ShreddedPaper
++            if (chunk.cachedChunkPacket != null) { // ShreddedPaper
++                chunk.cachedChunkPacket = null; // ShreddedPaper
++                if (io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.ON) io.multipaper.shreddedpaper.util.ChunkPacketCacheStats.INVALIDATED.increment(); // Knowledge - cache counters
++            } // ShreddedPaper
              Level level = chunk.getLevel();
              if (!this.skyChangedLightSectionFilter.isEmpty() || !this.blockChangedLightSectionFilter.isEmpty()) {
                  List<ServerPlayer> players = this.moonrise$getPlayers(true); // Paper - rewrite chunk system

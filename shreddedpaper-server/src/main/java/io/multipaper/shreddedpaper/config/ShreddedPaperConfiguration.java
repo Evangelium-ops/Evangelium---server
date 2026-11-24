@@ -76,7 +76,8 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public class ChunkPacketCaching extends ConfigurationPart {
 
             public boolean useSoftReferences = true;
-            public long expireAfter = 1200;
+            @Comment("Ticks a chunk's cached packet is kept after it was last sent. 200 (10 s) keeps about 90% of the reuses (most come within 10 s: respawns, rejoins, players close together) and holds about half the memory of the old 1200 (CT190: 153 vs 318 MB at 27k chunks with travelling players, hit rate 76% vs 82%).")
+            public long expireAfter = 200;
 
         }
 

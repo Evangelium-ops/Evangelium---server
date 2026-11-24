@@ -135,7 +135,25 @@
      static Biome getRoughBiome(BlockPos pos, ChunkAccess chunk) {
          return chunk.getNoiseBiome(QuartPos.fromBlock(pos.getX()), QuartPos.fromBlock(pos.getY()), QuartPos.fromBlock(pos.getZ())).value();
      }
-@@ -177,12 +_,14 @@
+@@ -158,7 +_,11 @@
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("spawner");
+ 
++        // Evangelium - the players in range of this chunk, looked up once for all categories (was once per category; same list)
++        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> knowledgeInRange = level.paperConfig().entities.spawning.perPlayerMobSpawns
++            ? level.moonrise$getNearbyPlayers().getPlayers(chunk.getPos(), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE) : null;
+         for (MobCategory mobCategory : categories) {
++            if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(mobCategory, io.multipaper.shreddedpaper.spawn.SpawnStats.CHUNK); // Evangelium - dev counters
+             // Paper start - Optional per player mob spawns
+             final boolean canSpawn;
+             int maxSpawns = Integer.MAX_VALUE;
+@@ -172,26 +_,31 @@
+ 
+                 // Apply per-player limit
+                 int minDiff = Integer.MAX_VALUE;
+-                final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange =
+-                    level.moonrise$getNearbyPlayers().getPlayers(chunk.getPos(), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE);
++                final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange = knowledgeInRange; // Evangelium - looked up once
                  if (inRange != null) {
                      final net.minecraft.server.level.ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
                      for (int k = 0, len = inRange.size(); k < len; k++) {
@@ -148,9 +166,139 @@
                  maxSpawns = (minDiff == Integer.MAX_VALUE) ? 0 : minDiff;
 -                canSpawn = maxSpawns > 0;
 +                canSpawn = maxSpawns > 0 && knowledgeGatePasses(level, spawnState, mobCategory, maxSpawns, inRange, chunk.getPos()); // Knowledge - near-first spawning
++                if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON && !canSpawn) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(mobCategory, maxSpawns > 0 ? io.multipaper.shreddedpaper.spawn.SpawnStats.GATE : io.multipaper.shreddedpaper.spawn.SpawnStats.CAP); // Evangelium - dev counters
              } else {
                  canSpawn = spawnState.canSpawnForCategoryLocal(mobCategory, chunk.getPos());
              }
+             if (canSpawn) {
++                final long knowledgeStart = io.multipaper.shreddedpaper.spawn.SpawnStats.ON ? System.nanoTime() : 0L; // Evangelium - dev counters
+                 spawnCategoryForChunk(mobCategory, level, chunk, spawnState::canSpawn, spawnState::afterSpawn,
+                     maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMap : null);
+                 // Paper end - Optional per player mob spawns
++                if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.add(mobCategory, io.multipaper.shreddedpaper.spawn.SpawnStats.NANOS, System.nanoTime() - knowledgeStart); // Evangelium - dev counters
+             }
+         }
++        if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.maybeDump(); // Evangelium - dev counters
+ 
+         profilerFiller.pop();
+     }
+@@ -217,8 +_,19 @@
+     ) {
+         // Paper end - Optional per player mob spawns
+         BlockPos randomPosWithin = getRandomPosWithin(level, chunk);
++        if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, randomPosWithin.getY() >= level.getMinY() + 1 ? io.multipaper.shreddedpaper.spawn.SpawnStats.ATTEMPT : io.multipaper.shreddedpaper.spawn.SpawnStats.BELOW_MIN); // Evangelium - dev counters
+         if (randomPosWithin.getY() >= level.getMinY() + 1) {
++            // Evangelium start - attempts that provably spawn nothing are not made (SpawnSkip)
++            final int knowledgeSkip = io.multipaper.shreddedpaper.spawn.SpawnSkip.ENABLED ? io.multipaper.shreddedpaper.spawn.SpawnSkip.cannotSpawn(level, chunk, category, randomPosWithin) : 0;
++            if (knowledgeSkip != 0) {
++                if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.SKIPPED);
++                if (!io.multipaper.shreddedpaper.spawn.SpawnSkip.VERIFY) return;
++                io.multipaper.shreddedpaper.spawn.SpawnSkip.verifyBegin(knowledgeSkip);
++            }
++            try {
++            // Evangelium end
+             spawnCategoryForPosition(category, level, chunk, randomPosWithin, filter, callback, maxSpawns, trackEntity); // Paper - Optional per player mob spawns
++            } finally { if (knowledgeSkip != 0) io.multipaper.shreddedpaper.spawn.SpawnSkip.verifyEnd(); } // Evangelium
+         }
+     }
+ 
+@@ -246,6 +_,15 @@
+         int y = pos.getY();
+         BlockState blockState = level.getBlockStateIfLoadedAndInBounds(pos); // Paper - don't load chunks for mob spawn
+         if (blockState != null && !blockState.isRedstoneConductor(chunk, pos)) { // Paper - don't load chunks for mob spawn
++            // Evangelium start - one player search per attempt instead of one per step (SpawnPlayerProbe: same distances)
++            final java.util.function.Predicate<Entity> knowledgePredicate = level.purpurConfig.mobSpawningIgnoreCreativePlayers ? net.minecraft.world.entity.EntitySelector.NO_CREATIVE_OR_SPECTATOR : net.minecraft.world.entity.EntitySelector.NO_SPECTATORS;
++            final io.multipaper.shreddedpaper.spawn.SpawnPlayerProbe knowledgeProbe = io.multipaper.shreddedpaper.spawn.SpawnPlayerProbe.ENABLED ? io.multipaper.shreddedpaper.spawn.SpawnPlayerProbe.get() : null;
++            if (knowledgeProbe != null && !knowledgeProbe.begin(level, pos.getX() + 0.5, y, pos.getZ() + 0.5, knowledgePredicate)) {
++                if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.NO_PLAYER);
++                return; // nobody eligible in the world: every step would find no nearest player
++            }
++            try {
++            // Evangelium end
+             BlockPos.MutableBlockPos mutableBlockPos = new BlockPos.MutableBlockPos();
+             int i = 0;
+ 
+@@ -264,18 +_,22 @@
+                     mutableBlockPos.set(x, y, z);
+                     double d = x + 0.5;
+                     double d1 = z + 0.5;
+-                    Player nearestPlayer = level.getNearestPlayer(d, y, d1, -1.0, level.purpurConfig.mobSpawningIgnoreCreativePlayers); // Purpur - mob spawning option to ignore creative players
+-                    if (nearestPlayer != null) {
+-                        double d2 = nearestPlayer.distanceToSqr(d, y, d1);
++                    if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.STEP); // Evangelium - dev counters
++                    Player nearestPlayer = knowledgeProbe != null ? null : level.getNearestPlayer(d, y, d1, -1.0, level.purpurConfig.mobSpawningIgnoreCreativePlayers); // Purpur - mob spawning option to ignore creative players // Evangelium - probe
++                    if (knowledgeProbe != null || nearestPlayer != null) { // Evangelium - probe
++                        double d2 = knowledgeProbe != null ? knowledgeProbe.nearestDistanceSqr(d, y, d1) : nearestPlayer.distanceToSqr(d, y, d1); // Evangelium - probe
+                         if (level.isLoadedAndInBounds(mutableBlockPos) && isRightDistanceToPlayerAndSpawnPoint(level, chunk, mutableBlockPos, d2)) { // Paper - don't load chunks for mob spawn
+                             if (spawnerData == null) {
+                                 Optional<MobSpawnSettings.SpawnerData> randomSpawnMobAt = getRandomSpawnMobAt(
+                                     level, structureManager, generator, category, level.random, mutableBlockPos
+                                 );
+                                 if (randomSpawnMobAt.isEmpty()) {
++                                    if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.MOB_EMPTY); // Evangelium - dev counters
+                                     break;
+                                 }
+ 
++                                if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.MOB_PICKED); // Evangelium - dev counters
++                                if (io.multipaper.shreddedpaper.spawn.SpawnSkip.VERIFY) io.multipaper.shreddedpaper.spawn.SpawnSkip.verifyEvent("pick", category, mutableBlockPos); // Evangelium - verify mode
+                                 spawnerData = randomSpawnMobAt.get();
+                                 ceil = spawnerData.minCount() + level.random.nextInt(1 + spawnerData.maxCount() - spawnerData.minCount());
+                             }
+@@ -290,9 +_,11 @@
+                             if (doSpawning == PreSpawnStatus.ABORT) {
+                                 return;
+                             }
++                            if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON && doSpawning != PreSpawnStatus.SUCCESS) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.VALID_FAIL); // Evangelium - dev counters
++                            if (io.multipaper.shreddedpaper.spawn.SpawnSkip.VERIFY && doSpawning == PreSpawnStatus.SUCCESS) io.multipaper.shreddedpaper.spawn.SpawnSkip.verifyEvent("spot", category, mutableBlockPos); // Evangelium - verify mode
+                             if (doSpawning == PreSpawnStatus.SUCCESS
+                             // Paper end - PreCreatureSpawnEvent
+-                                && filter.test(spawnerData.type(), mutableBlockPos, chunk)) {
++                                && knowledgeEnergy(category, filter.test(spawnerData.type(), mutableBlockPos, chunk))) { // Evangelium - dev counters
+                                 Mob mobForSpawn = getMobForSpawn(level, spawnerData.type());
+                                 if (mobForSpawn == null) {
+                                     return;
+@@ -317,6 +_,10 @@
+                                         // Paper end - Optional per player mob spawns
+                                     }
+                                     // CraftBukkit end
++                                    if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON && !mobForSpawn.isRemoved()) { // Evangelium - dev counters
++                                        io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.SPAWNED);
++                                        io.multipaper.shreddedpaper.spawn.SpawnStats.spawned(BuiltInRegistries.ENTITY_TYPE.getKey(mobForSpawn.getType()).getPath() + "@" + level.getBiome(mobForSpawn.blockPosition()).unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
++                                    }
+                                     if (i >= mobForSpawn.getMaxSpawnClusterSize() || i >= maxSpawns) { // Paper - Optional per player mob spawns
+                                         return;
+                                     }
+@@ -324,13 +_,19 @@
+                                     if (mobForSpawn.isMaxGroupSizeReached(i3)) {
+                                         break;
+                                     }
+-                                }
++                                } else if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.MOB_FAIL); // Evangelium - dev counters
+                             }
+-                        }
++                        } else if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.DISTANCE); // Evangelium - dev counters
+                     }
+                 }
+             }
+-        }
++            } finally { if (knowledgeProbe != null) knowledgeProbe.end(); } // Evangelium - probe
++        } else if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.START_SOLID); // Evangelium - dev counters
++    }
++
++    private static boolean knowledgeEnergy(MobCategory category, boolean passed) { // Evangelium - dev counters
++        if (io.multipaper.shreddedpaper.spawn.SpawnStats.ON && !passed) io.multipaper.shreddedpaper.spawn.SpawnStats.inc(category, io.multipaper.shreddedpaper.spawn.SpawnStats.ENERGY_FAIL);
++        return passed;
+     }
+ 
+     private static boolean isRightDistanceToPlayerAndSpawnPoint(ServerLevel level, ChunkAccess chunk, BlockPos.MutableBlockPos pos, double distance) {
+@@ -355,6 +_,7 @@
+         CANCELLED,
+         ABORT
+     }
++    private static final boolean KNOWLEDGE_PLACEMENT_FIRST = Boolean.parseBoolean(System.getProperty("shreddedpaper.spawnPlacementFirst", "true")); // Evangelium
+     private static PreSpawnStatus isValidSpawnPostitionForType(
+     // Paper end - PreCreatureSpawnEvent
+         ServerLevel level,
 @@ -367,6 +_,7 @@
      ) {
          EntityType<?> entityType = data.type();
@@ -167,6 +315,19 @@
          final boolean success = entityType.getCategory() != MobCategory.MISC
          // Paper end - PreCreatureSpawnEvent
              && (
+@@ -384,8 +_,10 @@
+                     || !(distance > entityType.getCategory().getDespawnDistance() * entityType.getCategory().getDespawnDistance())
+             )
+             && entityType.canSummon()
+-            && canSpawnMobAt(level, structureManager, generator, category, data, pos)
+-            && SpawnPlacements.isSpawnPositionOk(entityType, level, pos)
++            // Evangelium - the placement test (3 block reads) before the spawn-list test (biome lookup + structures): both are pure, so the
++            // order does not change the answer, and most steps fail the placement (air below); checkSpawnRules (random numbers) stays last
++            && (KNOWLEDGE_PLACEMENT_FIRST ? SpawnPlacements.isSpawnPositionOk(entityType, level, pos) && canSpawnMobAt(level, structureManager, generator, category, data, pos)
++                : canSpawnMobAt(level, structureManager, generator, category, data, pos) && SpawnPlacements.isSpawnPositionOk(entityType, level, pos))
+             && SpawnPlacements.checkSpawnRules(entityType, level, EntitySpawnReason.NATURAL, pos, level.random)
+             && level.noCollision(entityType.getSpawnAABB(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5));
+         return success ? PreSpawnStatus.SUCCESS : PreSpawnStatus.FAIL; // Paper - PreCreatureSpawnEvent
 @@ -574,6 +_,20 @@
      }
  
