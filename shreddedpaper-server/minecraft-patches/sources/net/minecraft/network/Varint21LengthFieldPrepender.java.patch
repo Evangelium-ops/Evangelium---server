@@ -1,0 +1,155 @@
+--- a/net/minecraft/network/Varint21LengthFieldPrepender.java
++++ b/net/minecraft/network/Varint21LengthFieldPrepender.java
+@@ -10,6 +_,152 @@
+ public class Varint21LengthFieldPrepender extends MessageToByteEncoder<ByteBuf> {
+     public static final int MAX_VARINT21_BYTES = 3;
+ 
++    // ShreddedPaper start - write each packet once: the length goes into the free room in front of the packet, and small frames are
++    // gathered into one buffer per channel until the next flush (one outbound entry per flush instead of one per packet)
++    private ByteBuf pending; // only touched on the channel's event loop
++    private java.util.ArrayList<io.netty.channel.ChannelPromise> pendingPromises;
++
++    @Override
++    public boolean isSharable() {
++        return !io.multipaper.shreddedpaper.network.PacketFraming.COALESCE; // per-channel state while coalescing (one instance per pipeline anyway)
++    }
++
++    @Override
++    public void write(ChannelHandlerContext ctx, Object msg, io.netty.channel.ChannelPromise promise) throws Exception {
++        if (!io.multipaper.shreddedpaper.network.PacketFraming.IN_PLACE) {
++            super.write(ctx, msg, promise);
++            return;
++        }
++        if (!(msg instanceof ByteBuf buf)) {
++            this.emitPending(ctx);
++            super.write(ctx, msg, promise);
++            return;
++        }
++        final int length = buf.readableBytes();
++        final int byteSize = VarInt.getByteSize(length);
++        if (byteSize > 3) {
++            this.emitPending(ctx);
++            super.write(ctx, msg, promise); // throws the vanilla EncoderException and releases the buffer
++            return;
++        }
++        if (io.multipaper.shreddedpaper.network.PacketFraming.COALESCE && length < io.multipaper.shreddedpaper.network.PacketFraming.COALESCE_MAX) {
++            ByteBuf out = this.pending;
++            if (out != null && out.readableBytes() + byteSize + length > io.multipaper.shreddedpaper.network.PacketFraming.COALESCE_CAP) {
++                this.emitPending(ctx);
++                out = null;
++            }
++            try {
++                if (out == null) {
++                    out = this.pending = ctx.alloc().ioBuffer(io.multipaper.shreddedpaper.network.PacketFraming.COALESCE_INITIAL, io.multipaper.shreddedpaper.network.PacketFraming.COALESCE_CAP);
++                }
++                final int start = out.writerIndex();
++                VarInt.write(out, length);
++                out.writeBytes(buf, buf.readerIndex(), length);
++                if (io.multipaper.shreddedpaper.network.PacketFraming.VERIFY) {
++                    final ByteBuf expected = ctx.alloc().buffer(byteSize + length);
++                    this.encode(ctx, buf, expected);
++                    io.multipaper.shreddedpaper.network.PacketFraming.FRAME_VERIFIED.increment();
++                    io.multipaper.shreddedpaper.network.PacketFraming.compare("coalesce", expected, out.slice(start, out.writerIndex() - start), length);
++                    expected.release();
++                }
++            } finally {
++                buf.release();
++            }
++            if (!promise.isVoid()) {
++                if (this.pendingPromises == null) this.pendingPromises = new java.util.ArrayList<>();
++                this.pendingPromises.add(promise);
++            }
++            if (io.multipaper.shreddedpaper.network.PacketFraming.STATS) io.multipaper.shreddedpaper.network.PacketFraming.PREPEND_COALESCED.increment();
++            return;
++        }
++        this.emitPending(ctx); // keeps the order: everything gathered so far goes out before this packet
++        if (io.multipaper.shreddedpaper.network.PacketFraming.hasOwnHeadroom(buf, byteSize)) {
++            ByteBuf expected = null;
++            if (io.multipaper.shreddedpaper.network.PacketFraming.VERIFY) {
++                expected = ctx.alloc().buffer(byteSize + length);
++                this.encode(ctx, buf, expected);
++            }
++            io.multipaper.shreddedpaper.network.PacketFraming.prependVarInt(buf, length, byteSize);
++            if (expected != null) {
++                io.multipaper.shreddedpaper.network.PacketFraming.FRAME_VERIFIED.increment();
++                io.multipaper.shreddedpaper.network.PacketFraming.compare("prepend", expected, buf, length);
++                expected.release();
++            }
++            if (io.multipaper.shreddedpaper.network.PacketFraming.STATS) io.multipaper.shreddedpaper.network.PacketFraming.PREPEND_IN_PLACE.increment();
++            ctx.write(buf, promise);
++            return;
++        }
++        final int splitMin = io.multipaper.shreddedpaper.network.PacketFraming.SPLIT_MIN;
++        if (splitMin > 0 && length >= splitMin) {
++            // big packet without room (a plugin cleared or replaced it): the 1-3 length bytes go as their own write, no copy
++            final ByteBuf header = ctx.alloc().ioBuffer(byteSize);
++            VarInt.write(header, length);
++            if (io.multipaper.shreddedpaper.network.PacketFraming.STATS) io.multipaper.shreddedpaper.network.PacketFraming.PREPEND_SPLIT.increment();
++            ctx.write(header, ctx.voidPromise());
++            ctx.write(buf, promise);
++            return;
++        }
++        if (io.multipaper.shreddedpaper.network.PacketFraming.STATS) io.multipaper.shreddedpaper.network.PacketFraming.PREPEND_COPY.increment();
++        super.write(ctx, msg, promise);
++    }
++
++    private void emitPending(ChannelHandlerContext ctx) {
++        final ByteBuf out = this.pending;
++        if (out == null) {
++            return;
++        }
++        this.pending = null;
++        final java.util.ArrayList<io.netty.channel.ChannelPromise> promises = this.pendingPromises;
++        if (promises == null || promises.isEmpty()) {
++            ctx.write(out, ctx.voidPromise());
++            return;
++        }
++        final io.netty.channel.ChannelPromise[] waiting = promises.toArray(new io.netty.channel.ChannelPromise[0]);
++        promises.clear();
++        final io.netty.channel.ChannelPromise batch = ctx.newPromise();
++        batch.addListener(future -> {
++            final Throwable cause = future.cause();
++            for (io.netty.channel.ChannelPromise p : waiting) {
++                if (cause == null) p.trySuccess(); else p.tryFailure(cause);
++            }
++        });
++        ctx.write(out, batch);
++    }
++
++    @Override
++    public void flush(ChannelHandlerContext ctx) throws Exception {
++        this.emitPending(ctx);
++        ctx.flush();
++    }
++
++    @Override
++    public void close(ChannelHandlerContext ctx, io.netty.channel.ChannelPromise promise) throws Exception {
++        this.emitPending(ctx); // unflushed: the channel fails and releases it like any other unflushed write
++        ctx.close(promise);
++    }
++
++    @Override
++    public void disconnect(ChannelHandlerContext ctx, io.netty.channel.ChannelPromise promise) throws Exception {
++        this.emitPending(ctx);
++        ctx.disconnect(promise);
++    }
++
++    @Override
++    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
++        final ByteBuf out = this.pending;
++        if (out != null) {
++            this.pending = null;
++            out.release();
++            if (this.pendingPromises != null) {
++                final java.nio.channels.ClosedChannelException cause = new java.nio.channels.ClosedChannelException();
++                for (io.netty.channel.ChannelPromise p : this.pendingPromises) p.tryFailure(cause);
++                this.pendingPromises.clear();
++            }
++        }
++        super.handlerRemoved(ctx);
++    }
++    // ShreddedPaper end - write each packet once
++
+     @Override
+     protected void encode(ChannelHandlerContext ctx, ByteBuf encoder, ByteBuf decoder) {
+         int i = encoder.readableBytes();

@@ -1,0 +1,54 @@
+--- a/net/minecraft/network/PacketEncoder.java
++++ b/net/minecraft/network/PacketEncoder.java
+@@ -25,7 +_,22 @@
+         try {
+             ADVENTURE_LOCALE.set(channelHandlerContext.channel().attr(io.papermc.paper.adventure.PaperAdventure.LOCALE_ATTRIBUTE).get()); // Paper - adventure; set player's locale
+             this.protocolInfo.codec().encode(byteBuf, packet);
++            // ShreddedPaper start - write each packet once: verify mode encodes again into a fresh buffer the old way
++            if (io.multipaper.shreddedpaper.network.PacketFraming.VERIFY) {
++                final ByteBuf expected = channelHandlerContext.alloc().buffer(Math.max(256, byteBuf.readableBytes()));
++                try {
++                    this.protocolInfo.codec().encode(expected, packet);
++                    io.multipaper.shreddedpaper.network.PacketFraming.ENCODE_VERIFIED.increment();
++                    io.multipaper.shreddedpaper.network.PacketFraming.compare("encode", expected, byteBuf, packetType);
++                } catch (Throwable t) {
++                    LOGGER.warn("[PacketFraming] verify encode of {} failed: {}", packetType, t.toString());
++                } finally {
++                    expected.release();
++                }
++            }
++            // ShreddedPaper end - write each packet once
+             int i = byteBuf.readableBytes();
++            if (io.multipaper.shreddedpaper.network.PacketFraming.IN_PLACE) { final int[] last = LAST_SIZE.get(packet.getClass()); final int hint = i > 252 ? i : 0; if (last[0] != hint) last[0] = hint; } // ShreddedPaper - write each packet once (small packets never write the shared hint)
+             if (LOGGER.isDebugEnabled()) {
+                 LOGGER.debug(
+                     Connection.PACKET_SENT_MARKER, "OUT: [{}:{}] {} -> {} bytes", this.protocolInfo.id().id(), packetType, packet.getClass().getName(), i
+@@ -50,6 +_,28 @@
+             ProtocolSwapHandler.handleOutboundTerminalPacket(channelHandlerContext, packet);
+         }
+     }
++
++    // ShreddedPaper start - write each packet once: free room in front for the frame headers, first size from the last packet of the class
++    private static final ClassValue<int[]> LAST_SIZE = new ClassValue<>() {
++        @Override
++        protected int[] computeValue(Class<?> type) {
++            return new int[1];
++        }
++    };
++    private static final int MAX_SIZE_HINT = 1 << 20;
++
++    @Override
++    protected ByteBuf allocateBuffer(ChannelHandlerContext ctx, Packet<T> msg, boolean preferDirect) throws Exception {
++        if (!io.multipaper.shreddedpaper.network.PacketFraming.IN_PLACE) {
++            return super.allocateBuffer(ctx, msg, preferDirect);
++        }
++        final int last = LAST_SIZE.get(msg.getClass())[0]; // a racy hint is fine: it only picks the first capacity
++        final int initial = io.multipaper.shreddedpaper.network.PacketFraming.HEADROOM + (last <= 252 ? 252 : Math.min(last + (last >>> 4), MAX_SIZE_HINT));
++        final ByteBuf buf = preferDirect ? ctx.alloc().ioBuffer(initial) : ctx.alloc().heapBuffer(initial);
++        buf.setIndex(io.multipaper.shreddedpaper.network.PacketFraming.HEADROOM, io.multipaper.shreddedpaper.network.PacketFraming.HEADROOM);
++        return buf;
++    }
++    // ShreddedPaper end - write each packet once
+ 
+     // Paper start
+     // packet size is encoded into 3-byte varint
