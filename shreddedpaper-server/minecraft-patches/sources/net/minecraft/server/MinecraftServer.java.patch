@@ -92,6 +92,14 @@
          Util.shutdownExecutors();
          this.onServerExit();
          // Paper end - Improved watchdog support - move final shutdown items here
+@@ -1284,6 +_,7 @@
+             // everything is init before watchdog tick.
+             // anything at 3+ won't be caught here but also will trip watchdog....
+             // tasks are default scheduled at -1 + delay, and first tick will tick at 1
++            io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.endServerTick(); // Evangelium - plugin compatibility: startup (onEnable, world loads) may have taken the world
+             final long actualDoneTimeMs = System.currentTimeMillis() - org.bukkit.craftbukkit.Main.BOOT_TIME.toEpochMilli(); // Paper - Improve startup message
+             LOGGER.info("Done ({})! For help, type \"help\"", String.format(java.util.Locale.ROOT, "%.3fs", actualDoneTimeMs / 1000.00D)); // Paper - Improve startup message
+             org.spigotmc.WatchdogThread.tick();
 @@ -1339,7 +_,7 @@
                          org.purpurmc.purpur.PurpurConfig.tpsCatchup ? 5 : 1 //ConfigHolder.getConfig().tickLoop.catchupTicks.getOrDefault(MoonriseConfig.TickLoop.DEFAULT_CATCHUP_TICKS).intValue() // Purpur - Configurable TPS Catchup
                      );
@@ -101,11 +109,23 @@
  
                      // adjust ticksBehind so that it is not greater-than catchup
                      if (ticksBehind > catchup) {
-@@ -1532,7 +_,7 @@
+@@ -1485,6 +_,8 @@
+ 
+     @Override
+     public void managedBlock(BooleanSupplier isDone) {
++        // Evangelium - nothing runs server tasks inside an intra-region parallel phase (a kick in another region, isChunkGenerated...): fail fast
++        if (io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase() && !isDone.getAsBoolean()) throw new io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a wait for server tasks inside a parallel phase on " + Thread.currentThread().getName());
+         super.managedBlock(() -> throwIfFatalException() && isDone.getAsBoolean());
+     }
+ 
+@@ -1532,7 +_,10 @@
  
      @Override
      public boolean pollTask() {
 -        boolean flag = this.packetProcessor.executeSinglePacket() | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks
++        if (io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase()) {
++            return false; // Evangelium - no server tasks inside an intra-region parallel phase (owner or helper), e.g. a managedBlock on a helper
++        }
 +        boolean flag = (!io.multipaper.shreddedpaper.threading.ShreddedPaperTickThread.isShreddedPaperTickThread() && this.packetProcessor.executeSinglePacket()) | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks // Knowledge - main thread packets only on the main thread: on a tick thread waiting in managedBlock they failed with RunningOnDifferentThreadException and were queued again
          this.mayHaveDelayedTasks = flag;
          return flag;
@@ -129,6 +149,16 @@
                  }
                  // Paper end - avoid issues with certain tasks not processing during sleep
                  this.server.spark.executeMainThreadTasks(); // Paper - spark
+@@ -1700,7 +_,9 @@
+         this.tickFrame.start();
+         // Paper - improve tick loop - moved into runAllTasksAtTickStart
+         this.runAllTasksAtTickStart(); // Paper - improve tick loop
++        io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.beginServerTick(); // Evangelium - plugin compatibility: the Server thread may take the world during the tick
+         this.tickServer(sprinting ? () -> false : this::haveTime);
++        io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.endServerTick(); // Evangelium - plugin compatibility: gives back the world, not held across the sleep
+         // Paper start - rewrite chunk system
+         final Throwable crash = this.chunkSystemCrash;
+         if (crash != null) {
 @@ -1787,18 +_,23 @@
      public final io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList entitySchedulerTickList = new io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList(); // Paper - optimise Folia entity scheduler
  
@@ -161,7 +191,7 @@
          // Paper end - optimise Folia entity scheduler
          io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.ADVENTURE_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
          io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.DIALOG_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
-@@ -1834,7 +_,25 @@
+@@ -1834,7 +_,26 @@
              }
          }
  
@@ -182,6 +212,7 @@
 +
 +        final long knowledgeWorldsStart = System.nanoTime(); // Knowledge - tick timings
 +        io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.MAIN_BEFORE_WORLDS, knowledgeWorldsStart - knowledgeTickStart); // Knowledge - tick timings
++        io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.setWorldsTicking(true); // Evangelium - plugin compatibility: from here the regions own the world
          this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
 +        List<CompletableFuture<Void>> futures = new ArrayList<>(); // ShreddedPaper - tick worlds async
          for (ServerLevel serverLevel : this.getAllLevels()) {
@@ -200,7 +231,7 @@
              } catch (Throwable var7) {
                  CrashReport crashReport = CrashReport.forThrowable(var7, "Exception ticking world");
                  serverLevel.fillReportDetails(crashReport);
-@@ -1862,12 +_,22 @@
+@@ -1862,12 +_,23 @@
  
              profilerFiller.pop();
              profilerFiller.pop();
@@ -217,6 +248,7 @@
 +            this.managedBlock(future::isDone);
 +            future.join();
 +        }
++        io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.setWorldsTicking(false); // Evangelium - plugin compatibility
 +        // ShreddedPaper end - tick worlds async
 +        final long knowledgeWorldsEnd = System.nanoTime(); // Knowledge - tick timings
 +        io.multipaper.shreddedpaper.util.TickTimings.add(io.multipaper.shreddedpaper.util.TickTimings.Phase.WAIT_FOR_WORLDS, knowledgeWorldsEnd - knowledgeWorldsStart); // Knowledge - tick timings

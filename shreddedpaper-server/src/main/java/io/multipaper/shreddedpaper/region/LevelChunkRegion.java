@@ -212,7 +212,15 @@ public class LevelChunkRegion {
         }
 
         this.scheduledTasks.removeAll(toRun);
-        toRun.forEach(DelayedTask::run);
+        for (int i = 0; i < toRun.size(); i++) {
+            try {
+                toRun.get(i).run();
+            } catch (Throwable t) {
+                // Evangelium - the tick ends here (RegionTickAbandonedError): the due tasks not run yet go back and run next time
+                this.scheduledTasks.addAll(toRun.subList(i + 1, toRun.size()));
+                throw t;
+            }
+        }
     }
 
     public synchronized void addBlockEvent(BlockEventData blockEvent) {

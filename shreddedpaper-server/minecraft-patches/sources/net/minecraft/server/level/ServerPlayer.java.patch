@@ -42,7 +42,7 @@
      private ServerPlayer.@Nullable RespawnConfig respawnConfig;
      private final TextFilter textFilter;
      private boolean textFilteringEnabled;
-@@ -405,6 +_,49 @@
+@@ -405,6 +_,53 @@
      private int containerUpdateDelay; // Paper - Configurable container update tick rate
      public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
      public int patrolSpawnDelay; // Paper - Pillager patrol spawn settings and per player options
@@ -73,7 +73,9 @@
 +        if (this.tickCount - this.knowledgeOwnWaypointTick >= KNOWLEDGE_WAYPOINT_INTERVAL) {
 +            this.knowledgeOwnWaypointTick = this.tickCount;
 +            this.knowledgeOwnWaypointPending = false;
-+            this.level().getWaypointManager().updateWaypoint(this);
++            ServerWaypointManager knowledgeManager = this.level().getWaypointManager(); // Evangelium - far pairs left for later keep it pending
++            if (knowledgeManager instanceof io.multipaper.shreddedpaper.util.ConcurrentWaypointManager concurrent) this.knowledgeOwnWaypointPending = concurrent.updateWaypointSkipping(this); else
++            knowledgeManager.updateWaypoint(this);
 +        } else {
 +            this.knowledgeOwnWaypointPending = true;
 +        }
@@ -83,7 +85,9 @@
 +        if (this.tickCount - this.knowledgeWaypointTick >= KNOWLEDGE_WAYPOINT_INTERVAL) {
 +            this.knowledgeWaypointTick = this.tickCount;
 +            this.knowledgeWaypointPending = false;
-+            this.level().getWaypointManager().updatePlayer(this);
++            ServerWaypointManager knowledgeManager = this.level().getWaypointManager(); // Evangelium - far pairs left for later keep it pending
++            if (knowledgeManager instanceof io.multipaper.shreddedpaper.util.ConcurrentWaypointManager concurrent) this.knowledgeWaypointPending = concurrent.updatePlayerSkipping(this); else
++            knowledgeManager.updatePlayer(this);
 +        } else {
 +            this.knowledgeWaypointPending = true;
 +        }
@@ -320,7 +324,7 @@
 +                    ? Optional.of(new ServerPlayer.RespawnPosAngle(new Vec3(blockPos.getX() + 0.5, blockPos.getY() + 0.1, blockPos.getZ() + 0.5), yaw, pitch, false, false, null)) // Paper - Fix SPIGOT-5989
 +                    : Optional.empty();
          }
-+        }, r -> ShreddedPaper.ensureSync(level, blockPos, r));
++        }, io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, blockPos, 3)); // Evangelium - bed / anchor chunks loaded asynchronously first (stand-up search reads +-2 blocks)
      }
  
      public void showEndCredits() {

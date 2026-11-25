@@ -57,7 +57,85 @@ public class ShreddedPaperRegionLocker {
         this.borrowedFrom.set(loan.owner());
     }
 
-    public void giveBack(Loan loan) {
+    /**
+     * Evangelium - plugin compatibility (OnDemandRegionAccess): the current thread also owns the lent regions of a thread that is blocked
+     * on a plugin lock this thread holds. Several such loans can be held at once; the helper loan (borrow/giveBack) stays untouched.
+     *
+     * <p>Kept apart from the thread's own lock sets and checked against the lock map on every use: a borrowed region counts only while
+     * the very LockedRegion the lender held when it was borrowed is still in lockedRegions. If RegionGuard abandons the blocked lender and
+     * removes its entries (releaseLocks), or anything else takes the region, the loan stops counting at once and the borrower's next
+     * access fails the check (and takes the region for real, bounded, through OnDemandRegionAccess) instead of touching a region another
+     * thread may now lock.
+     */
+    private final ThreadLocal<Map<RegionPos, LockedRegion>> extraBorrowed = ThreadLocal.withInitial(java.util.HashMap::new);
+    private final ThreadLocal<Set<RegionPos>> extraBorrowedWrite = ThreadLocal.withInitial(ObjectOpenHashSet::new);
+
+    public void borrowExtra(Loan loan) {
+        Map<RegionPos, LockedRegion> map = this.extraBorrowed.get();
+        for (RegionPos pos : loan.local()) {
+            LockedRegion held = this.lockedRegions.get(pos);
+            if (held != null && held.owner() == loan.owner()) {
+                map.put(pos, held);
+                if (loan.write().contains(pos)) {
+                    this.extraBorrowedWrite.get().add(pos);
+                }
+            }
+        }
+    }
+
+    public void giveBackExtra(Loan loan) {
+        Map<RegionPos, LockedRegion> map = this.extraBorrowed.get();
+        for (RegionPos pos : loan.local()) {
+            map.remove(pos);
+            this.extraBorrowedWrite.get().remove(pos);
+        }
+    }
+
+    /** Whether the current thread holds any borrowed (extra) loan in this level. */
+    public boolean hasBorrowedExtra() {
+        return !this.extraBorrowed.get().isEmpty();
+    }
+
+    /** A region this thread borrowed whose lender lost its lock entry (RegionGuard released it, or someone else holds it now). */
+    public boolean lostBorrowed(RegionPos regionPos) {
+        LockedRegion held = this.extraBorrowed.get().get(regionPos);
+        return held != null && this.lockedRegions.get(regionPos) != held;
+    }
+
+    /**
+     * Evangelium - a thread that waited (blocked on a plugin lock) checks that its regions are still its own. RegionGuard abandons a tick
+     * that hangs by removing its entries from lockedRegions; such a thread must not go on with its stale thread-local view: the regions
+     * that are no longer its own are dropped from its sets (later checks fail instead of passing), and false is returned.
+     */
+    public boolean revalidateOwnLocks() {
+        final Thread me = Thread.currentThread();
+        boolean ok = true;
+        java.util.Iterator<RegionPos> it = this.localLocks.get().iterator();
+        while (it.hasNext()) {
+            RegionPos pos = it.next();
+            LockedRegion held = this.lockedRegions.get(pos);
+            if (held == null || (held.owner() != me && held.owner() != this.borrowedFrom.get())) {
+                it.remove();
+                this.writeLocks.get().remove(pos);
+                this.readOnlyLocks.get().remove(pos);
+                ok = false;
+            }
+        }
+        return ok;
+    }
+
+    /** A borrowed region counts only while the lender's own lock entry for it is still in place. */
+    private boolean holdsBorrowed(RegionPos regionPos, boolean write) {
+        Map<RegionPos, LockedRegion> map = this.extraBorrowed.get();
+        if (map.isEmpty()) {
+            return false;
+        }
+        LockedRegion held = map.get(regionPos);
+        return held != null && this.lockedRegions.get(regionPos) == held && (!write || this.extraBorrowedWrite.get().contains(regionPos));
+    }
+
+
+        public void giveBack(Loan loan) {
         this.localLocks.get().removeAll(loan.local());
         this.writeLocks.get().removeAll(loan.write());
         this.readOnlyLocks.get().removeAll(loan.readOnly());
@@ -69,7 +147,7 @@ public class ShreddedPaperRegionLocker {
      * Checks if the current thread holds a read lock for the given region
      */
     public boolean hasLock(RegionPos regionPos) {
-        return localLocks.get().contains(regionPos) || TickThread.canBypassTickThreadCheck();
+        return localLocks.get().contains(regionPos) || this.globalOwner == Thread.currentThread() || holdsBorrowed(regionPos, false) || TickThread.canBypassTickThreadCheck(); // Evangelium - global owner, borrowed loans
     }
 
     /**
@@ -78,7 +156,7 @@ public class ShreddedPaperRegionLocker {
      * syncing conflicts with other servers.
      */
     public boolean hasWriteLock(RegionPos regionPos) {
-        return writeLocks.get().contains(regionPos) || TickThread.canBypassTickThreadCheck();
+        return writeLocks.get().contains(regionPos) || this.globalOwner == Thread.currentThread() || holdsBorrowed(regionPos, true) || TickThread.canBypassTickThreadCheck(); // Evangelium - global owner, borrowed loans
     }
 
     /**
@@ -287,6 +365,42 @@ public class ShreddedPaperRegionLocker {
         return nextTask.get();
     }
 
+    // Evangelium start - plugin compatibility (OnDemandRegionAccess): the Server thread may own a whole level outside the world tick
+    private volatile Thread globalOwner;
+
+    /** Non-blocking: takes the global write lock for the current thread (it then owns every region of this level). 0 = not now. */
+    public long tryTakeGlobalForOwner() {
+        long stamp = this.globalLock.tryWriteLock();
+        if (stamp != 0) {
+            this.globalOwner = Thread.currentThread();
+        }
+        return stamp;
+    }
+
+    /** A read stamp is held on the global lock while no region entry exists (a thread whose entries RegionGuard removed). A hint. */
+    public boolean hasOrphanReadStamp() {
+        return this.globalOwner == null && this.globalLock.isReadLocked() && this.lockedRegions.isEmpty();
+    }
+
+    public void releaseGlobalForOwner(long stamp) {
+        if (this.globalOwner != Thread.currentThread()) {
+            throw new IllegalStateException("Global region lock released by " + Thread.currentThread() + ", owned by " + this.globalOwner);
+        }
+        this.globalOwner = null;
+        this.globalLock.unlockWrite(stamp);
+    }
+
+    /** The thread currently holding the region, or null. Only a hint. */
+    @Nullable
+    public Thread ownerOf(RegionPos regionPos) {
+        LockedRegion lockedRegion = this.lockedRegions.get(regionPos);
+        if (lockedRegion != null) {
+            return lockedRegion.owner();
+        }
+        return this.globalOwner;
+    }
+    // Evangelium end
+
     /**
      * globalLock.writeLock() will claim all regions
      */
@@ -315,7 +429,8 @@ public class ShreddedPaperRegionLocker {
                 throw new IllegalStateException("Cannot lock a region from a different thread [expected=%s,got=%s]".formatted(thread, Thread.currentThread()));
             }
 
-            if (globalLockStamp == 0 && (globalLockStamp = ShreddedPaperRegionLocker.this.globalLock.tryReadLock()) == 0) {
+            if (globalLockStamp == 0 && ShreddedPaperRegionLocker.this.globalOwner != this.thread // Evangelium - the global owner needs no read stamp
+                    && (globalLockStamp = ShreddedPaperRegionLocker.this.globalLock.tryReadLock()) == 0) {
                 return false;
             }
 

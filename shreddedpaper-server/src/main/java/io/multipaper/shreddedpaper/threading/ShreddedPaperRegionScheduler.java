@@ -123,7 +123,7 @@ public class ShreddedPaperRegionScheduler {
             }
 
             future.complete(null);
-        } catch (Exception e) {
+        } catch (Throwable e) { // Evangelium - also an Error (RegionTickAbandonedError): the future must never stay open
             future.completeExceptionally(e);
         }
     }
@@ -149,7 +149,7 @@ public class ShreddedPaperRegionScheduler {
             }
 
             future.complete(null);
-        } catch (Exception e) {
+        } catch (Throwable e) { // Evangelium - also an Error (RegionTickAbandonedError): the future must never stay open
             future.completeExceptionally(e);
         }
     }
@@ -177,7 +177,7 @@ public class ShreddedPaperRegionScheduler {
             }
 
             future.complete(null);
-        } catch (Exception e) {
+        } catch (Throwable e) { // Evangelium - also an Error (RegionTickAbandonedError): the future must never stay open
             future.completeExceptionally(e);
         }
     }

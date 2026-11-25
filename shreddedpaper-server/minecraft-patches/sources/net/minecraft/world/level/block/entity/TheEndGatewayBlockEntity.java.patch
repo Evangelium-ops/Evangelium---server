@@ -47,7 +47,7 @@
          } else {
              return null;
          }
-+        }, r -> ShreddedPaper.ensureSync(level, this.exitPortal == null ? this.getBlockPos() : this.exitPortal, r))); // ShreddedPaper - async teleportation
++        }, r -> io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, this.exitPortal == null ? this.getBlockPos() : this.exitPortal, 6).execute(r))); // ShreddedPaper - async teleportation // Evangelium - exit chunks loaded asynchronously first (findExitPosition reads +-5 blocks)
      }
  
      private static BlockPos findExitPosition(Level level, BlockPos pos) {
@@ -67,7 +67,7 @@
          }
  
          return findTallestBlock(level, blockPos, 16, true);
-+        }, r -> ShreddedPaper.ensureSync(level, BlockPos.containing(vec3), r)); // ShreddedPaper - async teleportation
++        }, io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, BlockPos.containing(vec3), BlockPos.containing(vec3), 32, net.minecraft.world.level.chunk.status.ChunkStatus.FULL)); // ShreddedPaper - async teleportation // Evangelium - chunk + the +-16 block tallest-block search loaded asynchronously first
 +        }); // ShreddedPaper - async teleportation
      }
  
@@ -130,7 +130,7 @@
 +    private static CompletableFuture<Boolean> isChunkEmptyAsync(ServerLevel level, Vec3 pos) { // ShreddedPaper - async teleportation
 +        BlockPos blockPos = BlockPos.containing(pos); // ShreddedPaper - async teleportation
 +        if (!ShreddedPaper.isSync(level, new ChunkPos(blockPos))) level.moonrise$loadChunksAsync(blockPos, 0, Priority.HIGHER, v -> {});// ShreddedPaper - async teleportation - begin loading the chunk now so it's already loaded when we get to it
-+        return CompletableFuture.supplyAsync(() -> getChunk(level, pos).getHighestFilledSectionIndex() == -1, r -> ShreddedPaper.ensureSync(level, blockPos, r)); // ShreddedPaper - async teleportation
++        return CompletableFuture.supplyAsync(() -> getChunk(level, pos).getHighestFilledSectionIndex() == -1, io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, blockPos, 0)); // ShreddedPaper - async teleportation // Evangelium - loaded asynchronously first
      }
  
      private static BlockPos findTallestBlock(BlockGetter level, BlockPos pos, int radius, boolean allowBedrock) {

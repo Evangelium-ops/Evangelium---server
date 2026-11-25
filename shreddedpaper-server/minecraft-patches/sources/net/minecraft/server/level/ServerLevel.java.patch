@@ -281,7 +281,7 @@
          this.gameEventDispatcher = new GameEventDispatcher(this);
          this.randomSequences = Objects.requireNonNullElseGet(randomSequences, () -> this.getDataStorage().computeIfAbsent(RandomSequences.TYPE));
 -        this.waypointManager = new ServerWaypointManager();
-+        this.waypointManager = ShreddedPaperConfiguration.get().optimizations.disableLocatorBar ? new NoOpServerWaypointManager() : new ServerWaypointManager(); // ShreddedPaper - Optimise ServerWaypointManager
++        this.waypointManager = ShreddedPaperConfiguration.get().optimizations.disableLocatorBar ? new NoOpServerWaypointManager() : io.multipaper.shreddedpaper.util.ConcurrentWaypointManager.ENABLED ? new io.multipaper.shreddedpaper.util.ConcurrentWaypointManager() : new ServerWaypointManager(); // ShreddedPaper - Optimise ServerWaypointManager // Evangelium - without one world-wide lock
          this.environmentAttributes = EnvironmentAttributeSystem.builder().addDefaultLayers(this).build();
          this.updateSkyBrightness();
          // Paper start - rewrite chunk system

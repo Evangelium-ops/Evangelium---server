@@ -481,7 +481,7 @@
                           {
                              this.teleport(portalDestination);
                          }
-+                        }, r -> ShreddedPaper.ensureSync(this, portalDestination.newLevel(), ChunkPos.of(BlockPos.containing(portalDestination.position())), r)); // ShreddedPaper - async teleportation
++                        }, r -> io.multipaper.shreddedpaper.threading.TeleportPreload.ensureSyncTeleport(this, portalDestination.newLevel(), portalDestination.position(), ChunkPos.of(BlockPos.containing(portalDestination.position())), r)); // ShreddedPaper - async teleportation // Evangelium - destination chunks loaded asynchronously first
                      }
 +                    return CompletableFuture.completedFuture(null); // ShreddedPaper - async teleportation
 +                    }).thenRun(() -> this.beingPortalled = null); // ShreddedPaper - async teleportation

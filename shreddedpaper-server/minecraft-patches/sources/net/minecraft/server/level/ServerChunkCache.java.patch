@@ -27,15 +27,32 @@
      @VisibleForDebug
      private NaturalSpawner.@Nullable SpawnState lastSpawnState;
      // Paper start
-@@ -115,7 +_,7 @@
+@@ -101,6 +_,12 @@
+     }
+ 
+     private ChunkAccess syncLoad(final int chunkX, final int chunkZ, final ChunkStatus toStatus) {
++        // Evangelium start - inside an intra-region parallel phase nobody may wait for a chunk load (it would need region tasks run there)
++        if (io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase()) {
++            throw new io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] sync chunk load of (" + chunkX + "," + chunkZ + ") in '"
++                + ca.spottedleaf.moonrise.common.util.WorldUtil.getWorldName(this.level) + "' inside a parallel phase on " + Thread.currentThread().getName());
++        }
++        // Evangelium end
+         final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler chunkTaskScheduler = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler();
+         final CompletableFuture<ChunkAccess> completable = new CompletableFuture<>();
+         chunkTaskScheduler.scheduleChunkLoad(
+@@ -115,9 +_,11 @@
              );
          }
  
 -        if (ca.spottedleaf.moonrise.common.util.TickThread.isTickThreadFor(this.level, chunkX, chunkZ)) {
 +        if (ca.spottedleaf.moonrise.common.util.TickThread.isTickThread()) { // ShreddedPaper - use managedBlock if this is any tick thread
              ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.pushChunkWait(this.level, chunkX, chunkZ);
++            final long syncStart = completable.isDone() ? 0L : System.nanoTime(); // Evangelium - sync load statistics
              this.mainThreadProcessor.managedBlock(completable::isDone);
++            if (syncStart != 0L) io.multipaper.shreddedpaper.threading.TeleportPreload.recordSyncLoad(this.level, chunkX, chunkZ, toStatus, System.nanoTime() - syncStart); // Evangelium
              ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.popChunkWait();
+         }
+ 
 @@ -198,6 +_,7 @@
          Supplier<DimensionDataStorage> overworldDataStorage
      ) {
@@ -280,11 +297,23 @@
          }
      }
  
-@@ -823,12 +_,28 @@
+@@ -792,6 +_,8 @@
+ 
+         @Override
+         public void managedBlock(BooleanSupplier isDone) {
++            // Evangelium - nothing runs tasks inside an intra-region parallel phase, so a wait there would only end through RegionGuard
++            if (io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase() && !isDone.getAsBoolean()) throw new io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a wait for chunk/region tasks inside a parallel phase on " + Thread.currentThread().getName());
+             super.managedBlock(() -> MinecraftServer.throwIfFatalException() && isDone.getAsBoolean());
+         }
+ 
+@@ -823,12 +_,31 @@
  
          @Override
          public boolean pollTask() {
 +            // ShreddedPaper start - run all region tasks cause the worker threads might be deadlocked and not get to them
++            if (io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase()) {
++                return false; // Evangelium - no region or chunk tasks inside an intra-region parallel phase (owner or helper)
++            }
 +            if ((!MinecraftServer.getServer().executingMidTickTasks.get() && TickThread.isTickThread()) || TickThread.isShutdownThread()) {
 +                // Evangelium - only the regions with queued tasks (the old walk copied and visited every ticking region on each wake-up)
 +                level.getChunkSource().tickingRegions.forEachWithTasks(region -> {

@@ -49,6 +49,14 @@ public class ShreddedPaperConfiguration extends ConfigurationPart {
         public int regionSize = 8;
         public boolean runUnsupportedPluginsInSync = true;
         public boolean allowUnsupportedPluginsToModifyChunksViaGlobalScheduler = true;
+        @Comment("Plugin compatibility: outside the world tick (startup, onEnable, console commands, the Bukkit scheduler) the Server thread may read and change the world like Paper's main thread. On a failed thread check it takes the whole world for a moment (bounded wait), and gives it back before the worlds tick. -Dshreddedpaper.onDemandRegions=false turns this and the next setting off.")
+        public boolean serverThreadTakesWorld = true;
+        @Comment("Plugin compatibility: code of a plugin without Folia support (it already runs under its plugin lock) may touch another region, for example spawn an entity at a far player or change that player's inventory. On a failed thread check it takes that region until its plugin call ends (bounded wait, never a deadlock).")
+        public boolean takeRegionsForPluginsOnDemand = true;
+        @Comment("Longest wait in milliseconds for such a region or world; after it the thread check fails as before.")
+        public int onDemandRegionWaitMs = 250;
+        @Comment("FastAsyncWorldEdit compatibility, off by default: FAWE work it wants on the main thread runs right away when it comes from a region thread, instead of waiting for the main thread (which waits for that region: a deadlock). FAWE writes chunk data directly, so work touching a far region can race with that region's tick. Nothing happens without FAWE. -Dshreddedpaper.faweInline=true/false overrides this.")
+        public boolean faweRunMainThreadWorkOnRegionThread = false;
 
     }
 

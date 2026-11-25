@@ -35,7 +35,7 @@
 +            final CompletableFuture<Void> future; // ShreddedPaper - async teleportation
              if (!flag) {
 -                EndPlatformFeature.createEndPlatform(level1, BlockPos.containing(bottomCenter).below(), true, entity); // CraftBukkit
-+                future = CompletableFuture.runAsync(() -> EndPlatformFeature.createEndPlatform(level1, BlockPos.containing(bottomCenter.get()).below(), true, entity), r -> ShreddedPaper.ensureSync(level1, blockPos, r)); // CraftBukkit // ShreddedPaper - async teleportation
++                future = CompletableFuture.runAsync(() -> EndPlatformFeature.createEndPlatform(level1, BlockPos.containing(bottomCenter.get()).below(), true, entity), io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level1, blockPos, 3)); // CraftBukkit // ShreddedPaper - async teleportation // Evangelium - platform chunks loaded asynchronously first
                  f = Direction.WEST.toYRot();
                  f1 = 0.0F;
                  set = Relative.union(Relative.DELTA, Set.of(Relative.X_ROT));
@@ -53,7 +53,7 @@
                  }
  
 -                bottomCenter = entity.adjustSpawnLocation(level1, blockPos).getBottomCenter();
-+                future = CompletableFuture.runAsync(() -> bottomCenter.set(entity.adjustSpawnLocation(level1, blockPos).getBottomCenter()), r -> ShreddedPaper.ensureSync(level1, blockPos, r)); // ShreddedPaper - async teleportation
++                future = CompletableFuture.runAsync(() -> bottomCenter.set(entity.adjustSpawnLocation(level1, blockPos).getBottomCenter()), io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level1, blockPos, 0)); // ShreddedPaper - async teleportation // Evangelium - spawn chunk loaded asynchronously first
              }
  
 +            return future.thenApply(v -> { // ShreddedPaper - async teleportation

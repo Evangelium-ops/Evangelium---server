@@ -149,6 +149,18 @@
                      }
                  }
                  server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
+@@ -970,6 +_,11 @@
+ 
+                         profilerFiller.pop();
+                     } catch (Throwable var5) {
++                        // Evangelium start - an abandoned region tick ends here: the block entity is not removed
++                        if (var5 instanceof io.multipaper.shreddedpaper.threading.RegionTickAbandonedError abandoned) throw abandoned;
++                        if (var5 instanceof io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException skipped) throw skipped; // Evangelium - the parallel-phase item is skipped, the block entity stays
++                        if (io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.isTickAbandoned()) throw new io.multipaper.shreddedpaper.threading.RegionTickAbandonedError("[compat] region tick abandoned by RegionGuard: " + var5);
++                        // Evangelium end
+                         // Paper start - Prevent block entity and entity crashes
+                         final String msg = String.format("BlockEntity threw exception at %s:%s,%s,%s", LevelChunk.this.getLevel().getWorld().getName(), this.getPos().getX(), this.getPos().getY(), this.getPos().getZ());
+                         net.minecraft.server.MinecraftServer.LOGGER.error(msg, var5);
 @@ -997,6 +_,11 @@
          }
  

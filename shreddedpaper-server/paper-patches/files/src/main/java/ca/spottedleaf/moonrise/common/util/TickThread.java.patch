@@ -26,7 +26,7 @@
  import java.util.concurrent.atomic.AtomicInteger;
  
  public class TickThread extends Thread {
-@@ -16,9 +_,43 @@
+@@ -16,9 +_,60 @@
      private static final Logger LOGGER = LoggerFactory.getLogger(TickThread.class);
  
      private static String getThreadContext() {
@@ -67,9 +67,89 @@
 +    }
 +    // ShreddedPaper end
 +
++    // Evangelium start - plugin compatibility: a failed check first tries to take the regions (OnDemandRegionAccess), then re-checks
++    private static boolean takeOnDemand(final Level world, final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ) {
++        return io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.tryTake(world, fromChunkX, fromChunkZ, toChunkX, toChunkZ)
++            && isTickThreadFor(world, fromChunkX, fromChunkZ, toChunkX, toChunkZ);
++    }
++
++    /** Evangelium - like isTickThreadFor, but a failed check first tries to take the region (for checks that throw their own exception). */
++    public static boolean isTickThreadForOrTake(final Level world, final int chunkX, final int chunkZ) {
++        return isTickThreadFor(world, chunkX, chunkZ) || takeOnDemand(world, chunkX, chunkZ, chunkX, chunkZ);
++    }
++
++    /** Evangelium - Bukkit.isPrimaryThread(): a real tick thread (or the shutdown thread), not every thread while forceTicks is set. */
++    public static boolean isPrimaryThreadForApi() {
++        return isShutdownThread() || Thread.currentThread() instanceof TickThread || ShreddedPaperTickThread.isShreddedPaperTickThread();
++    }
++    // Evangelium end
++
      /**
       * @deprecated
       */
+@@ -31,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final BlockPos pos, final String reason) {
+-        if (!isTickThreadFor(world, pos)) {
++        if (!isTickThreadFor(world, pos) && !takeOnDemand(world, pos.getX() >> 4, pos.getZ() >> 4, pos.getX() >> 4, pos.getZ() >> 4)) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                                reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", block_pos=" + pos;
+             LOGGER.error(ex, new Throwable());
+@@ -40,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final BlockPos pos, final int blockRadius, final String reason) {
+-        if (!isTickThreadFor(world, pos, blockRadius)) {
++        if (!isTickThreadFor(world, pos, blockRadius) && !takeOnDemand(world, SectionPos.blockToSectionCoord(pos.getX() - blockRadius), SectionPos.blockToSectionCoord(pos.getZ() - blockRadius), SectionPos.blockToSectionCoord(pos.getX() + blockRadius), SectionPos.blockToSectionCoord(pos.getZ() + blockRadius))) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", block_pos=" + pos + ", block_radius=" + blockRadius;
+             LOGGER.error(ex, new Throwable());
+@@ -49,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final ChunkPos pos, final String reason) {
+-        if (!isTickThreadFor(world, pos)) {
++        if (!isTickThreadFor(world, pos) && !takeOnDemand(world, pos.x, pos.z, pos.x, pos.z)) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", chunk_pos=" + pos;
+             LOGGER.error(ex, new Throwable());
+@@ -58,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final int chunkX, final int chunkZ, final String reason) {
+-        if (!isTickThreadFor(world, chunkX, chunkZ)) {
++        if (!isTickThreadFor(world, chunkX, chunkZ) && !takeOnDemand(world, chunkX, chunkZ, chunkX, chunkZ)) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", chunk_pos=" + new ChunkPos(chunkX, chunkZ);
+             LOGGER.error(ex, new Throwable());
+@@ -67,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Entity entity, final String reason) {
+-        if (!isTickThreadFor(entity)) {
++        if (!isTickThreadFor(entity) && !takeOnDemand(entity.level(), entity.chunkPosition().x, entity.chunkPosition().z, entity.chunkPosition().x, entity.chunkPosition().z)) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", entity=" + EntityUtil.dumpEntity(entity);
+             LOGGER.error(ex, new Throwable());
+@@ -76,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final AABB aabb, final String reason) {
+-        if (!isTickThreadFor(world, aabb)) {
++        if (!isTickThreadFor(world, aabb) && !takeOnDemand(world, CoordinateUtils.getChunkCoordinate(aabb.minX), CoordinateUtils.getChunkCoordinate(aabb.minZ), CoordinateUtils.getChunkCoordinate(aabb.maxX), CoordinateUtils.getChunkCoordinate(aabb.maxZ))) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", aabb=" + aabb;
+             LOGGER.error(ex, new Throwable());
+@@ -85,7 +_,7 @@
+     }
+ 
+     public static void ensureTickThread(final Level world, final double blockX, final double blockZ, final String reason) {
+-        if (!isTickThreadFor(world, blockX, blockZ)) {
++        if (!isTickThreadFor(world, blockX, blockZ) && !takeOnDemand(world, CoordinateUtils.getChunkCoordinate(blockX), CoordinateUtils.getChunkCoordinate(blockZ), CoordinateUtils.getChunkCoordinate(blockX), CoordinateUtils.getChunkCoordinate(blockZ))) { // Evangelium
+             final String ex = "Thread failed main thread check: " +
+                 reason + ", context=" + getThreadContext() + ", world=" + WorldUtil.getWorldName(world) + ", block_pos=" + new Vec3(blockX, 0.0, blockZ);
+             LOGGER.error(ex, new Throwable());
 @@ -119,54 +_,88 @@
      }
  

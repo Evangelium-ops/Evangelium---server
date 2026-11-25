@@ -45,7 +45,7 @@
              Vec3.ZERO,
              respawnData.yaw(),
              respawnData.pitch(),
-@@ -105,10 +_,11 @@
+@@ -105,10 +_,17 @@
              Set.of(),
              postTeleportTransition
          );
@@ -55,7 +55,13 @@
 -    private static Vec3 findAdjustedSharedSpawnPos(ServerLevel level, Entity entity) {
 -        return entity.adjustSpawnLocation(level, level.getRespawnData().pos()).getBottomCenter();
 +    private static CompletableFuture<Vec3> findAdjustedSharedSpawnPosAsync(ServerLevel level, Entity entity) { // ShreddedPaper - respawn async
-+        return CompletableFuture.supplyAsync(() -> entity.adjustSpawnLocation(level, level.getRespawnData().pos()).getBottomCenter(), r -> ShreddedPaper.ensureSync(level, level.getRespawnData().pos(), r)); // ShreddedPaper - respawn async
++        // Evangelium start - a player's spawn search (ServerPlayer.adjustSpawnLocation) is asynchronous already: use its future instead
++        // of parking a region thread on it in managedBlock while that thread holds the spawn region's locks; same result
++        if (io.multipaper.shreddedpaper.threading.TeleportPreload.ENABLED && entity instanceof net.minecraft.server.level.ServerPlayer) {
++            return net.minecraft.server.level.PlayerSpawnFinder.findSpawn(level, level.getRespawnData().pos()).thenApply(vec3 -> BlockPos.containing(vec3).getBottomCenter());
++        }
++        // Evangelium end
++        return CompletableFuture.supplyAsync(() -> entity.adjustSpawnLocation(level, level.getRespawnData().pos()).getBottomCenter(), io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, level.getRespawnData().pos(), 0)); // ShreddedPaper - respawn async // Evangelium - spawn chunk loaded asynchronously first
      }
  
      public TeleportTransition withRotation(float yRot, float xRot) {

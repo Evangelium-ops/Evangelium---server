@@ -270,6 +270,18 @@
  
          this.tickingBlockEntities = false;
          this.spigotConfig.currentPrimedTnt = 0; // Spigot
+@@ -1473,6 +_,11 @@
+         try {
+             action.accept(entity);
+         } catch (Throwable var6) {
++            // Evangelium start - an abandoned region tick ends here: the entity is not discarded (a new owner may tick it now)
++            if (var6 instanceof io.multipaper.shreddedpaper.threading.RegionTickAbandonedError abandoned) throw abandoned;
++            if (var6 instanceof io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException skipped) throw skipped; // Evangelium - the parallel-phase item is skipped, the entity is not discarded
++            if (io.multipaper.shreddedpaper.threading.OnDemandRegionAccess.isTickAbandoned()) throw new io.multipaper.shreddedpaper.threading.RegionTickAbandonedError("[compat] region tick abandoned by RegionGuard: " + var6);
++            // Evangelium end
+             // Paper start - Prevent block entity and entity crashes
+             final String msg = String.format("Entity threw exception at %s:%s,%s,%s", entity.level().getWorld().getName(), entity.getX(), entity.getY(), entity.getZ());
+             MinecraftServer.LOGGER.error(msg, var6);
 @@ -1480,7 +_,7 @@
              entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DISCARD);
              // Paper end - Prevent block entity and entity crashes

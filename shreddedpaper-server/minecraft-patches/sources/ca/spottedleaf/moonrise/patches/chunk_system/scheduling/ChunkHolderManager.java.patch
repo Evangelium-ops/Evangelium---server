@@ -130,7 +130,7 @@
      }
  
      public void saveAllChunks(final boolean flush, final boolean shutdown, final boolean logProgress,
-@@ -305,7 +_,23 @@
+@@ -305,7 +_,26 @@
          for (int i = 0, len = holders.size(); i < len; ++i) {
              final NewChunkHolder holder = holders.get(i);
              try {
@@ -144,6 +144,9 @@
 +                        future = CompletableFuture.completedFuture(supplier.get());
 +                    } else {
 +                        future = CompletableFuture.supplyAsync(supplier, r -> world.chunkScheduler.getRegionLocker().tryReadOnlyLockNow(RegionPos.forChunk(holder.vanillaChunkHolder.getPos()), r));
++                        if (!future.isDone() && io.multipaper.shreddedpaper.threading.IntraRegion.inParallelPhase()) {
++                            throw new io.multipaper.shreddedpaper.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a chunk save waiting for a region inside a parallel phase on " + Thread.currentThread().getName()); // Evangelium - would only spin
++                        }
 +                        if (!future.isDone()) {
 +                            // Poll task while we wait for region to become unlocked
 +                            world.chunkSource.mainThreadProcessor.pollTask();

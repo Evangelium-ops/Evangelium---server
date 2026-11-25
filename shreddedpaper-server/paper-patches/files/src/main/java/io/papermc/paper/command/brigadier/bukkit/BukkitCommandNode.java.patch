@@ -18,15 +18,16 @@
  import org.bukkit.entity.Player;
  import org.bukkit.event.server.TabCompleteEvent;
  
-@@ -80,7 +_,14 @@
+@@ -80,7 +_,15 @@
              String[] args = org.apache.commons.lang3.StringUtils.split(content, ' '); // fix adjacent spaces (from console/plugins) causing empty array elements
  
              // Note: we don't return the result of target.execute as thats success / failure, we return handled (true) or not handled (false)
 -            this.command.execute(sender, this.literal, Arrays.copyOfRange(args, 1, args.length));
 +            // ShreddedPaper start - run unsupported plugins in sync
 +            Runnable runnable = () -> this.command.execute(sender, this.literal, Arrays.copyOfRange(args, 1, args.length));
-+            if (this.command instanceof PluginCommand pluginCommand) {
-+                SynchronousPluginExecution.executeNoException(pluginCommand.getPlugin(), runnable::run);
++            org.bukkit.plugin.Plugin owner = SynchronousPluginExecution.owningPlugin(this.command); // Evangelium - every plugin-owned command, not only PluginCommand
++            if (owner != null) {
++                SynchronousPluginExecution.executeNoException(owner, runnable::run);
 +            } else {
 +                runnable.run();
 +            }
@@ -34,7 +35,7 @@
  
              // return true as command was handled
              return 1;
-@@ -103,32 +_,45 @@
+@@ -103,32 +_,46 @@
              org.bukkit.command.CommandSender sender = context.getSource().getSender();
              String[] args = builder.getRemaining().split(" ", -1); // We need the command included -- Set limit to -1, allow for trailing spaces
  
@@ -46,8 +47,9 @@
 +                // ShreddedPaper start - run unsupported plugins in sync
 +                try {
 +                    SynchronousPluginExecution.RunnableWithException runnable = () -> results.set(this.command.tabComplete(sender, this.literal, args, pos.clone()));
-+                    if (this.command instanceof PluginCommand pluginCommand) {
-+                        SynchronousPluginExecution.execute(pluginCommand.getPlugin(), runnable);
++                    org.bukkit.plugin.Plugin owner = SynchronousPluginExecution.owningPlugin(this.command); // Evangelium - every plugin-owned command
++                    if (owner != null) {
++                        SynchronousPluginExecution.execute(owner, runnable);
 +                    } else {
 +                        runnable.run();
 +                    }

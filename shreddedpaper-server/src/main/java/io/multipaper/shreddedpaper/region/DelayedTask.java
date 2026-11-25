@@ -21,6 +21,8 @@ public class DelayedTask implements Runnable {
     public void run() {
         try {
             task.run();
+        } catch (io.multipaper.shreddedpaper.threading.RegionTickAbandonedError abandoned) {
+            throw abandoned; // Evangelium - an abandoned region tick ends here
         } catch (Throwable t) {
             LOGGER.error("Error when executing task", t);
         }

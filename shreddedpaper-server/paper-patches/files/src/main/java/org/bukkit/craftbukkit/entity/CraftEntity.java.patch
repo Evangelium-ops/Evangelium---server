@@ -53,7 +53,7 @@
  
          if (entityTracker == null) {
              return;
-@@ -1140,10 +_,28 @@
+@@ -1140,10 +_,29 @@
  
          ServerLevel world = ((CraftWorld)locationClone.getWorld()).getHandle();
          CompletableFuture<Boolean> ret = new CompletableFuture<>();
@@ -79,6 +79,7 @@
          world.loadChunksForMoveAsync(this.getHandle().getBoundingBoxAt(locationClone.getX(), locationClone.getY(), locationClone.getZ()),
              this instanceof CraftPlayer ? ca.spottedleaf.concurrentutil.util.Priority.HIGHER : ca.spottedleaf.concurrentutil.util.Priority.NORMAL, (chunks) -> {
 -                MinecraftServer.getServer().scheduleOnMain(() -> {
++                io.multipaper.shreddedpaper.threading.TeleportPreload.hold(world, chunks); // Evangelium - keep them loaded until the deferred teleport below has run (the load tickets go when this callback returns)
 +                ShreddedPaper.ensureSync(this.getHandle(), world, toChunkPos, () -> { // ShreddedPaper - run on correct thread
                      final ServerChunkCache chunkCache = world.getChunkSource();
                      for (final net.minecraft.world.level.chunk.ChunkAccess chunk : chunks) {

@@ -186,6 +186,7 @@ public class ShreddedPaperChunkTicker {
 
     private void _tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         try {
+            OnDemandRegionAccess.clearTickAbandoned(); // Evangelium - plugin compatibility: a new tick starts clean
             currentlyTickingRegion.set(region);
             net.minecraft.world.entity.PhysicsCache.bump(); // Knowledge - movement caches never outlive a region tick
             RegionBudget.begin(region); // Knowledge - tick budget
@@ -207,7 +208,9 @@ public class ShreddedPaperChunkTicker {
                 }
             });
 
+            OnDemandRegionAccess.checkTickAbandoned(); // Evangelium - plugin compatibility: an abandoned tick ends between phases
             region.tickTasks();
+            OnDemandRegionAccess.checkTickAbandoned();
 
             if (level.tickRateManager().runsNormally()) {
                 level.handlingTickThreadLocal.set(true);
@@ -298,12 +301,14 @@ public class ShreddedPaperChunkTicker {
             }
 
             RegionBudget.sliced(RegionBudget.Work.ENTITIES, System.nanoTime() - entitiesStart);
+            OnDemandRegionAccess.checkTickAbandoned();
 
             if (!PROCESS_TRACK_QUEUE_IN_PARALLEL) region.forEachTrackedEntity(ShreddedPaperEntityTicker::processTrackQueue);
 
             final long blockEntitiesStart = System.nanoTime();
             level.tickBlockEntities(region.tickingBlockEntities, region.pendingBlockEntityTickers);
             RegionBudget.sliced(RegionBudget.Work.BLOCK_ENTITIES, System.nanoTime() - blockEntitiesStart);
+            OnDemandRegionAccess.checkTickAbandoned();
 
             // Knowledge - a crowd in one place: players in chunks at least three apart tick on several threads (IntraRegion#isChunkLocalPlayer)
             final List<ServerPlayer> regionPlayers = region.getPlayers();
@@ -320,6 +325,7 @@ public class ShreddedPaperChunkTicker {
             } else {
                 regionPlayers.forEach(ShreddedPaperPlayerTicker::tickPlayer);
             }
+            OnDemandRegionAccess.checkTickAbandoned();
 
             while (region.getInternalTaskQueue().executeTask()) ;
 
@@ -331,6 +337,7 @@ public class ShreddedPaperChunkTicker {
             }
         } finally {
             currentlyTickingRegion.remove();
+            OnDemandRegionAccess.clearTickAbandoned(); // Evangelium - plugin compatibility
         }
     }
 

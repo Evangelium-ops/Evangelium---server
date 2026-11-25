@@ -34,7 +34,7 @@
          } else {
              boolean flag = level1.getTypeKey() == net.minecraft.world.level.dimension.LevelStem.NETHER; // CraftBukkit
              WorldBorder worldBorder = level1.getWorldBorder();
-@@ -163,19 +_,20 @@
+@@ -163,19 +_,23 @@
              // CraftBukkit start
              org.bukkit.craftbukkit.event.PortalEventResult result = org.bukkit.craftbukkit.event.CraftEventFactory.handlePortalEvents(entity, org.bukkit.craftbukkit.util.CraftLocation.toBukkit(blockPos, level1), org.bukkit.PortalType.NETHER, portalSearchRadius, level1.paperConfig().environment.portalCreateRadius); // Paper - use custom portal search radius
              if (result == null) {
@@ -54,15 +54,30 @@
 +    private CompletableFuture<@Nullable TeleportTransition> getExitPortalAsync( // ShreddedPaper - async teleportation
          ServerLevel level, Entity entity, BlockPos pos, BlockPos exitPos, WorldBorder worldBorder, org.bukkit.craftbukkit.event.PortalEventResult result // CraftBukkit
      ) {
-+        return CompletableFuture.supplyAsync(() -> { // ShreddedPaper - async teleportation
++        // Evangelium start - two stages instead of loading on the region thread: the portal POI of the whole search area first (EMPTY
++        // status: the search itself never generates), a probe search on the region; then the FULL chunks around the portal it found (or
++        // around exitPos, where one would be built); then the unchanged search + use/create below. Switch off = one stage as before.
++        final java.util.function.Supplier<TeleportTransition> exitBody = () -> {
          Optional<BlockPos> optional = level.getPortalForcer().findClosestPortalPosition(exitPos, worldBorder, result.searchRadius()); // CraftBukkit
          BlockUtil.FoundRectangle largestRectangleAround;
          TeleportTransition.PostTeleportTransition postTeleportTransition;
-@@ -209,6 +_,7 @@
+@@ -209,6 +_,19 @@
          // CraftBukkit end
  
          return getDimensionTransitionFromExit(entity, pos, largestRectangleAround, level, postTeleportTransition);
-+        }, r -> ShreddedPaper.ensureSync(level, exitPos, r)); // ShreddedPaper - async teleportation
++        };
++        if (!io.multipaper.shreddedpaper.threading.TeleportPreload.ENABLED) {
++            return CompletableFuture.supplyAsync(exitBody, r -> ShreddedPaper.ensureSync(level, exitPos, r)); // ShreddedPaper - async teleportation
++        }
++        final int searchRadius = result.searchRadius();
++        return CompletableFuture.supplyAsync(
++            () -> level.getPortalForcer().findClosestPortalPosition(exitPos, worldBorder, searchRadius),
++            io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, exitPos, exitPos, searchRadius, net.minecraft.world.level.chunk.status.ChunkStatus.EMPTY)
++        ).thenCompose(probe -> CompletableFuture.supplyAsync(exitBody,
++            // found: getLargestRectangleAround reads up to 21 blocks from it; none: createPortal scans createRadius around exitPos plus the frame
++            io.multipaper.shreddedpaper.threading.TeleportPreload.onRegionWhenLoaded(level, exitPos, probe.orElse(exitPos),
++                probe.isPresent() ? 21 : (result.canCreatePortal() ? result.createRadius() + 4 : 0), net.minecraft.world.level.chunk.status.ChunkStatus.FULL)));
++        // Evangelium end
      }
  
      private static TeleportTransition getDimensionTransitionFromExit(

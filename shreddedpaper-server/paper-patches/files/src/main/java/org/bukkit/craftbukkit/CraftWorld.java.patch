@@ -36,7 +36,7 @@
  
      @Override
      public Chunk getChunkAt(int x, int z) {
-+        if (ShreddedPaperTickThread.isShreddedPaperTickThread() && !TickThread.isTickThreadFor(this.world, x, z)) throw new IllegalStateException("Cannot get chunk from a region that is not ours! world=" + this.world.serverLevelData.getLevelName() + ", chunkpos=[" + x + "," + z + "]"); // ShreddedPaper - regions
++        if (ShreddedPaperTickThread.isShreddedPaperTickThread() && !TickThread.isTickThreadForOrTake(this.world, x, z)) throw new IllegalStateException("Cannot get chunk from a region that is not ours! world=" + this.world.serverLevelData.getLevelName() + ", chunkpos=[" + x + "," + z + "]"); // ShreddedPaper - regions
          warnUnsafeChunk("getting a faraway chunk", x, z); // Paper
          net.minecraft.world.level.chunk.LevelChunk chunk = (net.minecraft.world.level.chunk.LevelChunk) this.world.getChunk(x, z, ChunkStatus.FULL, true);
          return new CraftChunk(chunk);

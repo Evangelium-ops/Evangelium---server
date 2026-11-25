@@ -102,8 +102,14 @@ public final class IntraRegion {
      * or ridden, or spectating through another entity. Both the player tick and the player's entity tick (inventory sync, locator bar,
      * advancements, block breaking progress) run this way.
      */
+    /**
+     * Evangelium - players are never helper items any more (off unless -Dshreddedpaper.intraRegionPlayers=true): a player tick runs plugin
+     * code and can sync-load chunks mid-tick (a teleport into unloaded chunks), which must happen on the owner outside a parallel phase.
+     */
+    static final boolean PLAYERS_ON_HELPERS = Boolean.getBoolean("shreddedpaper.intraRegionPlayers");
+
     public static boolean parallelPlayers(int players) {
-        return POOL != null && MIN_PLAYERS >= 0 && players >= MIN_PLAYERS;
+        return PLAYERS_ON_HELPERS && POOL != null && MIN_PLAYERS >= 0 && players >= MIN_PLAYERS;
     }
 
     public static boolean isChunkLocalPlayer(net.minecraft.server.level.ServerPlayer player) {
@@ -115,6 +121,35 @@ public final class IntraRegion {
     }
 
     /** One piece of chunk-local work. */
+    // Evangelium start - plugin compatibility: a thread inside a parallel phase (the owner while helpers run, or a helper) shares its
+    // regions with other threads, so it must never lend them (OnDemandRegionAccess.publishLoans) nor take regions on demand
+    private static final ThreadLocal<int[]> PHASE = ThreadLocal.withInitial(() -> new int[1]);
+
+    public static boolean inParallelPhase() {
+        return PHASE.get()[0] > 0;
+    }
+
+    /**
+     * Thrown by ServerChunkCache.syncLoad inside a parallel phase (owner or helper): neither may run region, chunk or server tasks while the
+     * phase runs (a helper would run tasks of regions it does not hold, at the same time as the owner; the owner would run them while its
+     * helpers work in the same regions). Only the one work item fails; it is logged once with its stack so any such path becomes known.
+     */
+    public static final class SyncLoadInPhaseException extends IllegalStateException {
+        public SyncLoadInPhaseException(String message) {
+            super(message);
+        }
+    }
+
+    private static volatile boolean syncLoadLogged = false;
+
+    private static void logSyncLoadOnce(SyncLoadInPhaseException e) {
+        if (!syncLoadLogged) {
+            syncLoadLogged = true;
+            LOGGER.error("[IntraRegion] a work item of a parallel phase needed a sync chunk load; that item was skipped (logged once)", e);
+        }
+    }
+    // Evangelium end
+
     public interface ChunkWork<T> {
         void run(T item) throws Exception;
     }
@@ -276,6 +311,16 @@ public final class IntraRegion {
     }
 
     private static <T> void run(ServerLevel level, LevelChunkRegion region, ShreddedPaperRegionLocker.Loan loan, Schedule<T> schedule, ChunkWork<T> work) {
+        final int[] phase = PHASE.get(); // Evangelium - plugin compatibility
+        phase[0]++;
+        try {
+            run0(level, region, loan, schedule, work);
+        } finally {
+            phase[0]--;
+        }
+    }
+
+    private static <T> void run0(ServerLevel level, LevelChunkRegion region, ShreddedPaperRegionLocker.Loan loan, Schedule<T> schedule, ChunkWork<T> work) {
         final AtomicInteger active = new AtomicInteger();   // helpers between taking part and having flushed their changes
         final AtomicReference<Throwable> failure = new AtomicReference<>();
         final Thread owner = Thread.currentThread();
@@ -356,7 +401,11 @@ public final class IntraRegion {
                     }
                     net.minecraft.world.entity.PhysicsCache.bump(); // Knowledge - a new work unit: other threads changed blocks elsewhere meanwhile
                     for (T item : schedule.work.get(i)) {
-                        work.run(item);
+                        try {
+                            work.run(item);
+                        } catch (SyncLoadInPhaseException e) {
+                            logSyncLoadOnce(e); // Evangelium - only this item fails
+                        }
                     }
                 }
             } catch (Throwable t) {
@@ -375,11 +424,13 @@ public final class IntraRegion {
                 return;   // the owner (or other helpers) already did everything: nothing was touched
             }
             ShreddedPaperRegionLocker locker = level.chunkScheduler.getRegionLocker();
+            final int[] phase = PHASE.get(); // Evangelium - plugin compatibility (raised inside the try below, lowered in its finally)
             locker.borrow(loan);
             ShreddedPaperChunkTicker.setCurrentlyTickingRegion(region);
             level.handlingTickThreadLocal.set(true);
             ShreddedPaperChangesBroadcaster.setAsWorkerThread();
             try {
+                phase[0]++;
                 work(schedule, work, failure, TickTimings.HELPER_CHUNKS);
                 ShreddedPaperChangesBroadcaster.broadcastChanges();   // the changes this helper made, while it still holds the region
             } catch (Throwable t) {
@@ -388,6 +439,8 @@ public final class IntraRegion {
                 level.handlingTickThreadLocal.set(false);
                 ShreddedPaperChunkTicker.setCurrentlyTickingRegion(null);
                 locker.giveBack(loan);
+                phase[0]--;
+                OnDemandRegionAccess.clearTickAbandoned(); // a helper's abandoned mark went to the owner through failure
             }
         } finally {
             active.decrementAndGet();

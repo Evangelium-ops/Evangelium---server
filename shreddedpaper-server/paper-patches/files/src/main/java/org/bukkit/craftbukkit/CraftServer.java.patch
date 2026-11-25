@@ -54,6 +54,15 @@
  
          String name = creator.name();
          ChunkGenerator chunkGenerator = creator.generator();
+@@ -2381,7 +_,7 @@
+ 
+     @Override
+     public boolean isPrimaryThread() {
+-        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Paper - rewrite chunk system
++        return ca.spottedleaf.moonrise.common.util.TickThread.isPrimaryThreadForApi(); // Paper - rewrite chunk system // Evangelium - not every thread while forceTicks is set (async prelogin event during world loads and stalled stops)
+     }
+ 
+     @Override
 @@ -2941,6 +_,7 @@
          if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) loadCustomPermissions();
          DefaultPermissions.registerCorePermissions();

@@ -13,11 +13,11 @@
          if (event.isAsynchronous() && this.server.isPrimaryThread()) {
              throw new IllegalStateException(event.getEventName() + " may only be triggered asynchronously.");
 -        } else if (!event.isAsynchronous() && !this.server.isPrimaryThread() && !this.server.isStopping()) {
-+        } else if (!event.isAsynchronous() && this.server != null && !this.server.isPrimaryThread() && !this.server.isStopping()) {
++        } else if (!event.isAsynchronous() && this.server != null && !this.server.isPrimaryThread() && !ca.spottedleaf.moonrise.common.util.TickThread.isTickThread() && !this.server.isStopping()) { // Evangelium - sync events keep the forceTicks rule (world loads), only the async check uses the stricter isPrimaryThread
              throw new IllegalStateException(event.getEventName() + " may only be triggered synchronously.");
          }
  
-@@ -51,7 +_,15 @@
+@@ -51,7 +_,17 @@
              }
  
              try {
@@ -31,6 +31,8 @@
 +                    });
 +                }
 +                // ShreddedPaper end - run unsupported plugins in sync
++            } catch (io.multipaper.shreddedpaper.threading.RegionTickAbandonedError ex) {
++                throw ex; // Evangelium - an abandoned region tick ends, it is not an event failure to log and skip
              } catch (AuthorNagException ex) {
                  Plugin plugin = registration.getPlugin();
  

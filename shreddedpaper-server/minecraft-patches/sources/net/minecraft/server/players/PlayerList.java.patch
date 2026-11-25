@@ -89,7 +89,7 @@
          // Paper end
  
          return serverPlayer;
-+        }, r -> ShreddedPaper.ensureSync(player, teleportTransition.newLevel(), new ChunkPos(BlockPos.containing(teleportTransition.position())), r)); // ShreddedPaper - respawn async
++        }, r -> io.multipaper.shreddedpaper.threading.TeleportPreload.ensureSyncTeleport(player, teleportTransition.newLevel(), teleportTransition.position(), new ChunkPos(BlockPos.containing(teleportTransition.position())), r)); // ShreddedPaper - respawn async // Evangelium - destination chunks loaded asynchronously first
 +        }); // ShreddedPaper - respawn async
      }
  
