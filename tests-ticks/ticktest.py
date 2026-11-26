@@ -15,7 +15,7 @@ open(f"{d}/server.properties", "w").write(f"server-port=25653\nonline-mode=false
     "max-chained-neighbor-updates=1000000\n")
 log = []
 p = subprocess.Popen(["nice", "-n", "19", "taskset", "-c", "24-31", "/opt/jdk25/bin/java", "-Xms1G", "-Xmx3G", "-XX:ActiveProcessorCount=8",
-                      f"-DbundlerRepoDir={ROOT}/cache-tt", "-Dshreddedpaper.timings=0"] + extra + ["-jar", jar, "nogui"],
+                      f"-DbundlerRepoDir={ROOT}/cache-tt", "-Devangeliumserver.timings=0"] + extra + ["-jar", jar, "nogui"],
                      cwd=d, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, errors="replace")
 threading.Thread(target=lambda: [log.append(l.rstrip()) for l in p.stdout], daemon=True).start()
 def cmd(c):

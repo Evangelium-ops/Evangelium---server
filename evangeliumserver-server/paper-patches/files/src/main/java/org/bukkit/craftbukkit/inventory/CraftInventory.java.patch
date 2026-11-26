@@ -1,0 +1,25 @@
+--- a/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
++++ b/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
+@@ -549,8 +_,22 @@
+     // Paper start - getHolder without snapshot
+     @Override
+     public InventoryHolder getHolder(boolean useSnapshot) {
++        // EvangeliumServer start - reuse the live (non-snapshot) holder while it still matches the block entity
++        if (!useSnapshot && this.inventory instanceof net.minecraft.world.level.block.entity.BlockEntity blockEntity) {
++            // protection and logging plugins ask the same event inventory for its holder several times per hopper move
++            InventoryHolder cached = this.liveHolder;
++            if (cached instanceof org.bukkit.craftbukkit.block.CraftBlockEntityState<?> state && state.snapshotDisabled
++                && state.getBlockEntity() == blockEntity && !blockEntity.isRemoved() && state.getHandle() == blockEntity.getBlockState()) {
++                return cached;
++            }
++            InventoryHolder holder = blockEntity.getOwner(false);
++            this.liveHolder = holder;
++            return holder;
++        }
++        // EvangeliumServer end - reuse the live (non-snapshot) holder while it still matches the block entity
+         return this.inventory instanceof net.minecraft.world.level.block.entity.BlockEntity blockEntity ? blockEntity.getOwner(useSnapshot) : getHolder();
+     }
++    private InventoryHolder liveHolder; // EvangeliumServer
+     // Paper end
+ 
+     @Override

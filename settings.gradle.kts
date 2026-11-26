@@ -10,7 +10,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "shreddedpaper"
+rootProject.name = "evangeliumserver"
 
-include("shreddedpaper-api")
-include("shreddedpaper-server")
+include("evangeliumserver-api")
+include("evangeliumserver-server")

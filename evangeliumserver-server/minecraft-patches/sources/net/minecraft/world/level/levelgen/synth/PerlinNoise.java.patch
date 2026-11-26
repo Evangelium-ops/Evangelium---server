@@ -1,0 +1,97 @@
+--- a/net/minecraft/world/level/levelgen/synth/PerlinNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/PerlinNoise.java
+@@ -23,6 +_,7 @@
+     private final @Nullable ImprovedNoise[] noiseLevels;
+     private final int firstOctave;
+     private final DoubleList amplitudes;
++    private final double[] amplitudeArray; // Evangelium: the same amplitudes as a plain array for the per-sample octave loops
+     private final double lowestFreqValueFactor;
+     private final double lowestFreqInputFactor;
+     private final double maxValue;
+@@ -81,6 +_,7 @@
+     protected PerlinNoise(RandomSource random, Pair<Integer, DoubleList> octavesAndAmplitudes, boolean useNewFactory) {
+         this.firstOctave = octavesAndAmplitudes.getFirst();
+         this.amplitudes = octavesAndAmplitudes.getSecond();
++        this.amplitudeArray = this.amplitudes.toDoubleArray();
+         int size = this.amplitudes.size();
+         int i = -this.firstOctave;
+         this.noiseLevels = new ImprovedNoise[size];
+@@ -151,7 +_,7 @@
+             ImprovedNoise improvedNoise = this.noiseLevels[i];
+             if (improvedNoise != null) {
+                 double d3 = improvedNoise.noise(wrap(x * d1), useFixedY ? -improvedNoise.yo : wrap(y * d1), wrap(z * d1), yScale * d1, yMax * d1);
+-                d += this.amplitudes.getDouble(i) * d3 * d2;
++                d += this.amplitudeArray[i] * d3 * d2;
+             }
+ 
+             d1 *= 2.0;
+@@ -160,6 +_,46 @@
+ 
+         return d;
+     }
++
++    // Evangelium start - column fill: out[k] = getValue(x, ys[k], z) for k in [from, to), octave by octave (each sample adds its
++    // octaves in the same order as getValue, so bit-identical); wrappedY and octave are scratch arrays of the same length
++    public void getValueColumn(double x, double z, double[] ys, int from, int to, double[] out, double[] wrappedY, double[] octave) {
++        for (int k = from; k < to; k++) {
++            out[k] = 0.0;
++        }
++
++        double d1 = this.lowestFreqInputFactor;
++        double d2 = this.lowestFreqValueFactor;
++        double maxAbsY = 0.0;
++        for (int k = from; k < to; k++) {
++            maxAbsY = Math.max(maxAbsY, Math.abs(ys[k]));
++        }
++
++        for (int i = 0; i < this.noiseLevels.length; i++) {
++            ImprovedNoise improvedNoise = this.noiseLevels[i];
++            if (improvedNoise != null) {
++                if (maxAbsY * d1 < WRAP_IDENTITY_BOUND) {
++                    for (int k = from; k < to; k++) {
++                        wrappedY[k] = ys[k] * d1; // = wrap(ys[k] * d1), see WRAP_IDENTITY_BOUND
++                    }
++                } else {
++                    for (int k = from; k < to; k++) {
++                        wrappedY[k] = wrap(ys[k] * d1);
++                    }
++                }
++
++                improvedNoise.noiseColumn(wrap(x * d1), wrap(z * d1), wrappedY, 0.0 * d1, null, from, to, octave);
++                double amplitude = this.amplitudeArray[i];
++                for (int k = from; k < to; k++) {
++                    out[k] += amplitude * octave[k] * d2;
++                }
++            }
++
++            d1 *= 2.0;
++            d2 /= 2.0;
++        }
++    }
++    // Evangelium end
+ 
+     public double maxBrokenValue(double yMultiplier) {
+         return this.edgeValue(yMultiplier + 2.0);
+@@ -172,7 +_,7 @@
+         for (int i = 0; i < this.noiseLevels.length; i++) {
+             ImprovedNoise improvedNoise = this.noiseLevels[i];
+             if (improvedNoise != null) {
+-                d += this.amplitudes.getDouble(i) * multiplier * d1;
++                d += this.amplitudeArray[i] * multiplier * d1;
+             }
+ 
+             d1 /= 2.0;
+@@ -184,6 +_,13 @@
+     public @Nullable ImprovedNoise getOctaveNoise(int octave) {
+         return this.noiseLevels[this.noiseLevels.length - 1 - octave];
+     }
++
++    /**
++     * Evangelium - column fill: for |value| < 2^24, value / 2^25 + 0.5 is in [0, 1), lfloor gives 0 and wrap returns value - 0.0, which
++     * is value itself (also for -0.0): wrap can be skipped for every sample of a column whose largest |value| is below this bound
++     * (rounding is monotonic, so |ys[k] * f| <= |max * f|)
++     */
++    public static final double WRAP_IDENTITY_BOUND = 1.6777216E7;
+ 
+     public static double wrap(double value) {
+         return value - Mth.lfloor(value / 3.3554432E7 + 0.5) * 3.3554432E7;

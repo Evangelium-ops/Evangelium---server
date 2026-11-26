@@ -1,0 +1,30 @@
+--- a/net/minecraft/core/dispenser/DispenseItemBehavior.java
++++ b/net/minecraft/core/dispenser/DispenseItemBehavior.java
+@@ -407,20 +_,20 @@
+                     return result;
+                 }
+                 // Paper end - Call BlockDispenseEvent
+-                level.captureTreeGeneration = true; // CraftBukkit
++                level.captureTreeGenerationThreadLocal.set(true); // CraftBukkit // EvangeliumServer - use thread local
+                 if (!BoneMealItem.growCrop(item, level, blockPos) && !BoneMealItem.growWaterPlant(item, level, blockPos, null)) {
+                     this.setSuccess(false);
+                 } else if (!level.isClientSide()) {
+                     level.levelEvent(LevelEvent.PARTICLES_AND_SOUND_PLANT_GROWTH, blockPos, 15);
+                 }
+                 // CraftBukkit start
+-                level.captureTreeGeneration = false;
+-                if (!level.capturedBlockStates.isEmpty()) {
+-                    org.bukkit.TreeType treeType = net.minecraft.world.level.block.SaplingBlock.treeType;
+-                    net.minecraft.world.level.block.SaplingBlock.treeType = null;
++                level.captureTreeGenerationThreadLocal.set(false); // EvangeliumServer - use thread local
++                if (!level.capturedBlockStatesThreadLocal.get().isEmpty()) { // EvangeliumServer - use thread local
++                    org.bukkit.TreeType treeType = net.minecraft.world.level.block.SaplingBlock.treeTypeThreadLocal.get(); // EvangeliumServer - use thread local
++                    net.minecraft.world.level.block.SaplingBlock.treeTypeThreadLocal.remove(); // EvangeliumServer - use thread local
+                     org.bukkit.Location location = org.bukkit.craftbukkit.util.CraftLocation.toBukkit(blockPos, level);
+-                    List<org.bukkit.block.BlockState> states = new java.util.ArrayList<>(level.capturedBlockStates.values());
+-                    level.capturedBlockStates.clear();
++                    List<org.bukkit.block.BlockState> states = new java.util.ArrayList<>(level.capturedBlockStatesThreadLocal.get().values()); // EvangeliumServer - use thread local
++                    level.capturedBlockStatesThreadLocal.get().clear(); // EvangeliumServer - use thread local
+                     org.bukkit.event.world.StructureGrowEvent structureEvent = null;
+                     if (treeType != null) {
+                         structureEvent = new org.bukkit.event.world.StructureGrowEvent(location, treeType, false, null, states);

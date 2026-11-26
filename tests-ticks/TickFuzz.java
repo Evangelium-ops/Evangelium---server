@@ -1,7 +1,7 @@
-import io.multipaper.shreddedpaper.ticks.LegacyChunkTicks;
-import io.multipaper.shreddedpaper.ticks.LegacyLevelTicks;
-import io.multipaper.shreddedpaper.ticks.PackedTickList;
-import io.multipaper.shreddedpaper.ticks.PackedTicks;
+import io.evangelium.server.ticks.LegacyChunkTicks;
+import io.evangelium.server.ticks.LegacyLevelTicks;
+import io.evangelium.server.ticks.PackedTickList;
+import io.evangelium.server.ticks.PackedTicks;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -310,7 +310,7 @@ public class TickFuzz {
         List<SavedTick<net.minecraft.world.level.block.Block>> packed = c.pack(0);
         if (!(packed instanceof PackedTickList)) fail("not packed");
         net.minecraft.nbt.CompoundTag fast = new net.minecraft.nbt.CompoundTag();
-        if (!io.multipaper.shreddedpaper.ticks.PackedTickIO.write(fast, "block_ticks", reg, packed)) fail("fast write refused");
+        if (!io.evangelium.server.ticks.PackedTickIO.write(fast, "block_ticks", reg, packed)) fail("fast write refused");
         net.minecraft.nbt.CompoundTag slow = new net.minecraft.nbt.CompoundTag();
         slow.store("block_ticks", codec, ticks);
         if (!fast.equals(slow)) fail("io write tag differs seed " + seed);
@@ -332,7 +332,7 @@ public class TickFuzz {
             ((net.minecraft.nbt.CompoundTag) list.get(r.nextInt(list.size()))).putInt("p", 9);
         }
         ChunkPos cp = new ChunkPos(cx, cz);
-        List<SavedTick<net.minecraft.world.level.block.Block>> f = io.multipaper.shreddedpaper.ticks.PackedTickIO.read(slow, "block_ticks", reg, cp);
+        List<SavedTick<net.minecraft.world.level.block.Block>> f = io.evangelium.server.ticks.PackedTickIO.read(slow, "block_ticks", reg, cp);
         List<SavedTick<net.minecraft.world.level.block.Block>> v = SavedTick.filterTickListForChunk(slow.readQuiet("block_ticks", codec).orElse(List.of()), cp);
         if (f == null) {
             if (mode != 2 && mode != 3) fail("fast read refused clean input seed " + seed + " mode " + mode);
@@ -362,10 +362,10 @@ public class TickFuzz {
     }
 
     static void bootstrap() {
-        try { // ShreddedPaper's config is read in static init of some registries
-            java.lang.reflect.Method m = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.class.getDeclaredMethod("set", io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.class);
+        try { // EvangeliumServer's config is read in static init of some registries
+            java.lang.reflect.Method m = io.evangelium.server.config.EvangeliumServerConfiguration.class.getDeclaredMethod("set", io.evangelium.server.config.EvangeliumServerConfiguration.class);
             m.setAccessible(true);
-            java.lang.reflect.Constructor<?> c = io.multipaper.shreddedpaper.config.ShreddedPaperConfiguration.class.getDeclaredConstructor();
+            java.lang.reflect.Constructor<?> c = io.evangelium.server.config.EvangeliumServerConfiguration.class.getDeclaredConstructor();
             c.setAccessible(true);
             Object cfg = c.newInstance();
             fill(cfg);

@@ -1,0 +1,187 @@
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -6,6 +_,8 @@
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.shorts.ShortList;
++
++import java.lang.ref.Reference;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+@@ -22,6 +_,7 @@
+ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.network.FriendlyByteBuf;
+ import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
++import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+ import net.minecraft.server.level.FullChunkStatus;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.util.ProblemReporter;
+@@ -64,6 +_,7 @@
+ import org.slf4j.Logger;
+ 
+ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemLevelChunk, ca.spottedleaf.moonrise.patches.starlight.chunk.StarlightChunk, ca.spottedleaf.moonrise.patches.getblock.GetBlockChunk { // Paper - rewrite chunk system // Paper - get block chunk optimisation
++    public io.evangelium.server.spawn.SpawnSkip.@org.jspecify.annotations.Nullable Hood evangelium$spawnHood; // Evangelium - natural spawn skip: summary of the 5x5 chunks around (written and read by the chunk's region thread)
+     static final Logger LOGGER = LogUtils.getLogger();
+     private static final TickingBlockEntity NULL_TICKER = new TickingBlockEntity() {
+         @Override
+@@ -85,7 +_,7 @@
+             return "<null>";
+         }
+     };
+-    private final Map<BlockPos, LevelChunk.RebindableTickingBlockEntityWrapper> tickersInLevel = Maps.newHashMap();
++    private final Map<BlockPos, LevelChunk.RebindableTickingBlockEntityWrapper> tickersInLevel = Maps.newConcurrentMap(); // EvangeliumServer - use concurrent map
+     public boolean loaded;
+     public final ServerLevel level; // CraftBukkit - type
+     private @Nullable Supplier<FullChunkStatus> fullStatus;
+@@ -93,6 +_,8 @@
+     private final Int2ObjectMap<GameEventListenerRegistry> gameEventListenerRegistrySections;
+     private final LevelChunkTicks<Block> blockTicks;
+     private final LevelChunkTicks<Fluid> fluidTicks;
++    public @Nullable Reference<ClientboundLevelChunkWithLightPacket> cachedChunkPacket; // EvangeliumServer
++    public long cachedChunkPacketLastAccessed; // EvangeliumServer
+     private LevelChunk.UnsavedListener unsavedListener = chunkPos -> {};
+     // CraftBukkit start
+     public boolean mustNotSave;
+@@ -236,6 +_,38 @@
+         return this.level.paperConfig().chunks.fixedChunkInhabitedTime < 0 ? super.getInhabitedTime() : this.level.paperConfig().chunks.fixedChunkInhabitedTime;
+     }
+     // Paper end
++    // EvangeliumServer start - skip unchanged chunk saves
++    private static final boolean SKIP_UNCHANGED_SAVES = io.evangelium.server.util.DevSwitch.on("skip-unchanged-chunk-saves");
++    // inhabited time does not mark a chunk unsaved (vanilla); an unchanged chunk is still written at unload once it gained this much
++    private static final long UNLOAD_SAVE_INHABITED_TICKS = 1200L;
++    public volatile long savedInhabitedTime = Long.MIN_VALUE / 2;
++
++    public static boolean skipUnchangedChunkSaves() {
++        return SKIP_UNCHANGED_SAVES && io.evangelium.server.config.EvangeliumServerConfiguration.get() != null;
++    }
++
++    // EvangeliumServer start - light edge versions
++    private static final boolean LIGHT_EDGE_VERSIONS = io.evangelium.server.util.DevSwitch.on("light-edge-versions");
++
++    public static boolean lightEdgeVersions() {
++        return LIGHT_EDGE_VERSIONS && io.evangelium.server.config.EvangeliumServerConfiguration.get() != null;
++    }
++    // EvangeliumServer end - light edge versions
++
++    // a chunk read from disk with nothing to upgrade or fix starts out saved: what is on disk is exactly what was loaded
++    public void markLoadedUnchanged() {
++        this.onSaved();
++        this.tryMarkSaved();
++    }
++
++    public void onSaved() {
++        this.savedInhabitedTime = super.getInhabitedTime();
++    }
++
++    public boolean needsUnloadSave() {
++        return super.getInhabitedTime() - this.savedInhabitedTime >= UNLOAD_SAVE_INHABITED_TICKS;
++    }
++    // EvangeliumServer end - skip unchanged chunk saves
+ 
+     @Override
+     public void markUnsaved() {
+@@ -375,9 +_,14 @@
+             int i1 = y & 15;
+             int i2 = pos.getZ() & 15;
+             BlockState blockState = section.setBlockState(i, i1, i2, state);
++            if (section.evangelium$waterLayers != -1 && (section.evangelium$waterLayers & (1 << i1)) == 0 && state.getFluidState().is(net.minecraft.tags.FluidTags.WATER)) { // Evangelium - natural spawn skip: first water in a scanned layer
++                section.evangelium$waterLayers |= 1 << i1;
++                io.evangelium.server.spawn.SpawnSkip.WET_EPOCH.incrementAndGet();
++            }
+             if (blockState == state) {
+                 return null;
+             } else {
++                net.minecraft.world.entity.PhysicsCache.blockChanged(); // Evangelium - a block changed: this thread's movement caches start over
+                 Block block = state.getBlock();
+                 this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING).update(i, y, i2, state);
+                 this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES).update(i, y, i2, state);
+@@ -385,7 +_,7 @@
+                 this.heightmaps.get(Heightmap.Types.WORLD_SURFACE).update(i, y, i2, state);
+                 boolean hasOnlyAir1 = section.hasOnlyAir();
+                 if (hasOnlyAir != hasOnlyAir1) {
+-                    this.level.getChunkSource().getLightEngine().updateSectionStatus(pos, hasOnlyAir1);
++                    this.level.getChunkSource().getLightEngine().updateSectionStatus(pos, hasOnlyAir1); this.evangeliumserver$lightEdges().bump(); // EvangeliumServer - light edge versions
+                     this.level.getChunkSource().onSectionEmptinessChanged(this.chunkPos.x, SectionPos.blockToSectionCoord(y), this.chunkPos.z, hasOnlyAir1);
+                 }
+ 
+@@ -394,7 +_,7 @@
+                     profilerFiller.push("updateSkyLightSources");
+                     // Paper - rewrite chunk system
+                     profilerFiller.popPush("queueCheckLight");
+-                    this.level.getChunkSource().getLightEngine().checkBlock(pos);
++                    this.level.getChunkSource().getLightEngine().checkBlock(pos); this.evangeliumserver$lightEdges().bump(); // EvangeliumServer - light edge versions
+                     profilerFiller.pop();
+                 }
+ 
+@@ -421,7 +_,7 @@
+                 if (!section.getBlockState(i, i1, i2).is(block)) {
+                     return null;
+                 } else {
+-                    if (!this.level.isClientSide() && (flags & Block.UPDATE_SKIP_ON_PLACE) == 0 && (!this.level.captureBlockStates || block instanceof net.minecraft.world.level.block.BaseEntityBlock)) { // CraftBukkit - Don't place while processing the BlockPlaceEvent, unless it's a BlockContainer. Prevents blocks such as TNT from activating when cancelled.
++                    if (!this.level.isClientSide() && (flags & Block.UPDATE_SKIP_ON_PLACE) == 0 && (!this.level.captureBlockStatesThreadLocal.get() || block instanceof net.minecraft.world.level.block.BaseEntityBlock)) { // CraftBukkit - Don't place while processing the BlockPlaceEvent, unless it's a BlockContainer. Prevents blocks such as TNT from activating when cancelled. // EvangeliumServer - use thread local
+                         state.onPlace(this.level, pos, blockState, flag1);
+                     }
+ 
+@@ -473,7 +_,7 @@
+ 
+     public @Nullable BlockEntity getBlockEntity(BlockPos pos, LevelChunk.EntityCreationType creationType) {
+         // CraftBukkit start
+-        BlockEntity blockEntity = this.level.capturedTileEntities.get(pos);
++        BlockEntity blockEntity = this.level.capturedTileEntitiesThreadLocal.get().get(pos); // EvangeliumServer - use thread local
+         if (blockEntity == null) {
+             blockEntity = this.blockEntities.get(pos);
+         }
+@@ -661,13 +_,13 @@
+ 
+                 org.bukkit.World world = this.level.getWorld();
+                 if (world != null) {
+-                    this.level.populating = true;
++                    this.level.populatingThreadLocal.set(true); // EvangeliumServer - thread local for populating
+                     try {
+                         for (org.bukkit.generator.BlockPopulator populator : world.getPopulators()) {
+                             populator.populate(world, random, bukkitChunk);
+                         }
+                     } finally {
+-                        this.level.populating = false;
++                        this.level.populatingThreadLocal.remove(); // EvangeliumServer - thread local for populating
+                     }
+                 }
+                 server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
+@@ -970,6 +_,11 @@
+ 
+                         profilerFiller.pop();
+                     } catch (Throwable var5) {
++                        // Evangelium start - an abandoned region tick ends here: the block entity is not removed
++                        if (var5 instanceof io.evangelium.server.threading.RegionTickAbandonedError abandoned) throw abandoned;
++                        if (var5 instanceof io.evangelium.server.threading.IntraRegion.SyncLoadInPhaseException skipped) throw skipped; // Evangelium - the parallel-phase item is skipped, the block entity stays
++                        if (io.evangelium.server.threading.OnDemandRegionAccess.isTickAbandoned()) throw new io.evangelium.server.threading.RegionTickAbandonedError("[compat] region tick abandoned by RegionGuard: " + var5);
++                        // Evangelium end
+                         // Paper start - Prevent block entity and entity crashes
+                         final String msg = String.format("BlockEntity threw exception at %s:%s,%s,%s", LevelChunk.this.getLevel().getWorld().getName(), this.getPos().getX(), this.getPos().getY(), this.getPos().getZ());
+                         net.minecraft.server.MinecraftServer.LOGGER.error(msg, var5);
+@@ -997,6 +_,11 @@
+         }
+ 
+         @Override
++        public BlockEntityType<?> evangeliumBlockEntityType() { // Evangelium
++            return this.blockEntity.getType();
++        }
++
++        @Override
+         public String toString() {
+             return "Level ticker for " + this.getType() + "@" + this.getPos();
+         }
+@@ -1042,6 +_,11 @@
+         @Override
+         public String getType() {
+             return this.ticker.getType();
++        }
++
++        @Override
++        public BlockEntityType<?> evangeliumBlockEntityType() { // Evangelium
++            return this.ticker.evangeliumBlockEntityType();
+         }
+ 
+         @Override

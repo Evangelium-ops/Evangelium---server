@@ -1,0 +1,29 @@
+--- a/io/papermc/paper/util/KeepAlive.java
++++ b/io/papermc/paper/util/KeepAlive.java
+@@ -3,6 +_,26 @@
+ public class KeepAlive {
+ 
+     public long lastKeepAliveTx = System.nanoTime();
++
++    // Evangelium start - -Devangeliumserver.keepAliveDebug: per connection history of keepalives, printed when a player is kicked for a timeout
++    public static final boolean DEBUG = Boolean.getBoolean("evangeliumserver.keepAliveDebug");
++    private final java.util.ArrayDeque<String> history = DEBUG ? new java.util.ArrayDeque<>() : null;
++
++    public void note(String what) {
++        if (this.history == null) return;
++        synchronized (this.history) {
++            if (this.history.size() >= 48) this.history.poll();
++            this.history.add(System.currentTimeMillis() + " [" + Thread.currentThread().getName() + "] " + what);
++        }
++    }
++
++    public String history() {
++        if (this.history == null) return "";
++        synchronized (this.history) {
++            return String.join("\n  ", this.history);
++        }
++    }
++    // Evangelium end
+     public static final record KeepAliveResponse(long txTimeNS, long rxTimeNS) {
+         public long latencyNS() {
+             return this.rxTimeNS - this.txTimeNS;

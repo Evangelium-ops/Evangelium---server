@@ -1,0 +1,20 @@
+--- a/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/StarLightInterface.java
+@@ -929,7 +_,16 @@
+             public void run() {
+                 ((ServerLightQueue)this.queue).chunkTasks.remove(this.chunkCoordinate, this);
+ 
+-                this.runTasks();
++                if (!io.evangelium.server.util.GenStats.ENABLED) {
++                    this.runTasks();
++                    return;
++                }
++                final long start = io.evangelium.server.util.GenStats.begin(12); // Evangelium - generation counters
++                try {
++                    this.runTasks();
++                } finally {
++                    io.evangelium.server.util.GenStats.end(12, start);
++                }
+             }
+         }
+     }

@@ -1,0 +1,46 @@
+--- a/ca/spottedleaf/moonrise/patches/starlight/light/SWMRNibbleArray.java
++++ b/ca/spottedleaf/moonrise/patches/starlight/light/SWMRNibbleArray.java
+@@ -52,6 +_,14 @@
+         }
+     }
+ 
++    // EvangeliumServer start - report a change only when the visible light really changed
++    private static final boolean SKIP_UNCHANGED_LIGHT = io.evangelium.server.util.DevSwitch.on("skip-unchanged-light-updates");
++
++    public static boolean onlyReportRealChanges() {
++        return SKIP_UNCHANGED_LIGHT && io.evangelium.server.config.EvangeliumServerConfiguration.get() != null;
++    }
++    // EvangeliumServer end - report a change only when the visible light really changed
++
+     private int stateUpdating;
+     private volatile int stateVisible;
+ 
+@@ -331,10 +_,19 @@
+             return false;
+         }
+ 
++        // EvangeliumServer start - report a change only when the visible light really changed
++        boolean changed = true;
++        // EvangeliumServer end - report a change only when the visible light really changed
+         synchronized (this) {
+             if (this.stateUpdating == INIT_STATE_NULL || this.stateUpdating == INIT_STATE_UNINIT) {
+                 this.storageVisible = null;
+             } else {
++                // EvangeliumServer start - re-initialised or re-propagated nibbles often end up with the same bytes; then nothing visible changed
++                if (onlyReportRealChanges() && this.stateUpdating == this.stateVisible && this.storageVisible != null
++                    && (this.storageUpdating == this.storageVisible || Arrays.equals(this.storageUpdating, this.storageVisible))) {
++                    changed = false;
++                }
++                // EvangeliumServer end - re-initialised or re-propagated nibbles often end up with the same bytes; then nothing visible changed
+                 if (this.storageVisible == null) {
+                     this.storageVisible = this.storageUpdating.clone();
+                 } else {
+@@ -352,7 +_,7 @@
+             this.stateVisible = this.stateUpdating;
+         }
+ 
+-        return true;
++        return changed; // EvangeliumServer - report a change only when the visible light really changed
+     }
+ 
+     // operation type: visible

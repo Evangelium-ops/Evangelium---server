@@ -1,0 +1,48 @@
+--- a/net/minecraft/server/network/PlayerChunkSender.java
++++ b/net/minecraft/server/network/PlayerChunkSender.java
+@@ -2,8 +_,13 @@
+ 
+ import com.google.common.collect.Comparators;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.config.EvangeliumServerConfiguration;
+ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.LongSet;
++
++import java.lang.ref.Reference;
++import java.lang.ref.SoftReference;
++import java.lang.ref.WeakReference;
+ import java.util.Comparator;
+ import java.util.List;
+ import java.util.Objects;
+@@ -22,6 +_,7 @@
+ 
+ public class PlayerChunkSender {
+     private static final Logger LOGGER = LogUtils.getLogger();
++    private static final boolean CHUNK_PACKET_CACHING = io.evangelium.server.util.DevSwitch.on("chunk-packet-caching"); // EvangeliumServer
+     public static final float MIN_CHUNKS_PER_TICK = 0.01F;
+     public static final float MAX_CHUNKS_PER_TICK = 64.0F;
+     private static final float START_CHUNKS_PER_TICK = 9.0F;
+@@ -81,7 +_,22 @@
+     public static void sendChunk(ServerGamePacketListenerImpl packetListener, ServerLevel level, LevelChunk chunk) { // Paper - rewrite chunk system - public
+         // Paper start - Anti-Xray
+         final boolean shouldModify = level.chunkPacketBlockController.shouldModify(packetListener.player, chunk);
+-        packetListener.send(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify));
++        // EvangeliumServer start - Cache chunk packet
++        Reference<ClientboundLevelChunkWithLightPacket> cachedChunkPacket = chunk.cachedChunkPacket;
++        ClientboundLevelChunkWithLightPacket chunkPacket;
++        if (cachedChunkPacket == null || (chunkPacket = cachedChunkPacket.get()) == null || chunkPacket.modifyBlocks != shouldModify) {
++            final long buildStart = io.evangelium.server.util.ChunkPacketCacheStats.ON ? System.nanoTime() : 0L; // Evangelium - cache counters
++            chunkPacket = new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify);
++            if (io.evangelium.server.util.ChunkPacketCacheStats.ON) { // Evangelium start - cache counters
++                io.evangelium.server.util.ChunkPacketCacheStats.BUILD_NANOS.add(System.nanoTime() - buildStart);
++                ClientboundLevelChunkWithLightPacket was = cachedChunkPacket == null ? null : cachedChunkPacket.get();
++                (cachedChunkPacket == null ? io.evangelium.server.util.ChunkPacketCacheStats.MISS_EMPTY : was == null ? io.evangelium.server.util.ChunkPacketCacheStats.MISS_CLEARED : io.evangelium.server.util.ChunkPacketCacheStats.MISS_MODIFY).increment();
++            } // Evangelium end - cache counters
++            if (CHUNK_PACKET_CACHING) chunk.cachedChunkPacket = EvangeliumServerConfiguration.get().optimizations.chunkPacketCaching.useSoftReferences ? new SoftReference<>(chunkPacket) : new WeakReference<>(chunkPacket);
++        } else if (io.evangelium.server.util.ChunkPacketCacheStats.ON) io.evangelium.server.util.ChunkPacketCacheStats.hit(level.getGameTime() - chunk.cachedChunkPacketLastAccessed); // Evangelium - cache counters
++        chunk.cachedChunkPacketLastAccessed = level.getGameTime();
++        packetListener.send(chunkPacket);
++        // EvangeliumServer end - Cache chunk packet
+         // Paper end - Anti-Xray
+         // Paper start - PlayerChunkLoadEvent
+         if (io.papermc.paper.event.packet.PlayerChunkLoadEvent.getHandlerList().getRegisteredListeners().length > 0) {

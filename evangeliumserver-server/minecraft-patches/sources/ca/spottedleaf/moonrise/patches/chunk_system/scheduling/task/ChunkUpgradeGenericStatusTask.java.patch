@@ -1,0 +1,42 @@
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkUpgradeGenericStatusTask.java
+@@ -69,6 +_,20 @@
+ 
+     @Override
+     public void run() {
++        if (!io.evangelium.server.util.GenStats.ENABLED) {
++            this.run0();
++            return;
++        }
++        if (this.countedWaiting) io.evangelium.server.util.GenStats.dec(13);
++        final long start = io.evangelium.server.util.GenStats.begin(this.toStatus.getIndex()); // Evangelium - generation counters
++        try {
++            this.run0();
++        } finally {
++            io.evangelium.server.util.GenStats.end(this.toStatus.getIndex(), start);
++        }
++    }
++
++    private void run0() {
+         final ChunkAccess chunk = this.fromChunk;
+ 
+         final ServerChunkCache serverChunkCache = this.world.getChunkSource();
+@@ -157,6 +_,7 @@
+     }
+ 
+     private volatile boolean scheduled;
++    private volatile boolean countedWaiting; // Evangelium - generation counters
+     private static final VarHandle SCHEDULED_HANDLE = ConcurrentUtil.getVarHandle(ChunkUpgradeGenericStatusTask.class, "scheduled", boolean.class);
+ 
+     @Override
+@@ -174,6 +_,10 @@
+                 this.run();
+             }
+         } else {
++            if (io.evangelium.server.util.GenStats.ENABLED && this.toStatus == ChunkStatus.FEATURES) { // Evangelium - generation counters
++                this.countedWaiting = true;
++                io.evangelium.server.util.GenStats.inc(13);
++            }
+             this.generateTask.queue();
+         }
+     }

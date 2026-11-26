@@ -1,0 +1,124 @@
+--- a/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
+@@ -7,6 +_,7 @@
+ public final class ImprovedNoise {
+     private static final float SHIFT_UP_EPSILON = 1.0E-7F;
+     private final byte[] p;
++    private final int[] perm = new int[256]; // Evangelium: p as ints, so a lookup needs no & 0xFF (same values)
+     public final double xo;
+     public final double yo;
+     public final double zo;
+@@ -27,6 +_,10 @@
+             this.p[i] = this.p[i + randomInt];
+             this.p[i + randomInt] = b;
+         }
++
++        for (int i = 0; i < 256; i++) {
++            this.perm[i] = this.p[i] & 0xFF;
++        }
+     }
+ 
+     public double noise(double x, double y, double z) {
+@@ -74,12 +_,23 @@
+         return this.sampleWithDerivative(floor, floor1, floor2, d3, d4, d5, values);
+     }
+ 
++    // Evangelium: the gradient table as three flat arrays; same products and sums in the same order (strict IEEE): bit-identical
++    private static final double[] GRAD_X = new double[16], GRAD_Y = new double[16], GRAD_Z = new double[16];
++    static {
++        for (int i = 0; i < 16; i++) {
++            GRAD_X[i] = SimplexNoise.GRADIENT[i][0];
++            GRAD_Y[i] = SimplexNoise.GRADIENT[i][1];
++            GRAD_Z[i] = SimplexNoise.GRADIENT[i][2];
++        }
++    }
++
+     private static double gradDot(int gradIndex, double xFactor, double yFactor, double zFactor) {
+-        return SimplexNoise.dot(SimplexNoise.GRADIENT[gradIndex & 15], xFactor, yFactor, zFactor);
++        int i = gradIndex & 15;
++        return GRAD_X[i] * xFactor + GRAD_Y[i] * yFactor + GRAD_Z[i] * zFactor;
+     }
+ 
+     private int p(int index) {
+-        return this.p[index & 0xFF] & 0xFF;
++        return this.perm[index & 0xFF];
+     }
+ 
+     private double sampleAndLerp(int gridX, int gridY, int gridZ, double deltaX, double weirdDeltaY, double deltaZ, double deltaY) {
+@@ -102,6 +_,76 @@
+         double d10 = Mth.smoothstep(deltaZ);
+         return Mth.lerp3(d8, d9, d10, d, d1, d2, d3, d4, d5, d6, d7);
+     }
++
++    // Evangelium start - column fill: out[k] = noise(x, ys[k], z, yScale, yMaxs[k]) for k in [from, to). x and z are the same for every
++    // sample, so their part (floor, fraction, fade, p[X], p[X + 1], the x and z gradient products) is computed once, and the 8 gradient
++    // indices are reused while floor(y) stays the same. Same expressions as noise() + sampleAndLerp(): every value is bit-identical.
++    public void noiseColumn(double x, double z, double[] ys, double yScale, double @org.jspecify.annotations.Nullable [] yMaxs, int from, int to, double[] out) {
++        double d = x + this.xo;
++        double d2 = z + this.zo;
++        int floor = Mth.floor(d);
++        int floor2 = Mth.floor(d2);
++        double d3 = d - floor;
++        double d5 = d2 - floor2;
++        double d3m = d3 - 1.0;
++        double d5m = d5 - 1.0;
++        int i = this.p(floor);
++        int i1 = this.p(floor + 1);
++        double d8 = Mth.smoothstep(d3);
++        double d10 = Mth.smoothstep(d5);
++        double[] gx = GRAD_X, gy = GRAD_Y, gz = GRAD_Z;
++        int lastFloor1 = 0;
++        double x0 = 0, x1 = 0, x2 = 0, x3 = 0, x4 = 0, x5 = 0, x6 = 0, x7 = 0;
++        double y0 = 0, y1 = 0, y2 = 0, y3 = 0, y4 = 0, y5 = 0, y6 = 0, y7 = 0;
++        double z0 = 0, z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0, z6 = 0, z7 = 0;
++        for (int k = from; k < to; k++) {
++            double d1 = ys[k] + this.yo;
++            int floor1 = Mth.floor(d1);
++            double d4 = d1 - floor1;
++            double d7;
++            if (yScale != 0.0) {
++                double yMax = yMaxs[k];
++                double d6;
++                if (yMax >= 0.0 && yMax < d4) {
++                    d6 = yMax;
++                } else {
++                    d6 = d4;
++                }
++
++                d7 = Mth.floor(d6 / yScale + 1.0E-7F) * yScale;
++            } else {
++                d7 = 0.0;
++            }
++
++            if (k == from || floor1 != lastFloor1) {
++                lastFloor1 = floor1;
++                int i2 = this.p(i + floor1);
++                int i3 = this.p(i + floor1 + 1);
++                int i4 = this.p(i1 + floor1);
++                int i5 = this.p(i1 + floor1 + 1);
++                int g0 = this.p(i2 + floor2) & 15, g1 = this.p(i4 + floor2) & 15, g2 = this.p(i3 + floor2) & 15, g3 = this.p(i5 + floor2) & 15;
++                int g4 = this.p(i2 + floor2 + 1) & 15, g5 = this.p(i4 + floor2 + 1) & 15, g6 = this.p(i3 + floor2 + 1) & 15, g7 = this.p(i5 + floor2 + 1) & 15;
++                x0 = gx[g0] * d3; y0 = gy[g0]; z0 = gz[g0] * d5;
++                x1 = gx[g1] * d3m; y1 = gy[g1]; z1 = gz[g1] * d5;
++                x2 = gx[g2] * d3; y2 = gy[g2]; z2 = gz[g2] * d5;
++                x3 = gx[g3] * d3m; y3 = gy[g3]; z3 = gz[g3] * d5;
++                x4 = gx[g4] * d3; y4 = gy[g4]; z4 = gz[g4] * d5m;
++                x5 = gx[g5] * d3m; y5 = gy[g5]; z5 = gz[g5] * d5m;
++                x6 = gx[g6] * d3; y6 = gy[g6]; z6 = gz[g6] * d5m;
++                x7 = gx[g7] * d3m; y7 = gy[g7]; z7 = gz[g7] * d5m;
++            }
++
++            double w = d4 - d7;
++            double wm = w - 1.0;
++            // gradDot(g, xf, yf, zf) = GRAD_X[g] * xf + GRAD_Y[g] * yf + GRAD_Z[g] * zf, evaluated left to right
++            out[k] = Mth.lerp3(
++                d8, Mth.smoothstep(d4), d10,
++                x0 + y0 * w + z0, x1 + y1 * w + z1, x2 + y2 * wm + z2, x3 + y3 * wm + z3,
++                x4 + y4 * w + z4, x5 + y5 * w + z5, x6 + y6 * wm + z6, x7 + y7 * wm + z7
++            );
++        }
++    }
++    // Evangelium end
+ 
+     private double sampleWithDerivative(int gridX, int gridY, int gridZ, double deltaX, double deltaY, double deltaZ, double[] noiseValues) {
+         int i = this.p(gridX);

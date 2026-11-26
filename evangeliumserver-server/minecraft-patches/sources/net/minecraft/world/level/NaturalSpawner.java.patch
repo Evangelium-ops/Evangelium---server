@@ -1,0 +1,351 @@
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -53,6 +_,37 @@
+ import org.slf4j.Logger;
+ 
+ public final class NaturalSpawner {
++    // Evangelium - near-first natural spawning without a serial walk. Paper (per-player mob spawns) tries a player's chunks nearest first, so
++    // when the monster cap is almost full the last free room goes to the chunks next to him (an AFK farm) and far chunks only get what the
++    // near ones left. Regions here spawn in parallel, so far chunks raced the near ones (a nether roof gold farm next to the player got about
++    // 40% fewer mobs). Emulated statistically: only when the room left (cap - count, the smallest over the players in range) is at most one
++    // pack, a chunk at Chebyshev chunk distance d > 2 from the nearest player in range tries with probability R^(d-2) (R fitted against
++    // Paper's spawn rates per distance ring, corner and centre of a region). With clear room nothing changes, so totals stay vanilla.
++    private static final boolean EVANGELIUM_NEAR_FIRST = io.evangelium.server.util.DevSwitch.on("spawn-distance-gate");
++    private static final double EVANGELIUM_GATE_R = Double.parseDouble(System.getProperty("evangeliumserver.spawnGateR", "0.75")); // hidden benchmark hook
++    private static final int EVANGELIUM_GATE_PACK = Integer.getInteger("evangeliumserver.spawnGatePack", 4); // the usual largest monster pack; hidden benchmark hook
++
++    private static boolean evangeliumGatePasses(ServerLevel level, SpawnState state, MobCategory category, int room, ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange, ChunkPos pos) {
++        if (!EVANGELIUM_NEAR_FIRST || category != MobCategory.MONSTER || room > EVANGELIUM_GATE_PACK || inRange == null) {
++            return true;
++        }
++        int band = Integer.MAX_VALUE;
++        final long[] chunks = state.evangeliumPlayerChunks(level);
++        if (chunks.length < inRange.size()) { // a crowd: each chunk players stand in once
++            for (int k = 0; k < chunks.length && band > 2; k++) {
++                band = Math.min(band, Math.max(Math.abs(ChunkPos.getX(chunks[k]) - pos.x), Math.abs(ChunkPos.getZ(chunks[k]) - pos.z)));
++            }
++        } else {
++            final net.minecraft.server.level.ServerPlayer[] raw = inRange.getRawDataUnchecked();
++            for (int k = 0, len = Math.min(inRange.size(), raw.length); k < len && band > 2; k++) {
++                final net.minecraft.server.level.ServerPlayer player = raw[k];
++                if (player == null) continue;
++                final ChunkPos at = player.chunkPosition();
++                band = Math.min(band, Math.max(Math.abs(at.x - pos.x), Math.abs(at.z - pos.z)));
++            }
++        }
++        return band <= 2 || java.util.concurrent.ThreadLocalRandom.current().nextDouble() < Math.pow(EVANGELIUM_GATE_R, Math.min(band, 8) - 2);
++    }
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final int MIN_SPAWN_DISTANCE = 24;
+     public static final int SPAWN_DISTANCE_CHUNK = 8;
+@@ -79,6 +_,9 @@
+         // Paper end - Optional per player mob spawns
+         PotentialCalculator potentialCalculator = new PotentialCalculator();
+         Object2IntOpenHashMap<MobCategory> map = new Object2IntOpenHashMap<>();
++        // Evangelium - every category is in the map from the start: region threads later only change values in afterSpawn (addTo on an
++        // existing key), never insert a key, so the map is never rehashed while other region threads read it
++        for (MobCategory category : MobCategory.values()) map.put(category, 0);
+ 
+         for (Entity entity : entities) {
+             if (!(entity instanceof Mob mob && (mob.isPersistenceRequired() || mob.requiresCustomPersistence()))) {
+@@ -116,6 +_,86 @@
+         return new NaturalSpawner.SpawnState(spawnableChunkCount, map, potentialCalculator, calculator);
+     }
+ 
++    // Evangelium start - the spawn-state count (every entity of the world, every spawn tick, on the level thread before the regions can
++    // start) split into shares counted by the tick threads together. Same result: counts are summed, charges are added in the original
++    // entity order (share by share), player mob counts are added atomically. Only without the LocalMobCapCalculator (per-player mob
++    // spawns, Paper's default); -Devangeliumserver.parallelSpawnState=false = the serial loop.
++    public static final boolean PARALLEL_SPAWN_STATE = Boolean.parseBoolean(System.getProperty("evangeliumserver.parallelSpawnState", "true"));
++    private static final int PARALLEL_SPAWN_STATE_MIN = Integer.getInteger("evangeliumserver.parallelSpawnStateMin", 2048);
++    private static final MobCategory[] EVANGELIUM_CATEGORIES = MobCategory.values();
++
++    public static NaturalSpawner.SpawnState createStateParallel(
++        int spawnableChunkCount, Iterable<Entity> entities, NaturalSpawner.ChunkGetter chunkGetter, final boolean countMobs
++    ) {
++        final java.util.ArrayList<Entity> all = new java.util.ArrayList<>(4096);
++        for (Entity entity : entities) {
++            all.add(entity);
++        }
++        final int n = all.size();
++        final int shares = Math.min(io.evangelium.server.threading.ParallelShares.threads() + 1, n / (PARALLEL_SPAWN_STATE_MIN / 2));
++        if (!PARALLEL_SPAWN_STATE || n < PARALLEL_SPAWN_STATE_MIN || shares <= 1) {
++            return createState(spawnableChunkCount, all, chunkGetter, null, countMobs);
++        }
++        final int[][] counts = new int[shares][EVANGELIUM_CATEGORIES.length];
++        @SuppressWarnings("unchecked")
++        final java.util.ArrayList<Object>[] charges = new java.util.ArrayList[shares];   // BlockPos, Double, BlockPos, Double, ...
++        io.evangelium.server.threading.ParallelShares.run(shares, share -> {
++            final int[] count = counts[share];
++            final java.util.ArrayList<Object> charge = charges[share] = new java.util.ArrayList<>();
++            for (int i = (int) ((long) n * share / shares), end = (int) ((long) n * (share + 1) / shares); i < end; i++) {
++                final Entity entity = all.get(i);
++                if (!(entity instanceof Mob mob && (mob.isPersistenceRequired() || mob.requiresCustomPersistence()))) {
++                    MobCategory category = entity.getType().getCategory();
++                    if (category != MobCategory.MISC) {
++                        if (!entity.level().paperConfig().entities.spawning.countAllMobsForSpawning &&
++                            !(entity.spawnReason == org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.NATURAL ||
++                                entity.spawnReason == org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.CHUNK_GEN)) {
++                            continue;
++                        }
++                        BlockPos blockPos = entity.blockPosition();
++                        chunkGetter.query(ChunkPos.asLong(blockPos), chunk -> {
++                            MobSpawnSettings.MobSpawnCost mobSpawnCost = getRoughBiome(blockPos, chunk).getMobSettings().getMobSpawnCost(entity.getType());
++                            if (mobSpawnCost != null) {
++                                charge.add(entity.blockPosition());
++                                charge.add(mobSpawnCost.charge());
++                            }
++                            count[category.ordinal()]++;
++                            if (countMobs) {
++                                chunk.level.getChunkSource().chunkMap.updatePlayerMobTypeMapAtomic(entity);
++                            }
++                        });
++                    }
++                }
++            }
++        });
++        PotentialCalculator potentialCalculator = new PotentialCalculator();
++        Object2IntOpenHashMap<MobCategory> map = new Object2IntOpenHashMap<>();
++        for (MobCategory category : EVANGELIUM_CATEGORIES) {
++            int sum = 0;
++            for (int[] count : counts) sum += count[category.ordinal()];
++            map.put(category, sum);
++        }
++        for (java.util.ArrayList<Object> charge : charges) {
++            for (int i = 0; i < charge.size(); i += 2) {
++                potentialCalculator.addCharge((BlockPos) charge.get(i), (Double) charge.get(i + 1));
++            }
++        }
++        if (VERIFY_SPAWN_STATE) {   // test hook: the serial count (without touching player mob counts) must give the same numbers
++            NaturalSpawner.SpawnState serial = createState(spawnableChunkCount, all, chunkGetter, null, false);
++            boolean same = serial.mobCategoryCounts.equals(map) && serial.spawnPotential.evangeliumSameAs(potentialCalculator);
++            long checks = VERIFIED_STATES.incrementAndGet();
++            if (!same) {
++                LOGGER.warn("parallel spawn state differs: parallel {} serial {}", map, serial.mobCategoryCounts);
++            } else if (checks % 200 == 0) {
++                LOGGER.info("parallel spawn state verified {} times", checks);
++            }
++        }
++        return new NaturalSpawner.SpawnState(spawnableChunkCount, map, potentialCalculator, null);
++    }
++    private static final boolean VERIFY_SPAWN_STATE = Boolean.getBoolean("evangeliumserver.verifySpawnState");
++    private static final java.util.concurrent.atomic.AtomicLong VERIFIED_STATES = new java.util.concurrent.atomic.AtomicLong();
++    // Evangelium end
++
+     static Biome getRoughBiome(BlockPos pos, ChunkAccess chunk) {
+         return chunk.getNoiseBiome(QuartPos.fromBlock(pos.getX()), QuartPos.fromBlock(pos.getY()), QuartPos.fromBlock(pos.getZ())).value();
+     }
+@@ -158,7 +_,11 @@
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("spawner");
+ 
++        // Evangelium - the players in range of this chunk, looked up once for all categories (was once per category; same list)
++        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> evangeliumInRange = level.paperConfig().entities.spawning.perPlayerMobSpawns
++            ? level.moonrise$getNearbyPlayers().getPlayers(chunk.getPos(), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE) : null;
+         for (MobCategory mobCategory : categories) {
++            if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(mobCategory, io.evangelium.server.spawn.SpawnStats.CHUNK); // Evangelium - dev counters
+             // Paper start - Optional per player mob spawns
+             final boolean canSpawn;
+             int maxSpawns = Integer.MAX_VALUE;
+@@ -172,26 +_,31 @@
+ 
+                 // Apply per-player limit
+                 int minDiff = Integer.MAX_VALUE;
+-                final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange =
+-                    level.moonrise$getNearbyPlayers().getPlayers(chunk.getPos(), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE);
++                final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange = evangeliumInRange; // Evangelium - looked up once
+                 if (inRange != null) {
+                     final net.minecraft.server.level.ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
+                     for (int k = 0, len = inRange.size(); k < len; k++) {
++                        try { // EvangeliumServer - concurrent modification
+                         minDiff = Math.min(limit - level.getChunkSource().chunkMap.getMobCountNear(backingSet[k], mobCategory), minDiff);
++                        } catch (IndexOutOfBoundsException | NullPointerException ignored) {} // EvangeliumServer - concurrent modification
+                     }
+                 }
+ 
+                 maxSpawns = (minDiff == Integer.MAX_VALUE) ? 0 : minDiff;
+-                canSpawn = maxSpawns > 0;
++                canSpawn = maxSpawns > 0 && evangeliumGatePasses(level, spawnState, mobCategory, maxSpawns, inRange, chunk.getPos()); // Evangelium - near-first spawning
++                if (io.evangelium.server.spawn.SpawnStats.ON && !canSpawn) io.evangelium.server.spawn.SpawnStats.inc(mobCategory, maxSpawns > 0 ? io.evangelium.server.spawn.SpawnStats.GATE : io.evangelium.server.spawn.SpawnStats.CAP); // Evangelium - dev counters
+             } else {
+                 canSpawn = spawnState.canSpawnForCategoryLocal(mobCategory, chunk.getPos());
+             }
+             if (canSpawn) {
++                final long evangeliumStart = io.evangelium.server.spawn.SpawnStats.ON ? System.nanoTime() : 0L; // Evangelium - dev counters
+                 spawnCategoryForChunk(mobCategory, level, chunk, spawnState::canSpawn, spawnState::afterSpawn,
+                     maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMap : null);
+                 // Paper end - Optional per player mob spawns
++                if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.add(mobCategory, io.evangelium.server.spawn.SpawnStats.NANOS, System.nanoTime() - evangeliumStart); // Evangelium - dev counters
+             }
+         }
++        if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.maybeDump(); // Evangelium - dev counters
+ 
+         profilerFiller.pop();
+     }
+@@ -217,8 +_,19 @@
+     ) {
+         // Paper end - Optional per player mob spawns
+         BlockPos randomPosWithin = getRandomPosWithin(level, chunk);
++        if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, randomPosWithin.getY() >= level.getMinY() + 1 ? io.evangelium.server.spawn.SpawnStats.ATTEMPT : io.evangelium.server.spawn.SpawnStats.BELOW_MIN); // Evangelium - dev counters
+         if (randomPosWithin.getY() >= level.getMinY() + 1) {
++            // Evangelium start - attempts that provably spawn nothing are not made (SpawnSkip)
++            final int evangeliumSkip = io.evangelium.server.spawn.SpawnSkip.ENABLED ? io.evangelium.server.spawn.SpawnSkip.cannotSpawn(level, chunk, category, randomPosWithin) : 0;
++            if (evangeliumSkip != 0) {
++                if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.SKIPPED);
++                if (!io.evangelium.server.spawn.SpawnSkip.VERIFY) return;
++                io.evangelium.server.spawn.SpawnSkip.verifyBegin(evangeliumSkip);
++            }
++            try {
++            // Evangelium end
+             spawnCategoryForPosition(category, level, chunk, randomPosWithin, filter, callback, maxSpawns, trackEntity); // Paper - Optional per player mob spawns
++            } finally { if (evangeliumSkip != 0) io.evangelium.server.spawn.SpawnSkip.verifyEnd(); } // Evangelium
+         }
+     }
+ 
+@@ -246,6 +_,15 @@
+         int y = pos.getY();
+         BlockState blockState = level.getBlockStateIfLoadedAndInBounds(pos); // Paper - don't load chunks for mob spawn
+         if (blockState != null && !blockState.isRedstoneConductor(chunk, pos)) { // Paper - don't load chunks for mob spawn
++            // Evangelium start - one player search per attempt instead of one per step (SpawnPlayerProbe: same distances)
++            final java.util.function.Predicate<Entity> evangeliumPredicate = level.purpurConfig.mobSpawningIgnoreCreativePlayers ? net.minecraft.world.entity.EntitySelector.NO_CREATIVE_OR_SPECTATOR : net.minecraft.world.entity.EntitySelector.NO_SPECTATORS;
++            final io.evangelium.server.spawn.SpawnPlayerProbe evangeliumProbe = io.evangelium.server.spawn.SpawnPlayerProbe.ENABLED ? io.evangelium.server.spawn.SpawnPlayerProbe.get() : null;
++            if (evangeliumProbe != null && !evangeliumProbe.begin(level, pos.getX() + 0.5, y, pos.getZ() + 0.5, evangeliumPredicate)) {
++                if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.NO_PLAYER);
++                return; // nobody eligible in the world: every step would find no nearest player
++            }
++            try {
++            // Evangelium end
+             BlockPos.MutableBlockPos mutableBlockPos = new BlockPos.MutableBlockPos();
+             int i = 0;
+ 
+@@ -264,18 +_,22 @@
+                     mutableBlockPos.set(x, y, z);
+                     double d = x + 0.5;
+                     double d1 = z + 0.5;
+-                    Player nearestPlayer = level.getNearestPlayer(d, y, d1, -1.0, level.purpurConfig.mobSpawningIgnoreCreativePlayers); // Purpur - mob spawning option to ignore creative players
+-                    if (nearestPlayer != null) {
+-                        double d2 = nearestPlayer.distanceToSqr(d, y, d1);
++                    if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.STEP); // Evangelium - dev counters
++                    Player nearestPlayer = evangeliumProbe != null ? null : level.getNearestPlayer(d, y, d1, -1.0, level.purpurConfig.mobSpawningIgnoreCreativePlayers); // Purpur - mob spawning option to ignore creative players // Evangelium - probe
++                    if (evangeliumProbe != null || nearestPlayer != null) { // Evangelium - probe
++                        double d2 = evangeliumProbe != null ? evangeliumProbe.nearestDistanceSqr(d, y, d1) : nearestPlayer.distanceToSqr(d, y, d1); // Evangelium - probe
+                         if (level.isLoadedAndInBounds(mutableBlockPos) && isRightDistanceToPlayerAndSpawnPoint(level, chunk, mutableBlockPos, d2)) { // Paper - don't load chunks for mob spawn
+                             if (spawnerData == null) {
+                                 Optional<MobSpawnSettings.SpawnerData> randomSpawnMobAt = getRandomSpawnMobAt(
+                                     level, structureManager, generator, category, level.random, mutableBlockPos
+                                 );
+                                 if (randomSpawnMobAt.isEmpty()) {
++                                    if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.MOB_EMPTY); // Evangelium - dev counters
+                                     break;
+                                 }
+ 
++                                if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.MOB_PICKED); // Evangelium - dev counters
++                                if (io.evangelium.server.spawn.SpawnSkip.VERIFY) io.evangelium.server.spawn.SpawnSkip.verifyEvent("pick", category, mutableBlockPos); // Evangelium - verify mode
+                                 spawnerData = randomSpawnMobAt.get();
+                                 ceil = spawnerData.minCount() + level.random.nextInt(1 + spawnerData.maxCount() - spawnerData.minCount());
+                             }
+@@ -290,9 +_,11 @@
+                             if (doSpawning == PreSpawnStatus.ABORT) {
+                                 return;
+                             }
++                            if (io.evangelium.server.spawn.SpawnStats.ON && doSpawning != PreSpawnStatus.SUCCESS) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.VALID_FAIL); // Evangelium - dev counters
++                            if (io.evangelium.server.spawn.SpawnSkip.VERIFY && doSpawning == PreSpawnStatus.SUCCESS) io.evangelium.server.spawn.SpawnSkip.verifyEvent("spot", category, mutableBlockPos); // Evangelium - verify mode
+                             if (doSpawning == PreSpawnStatus.SUCCESS
+                             // Paper end - PreCreatureSpawnEvent
+-                                && filter.test(spawnerData.type(), mutableBlockPos, chunk)) {
++                                && evangeliumEnergy(category, filter.test(spawnerData.type(), mutableBlockPos, chunk))) { // Evangelium - dev counters
+                                 Mob mobForSpawn = getMobForSpawn(level, spawnerData.type());
+                                 if (mobForSpawn == null) {
+                                     return;
+@@ -317,6 +_,10 @@
+                                         // Paper end - Optional per player mob spawns
+                                     }
+                                     // CraftBukkit end
++                                    if (io.evangelium.server.spawn.SpawnStats.ON && !mobForSpawn.isRemoved()) { // Evangelium - dev counters
++                                        io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.SPAWNED);
++                                        io.evangelium.server.spawn.SpawnStats.spawned(BuiltInRegistries.ENTITY_TYPE.getKey(mobForSpawn.getType()).getPath() + "@" + level.getBiome(mobForSpawn.blockPosition()).unwrapKey().map(k -> k.identifier().getPath()).orElse("?"));
++                                    }
+                                     if (i >= mobForSpawn.getMaxSpawnClusterSize() || i >= maxSpawns) { // Paper - Optional per player mob spawns
+                                         return;
+                                     }
+@@ -324,13 +_,19 @@
+                                     if (mobForSpawn.isMaxGroupSizeReached(i3)) {
+                                         break;
+                                     }
+-                                }
++                                } else if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.MOB_FAIL); // Evangelium - dev counters
+                             }
+-                        }
++                        } else if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.DISTANCE); // Evangelium - dev counters
+                     }
+                 }
+             }
+-        }
++            } finally { if (evangeliumProbe != null) evangeliumProbe.end(); } // Evangelium - probe
++        } else if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.START_SOLID); // Evangelium - dev counters
++    }
++
++    private static boolean evangeliumEnergy(MobCategory category, boolean passed) { // Evangelium - dev counters
++        if (io.evangelium.server.spawn.SpawnStats.ON && !passed) io.evangelium.server.spawn.SpawnStats.inc(category, io.evangelium.server.spawn.SpawnStats.ENERGY_FAIL);
++        return passed;
+     }
+ 
+     private static boolean isRightDistanceToPlayerAndSpawnPoint(ServerLevel level, ChunkAccess chunk, BlockPos.MutableBlockPos pos, double distance) {
+@@ -355,6 +_,7 @@
+         CANCELLED,
+         ABORT
+     }
++    private static final boolean EVANGELIUM_PLACEMENT_FIRST = Boolean.parseBoolean(System.getProperty("evangeliumserver.spawnPlacementFirst", "true")); // Evangelium
+     private static PreSpawnStatus isValidSpawnPostitionForType(
+     // Paper end - PreCreatureSpawnEvent
+         ServerLevel level,
+@@ -367,6 +_,7 @@
+     ) {
+         EntityType<?> entityType = data.type();
+         // Paper start - PreCreatureSpawnEvent
++        if (com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent.getHandlerList().getRegisteredListeners().length != 0) { // Evangelium - no listener: the event cannot cancel, skip building it (every spawn attempt)
+         com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent event = new com.destroystokyo.paper.event.entity.PreCreatureSpawnEvent(
+                 org.bukkit.craftbukkit.util.CraftLocation.toBukkit(pos, level),
+                 org.bukkit.craftbukkit.entity.CraftEntityType.minecraftToBukkit(entityType), org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.NATURAL
+@@ -377,6 +_,7 @@
+             }
+             return PreSpawnStatus.CANCELLED;
+         }
++        } // Evangelium
+         final boolean success = entityType.getCategory() != MobCategory.MISC
+         // Paper end - PreCreatureSpawnEvent
+             && (
+@@ -384,8 +_,10 @@
+                     || !(distance > entityType.getCategory().getDespawnDistance() * entityType.getCategory().getDespawnDistance())
+             )
+             && entityType.canSummon()
+-            && canSpawnMobAt(level, structureManager, generator, category, data, pos)
+-            && SpawnPlacements.isSpawnPositionOk(entityType, level, pos)
++            // Evangelium - the placement test (3 block reads) before the spawn-list test (biome lookup + structures): both are pure, so the
++            // order does not change the answer, and most steps fail the placement (air below); checkSpawnRules (random numbers) stays last
++            && (EVANGELIUM_PLACEMENT_FIRST ? SpawnPlacements.isSpawnPositionOk(entityType, level, pos) && canSpawnMobAt(level, structureManager, generator, category, data, pos)
++                : canSpawnMobAt(level, structureManager, generator, category, data, pos) && SpawnPlacements.isSpawnPositionOk(entityType, level, pos))
+             && SpawnPlacements.checkSpawnRules(entityType, level, EntitySpawnReason.NATURAL, pos, level.random)
+             && level.noCollision(entityType.getSpawnAABB(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5));
+         return success ? PreSpawnStatus.SUCCESS : PreSpawnStatus.FAIL; // Paper - PreCreatureSpawnEvent
+@@ -574,6 +_,20 @@
+     }
+ 
+     public static class SpawnState {
++        private volatile long[] evangeliumPlayerChunks; // Evangelium - near-first spawning: the distinct chunks players stand in, this spawn tick
++
++        long[] evangeliumPlayerChunks(ServerLevel level) { // built once by the first region thread that needs it (a race only builds it twice)
++            long[] chunks = this.evangeliumPlayerChunks;
++            if (chunks == null) {
++                final it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet set = new it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet();
++                for (net.minecraft.server.level.ServerPlayer player : level.players()) {
++                    set.add(player.chunkPosition().toLong());
++                }
++                this.evangeliumPlayerChunks = chunks = set.toLongArray();
++            }
++            return chunks;
++        }
++
+         private final int spawnableChunkCount;
+         private final Object2IntOpenHashMap<MobCategory> mobCategoryCounts;
+         private final PotentialCalculator spawnPotential;

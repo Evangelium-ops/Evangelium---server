@@ -1,0 +1,35 @@
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -153,7 +_,12 @@
+ 
+         try { // Paper - implement RegionFileSizeException
+         try {
+-            NbtIo.write(compound, writeData.output());
++            // EvangeliumServer start - write the NBT into a plain array first: thousands of small writes through the locked buffered
++            // stream cost more than one big write into the compressor; the bytes reaching it are the same
++            final it.unimi.dsi.fastutil.io.FastByteArrayOutputStream raw = new it.unimi.dsi.fastutil.io.FastByteArrayOutputStream(16384);
++            NbtIo.write(compound, new java.io.DataOutputStream(raw));
++            writeData.output().write(raw.array, 0, raw.length);
++            // EvangeliumServer end - write the NBT into a plain array first
+         } finally {
+             writeData.output().close();
+         }
+@@ -232,7 +_,8 @@
+     ) throws IOException {
+         try {
+             // Paper start - Attempt to recalculate regionfile header if it is corrupt
+-            final CompoundTag ret = NbtIo.read(readData.input());
++            final java.io.DataInput fastInput = readData.input() instanceof net.minecraft.world.level.chunk.storage.InflatedChunkInput fast ? fast.fastInput() : null; // EvangeliumServer - fast chunk NBT read
++            final CompoundTag ret = NbtIo.read(fastInput != null ? fastInput : readData.input()); // EvangeliumServer - fast chunk NBT read
+             if (!this.isChunkData) {
+                 return ret;
+             }
+@@ -309,7 +_,7 @@
+ 
+     // Paper start
+     private static void printOversizedLog(String msg, Path file, int x, int z) {
+-        org.apache.logging.log4j.LogManager.getLogger().fatal(msg + " (" + file.toString().replaceAll(".+[\\\\/]", "") + " - " + x + "," + z + ") Go clean it up to remove this message. /minecraft:tp " + (x<<4)+" 128 "+(z<<4) + " - DO NOT REPORT THIS TO PURPUR - You may ask for help on Discord, but do not file an issue. These error messages can not be removed."); // Purpur - Rebrand
++        org.apache.logging.log4j.LogManager.getLogger().fatal(msg + " (" + file.toString().replaceAll(".+[\\\\/]", "") + " - " + x + "," + z + ") Go clean it up to remove this message. /minecraft:tp " + (x<<4)+" 128 "+(z<<4) + " - DO NOT REPORT THIS TO PROJECT EVANGELIUM - You may ask for help on Discord, but do not file an issue. These error messages can not be removed."); // Purpur - Rebrand // EvangeliumServer
+     }
+ 
+     private static CompoundTag readOversizedChunk(RegionFile regionfile, ChunkPos chunkCoordinate) throws IOException {

@@ -1,0 +1,235 @@
+--- a/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
++++ b/ca/spottedleaf/moonrise/common/misc/NearbyPlayers.java
+@@ -7,7 +_,8 @@
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkData;
+ import ca.spottedleaf.moonrise.patches.chunk_tick_iteration.ChunkTickConstants;
+-import ca.spottedleaf.moonrise.patches.chunk_tick_iteration.ChunkTickServerLevel;
++import io.evangelium.server.util.BuckettedSynchronizedLock;
++import io.evangelium.server.util.SimpleStampedLock;
+ import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
+ import it.unimi.dsi.fastutil.objects.Reference2ReferenceOpenHashMap;
+ import net.minecraft.core.BlockPos;
+@@ -28,12 +_,14 @@
+         SPAWN_RANGE {
+             @Override
+             void addTo(final ServerPlayer player, final ServerLevel world, final int chunkX, final int chunkZ) {
+-                ((ChunkTickServerLevel)world).moonrise$addPlayerTickingRequest(chunkX, chunkZ);
++                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ); // EvangeliumServer
++                world.chunkSource.tickingRegions.addPlayerTickingRequest(chunkPos); // Evangelium - never into a region being dropped // ((ChunkTickServerLevel)world).moonrise$addPlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
+             }
+ 
+             @Override
+             void removeFrom(final ServerPlayer player, final ServerLevel world, final int chunkX, final int chunkZ) {
+-                ((ChunkTickServerLevel)world).moonrise$removePlayerTickingRequest(chunkX, chunkZ);
++                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ); // EvangeliumServer
++                world.chunkSource.tickingRegions.getOrCreate(chunkPos.getRegionPos()).removePlayerTickingRequest(chunkPos); // ((ChunkTickServerLevel)world).moonrise$removePlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
+             }
+         };
+         // Moonrise end - chunk tick iteration
+@@ -49,6 +_,14 @@
+ 
+     private static final NearbyMapType[] MAP_TYPES = NearbyMapType.values();
+     public static final int TOTAL_MAP_TYPES = MAP_TYPES.length;
++    // Evangelium start - the GENERAL maps are read nowhere in this server, but every chunk border a player crosses updated their rings
++    // (GENERAL has radius 33, the biggest of all)
++    private static final boolean EVANGELIUM_GENERAL_MAPS = !io.evangelium.server.util.DevSwitch.on("general-nearby-maps-skip");
++
++    private static boolean evangeliumSkip(final NearbyMapType type) {
++        return !EVANGELIUM_GENERAL_MAPS && (type == NearbyMapType.GENERAL || type == NearbyMapType.GENERAL_SMALL || type == NearbyMapType.GENERAL_REALLY_SMALL);
++    }
++    // Evangelium end
+ 
+     private static final int GENERAL_AREA_VIEW_DISTANCE = MoonriseConstants.MAX_VIEW_DISTANCE + 1;
+     private static final int GENERAL_SMALL_VIEW_DISTANCE = 10;
+@@ -60,11 +_,16 @@
+ 
+     private final ServerLevel world;
+     private final Reference2ReferenceOpenHashMap<ServerPlayer, TrackedPlayer[]> players = new Reference2ReferenceOpenHashMap<>();
++    private final SimpleStampedLock playersLock = new SimpleStampedLock(); // EvangeliumServer
+     private final Long2ReferenceOpenHashMap<TrackedChunk> byChunk = new Long2ReferenceOpenHashMap<>();
++    private final SimpleStampedLock byChunkLock = new SimpleStampedLock(); // EvangeliumServer
+     private final Long2ReferenceOpenHashMap<ReferenceList<ServerPlayer>>[] directByChunk = new Long2ReferenceOpenHashMap[TOTAL_MAP_TYPES];
++    private final SimpleStampedLock[] directByChunkLock = new SimpleStampedLock[TOTAL_MAP_TYPES]; // EvangeliumServer
++    private final BuckettedSynchronizedLock<Long> chunkModificationLock = new BuckettedSynchronizedLock<>(32);
+     {
+         for (int i = 0; i < this.directByChunk.length; ++i) {
+             this.directByChunk[i] = new Long2ReferenceOpenHashMap<>();
++            this.directByChunkLock[i] = new SimpleStampedLock(); // EvangeliumServer
+         }
+     }
+ 
+@@ -74,13 +_,16 @@
+ 
+     public void addPlayer(final ServerPlayer player) {
+         final TrackedPlayer[] newTrackers = new TrackedPlayer[TOTAL_MAP_TYPES];
++        this.playersLock.write(() -> { // EvangeliumServer
+         if (this.players.putIfAbsent(player, newTrackers) != null) {
+             throw new IllegalStateException("Already have player " + player);
+         }
++        }); // EvangeliumServer
+ 
+         final ChunkPos chunk = player.chunkPosition();
+ 
+         for (int i = 0; i < TOTAL_MAP_TYPES; ++i) {
++            if (evangeliumSkip(MAP_TYPES[i])) continue; // Evangelium
+             // use 0 for default, will be updated by tickPlayer
+             (newTrackers[i] = new TrackedPlayer(player, MAP_TYPES[i])).add(chunk.x, chunk.z, 0);
+         }
+@@ -90,12 +_,13 @@
+     }
+ 
+     public void removePlayer(final ServerPlayer player) {
+-        final TrackedPlayer[] players = this.players.remove(player);
++        final TrackedPlayer[] players = this.playersLock.write(() -> this.players.remove(player)); // EvangeliumServer
+         if (players == null) {
+             return; // May be called during teleportation before the player is actually placed
+         }
+ 
+         for (final TrackedPlayer tracker : players) {
++            if (tracker == null) continue; // Evangelium - a skipped GENERAL map
+             tracker.remove();
+         }
+     }
+@@ -111,47 +_,49 @@
+     }
+ 
+     public void tickPlayer(final ServerPlayer player) {
+-        final TrackedPlayer[] players = this.players.get(player);
++        final TrackedPlayer[] players = this.playersLock.optimisticRead(() -> this.players.get(player)); // EvangeliumServer
+         if (players == null) {
+             throw new IllegalStateException("Don't have player " + player);
+         }
+ 
+         final ChunkPos chunk = player.chunkPosition();
+ 
++        if (EVANGELIUM_GENERAL_MAPS) { // Evangelium
+         players[NearbyMapType.GENERAL.ordinal()].update(chunk.x, chunk.z, GENERAL_AREA_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_SMALL_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_REALLY_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_REALLY_SMALL_VIEW_DISTANCE);
++        } // Evangelium
+         players[NearbyMapType.TICK_VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getTickViewDistance(player));
+         players[NearbyMapType.VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getViewDistance(player));
+         players[NearbyMapType.SPAWN_RANGE.ordinal()].update(chunk.x, chunk.z, ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE); // Moonrise - chunk tick iteration
+     }
+ 
+     public TrackedChunk getChunk(final ChunkPos pos) {
+-        return this.byChunk.get(CoordinateUtils.getChunkKey(pos));
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(pos)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public TrackedChunk getChunk(final BlockPos pos) {
+-        return this.byChunk.get(CoordinateUtils.getChunkKey(pos));
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(pos)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public TrackedChunk getChunk(final int chunkX, final int chunkZ) {
+-        return this.byChunk.get(CoordinateUtils.getChunkKey(chunkX, chunkZ));
++        return this.byChunkLock.optimisticGet(this.byChunk, CoordinateUtils.getChunkKey(chunkX, chunkZ)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public ReferenceList<ServerPlayer> getPlayers(final BlockPos pos, final NearbyMapType type) {
+-        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos));
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(pos)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public ReferenceList<ServerPlayer> getPlayers(final ChunkPos pos, final NearbyMapType type) {
+-        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(pos));
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(pos)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public ReferenceList<ServerPlayer> getPlayersByChunk(final int chunkX, final int chunkZ, final NearbyMapType type) {
+-        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(chunkX, chunkZ));
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(chunkX, chunkZ)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public ReferenceList<ServerPlayer> getPlayersByBlock(final int blockX, final int blockZ, final NearbyMapType type) {
+-        return this.directByChunk[type.ordinal()].get(CoordinateUtils.getChunkKey(blockX >> 4, blockZ >> 4));
++        return this.directByChunkLock[type.ordinal()].optimisticGet(this.directByChunk[type.ordinal()], CoordinateUtils.getChunkKey(blockX >> 4, blockZ >> 4)); // EvangeliumServer // Evangelium - no lambda
+     }
+ 
+     public static final class TrackedChunk {
+@@ -181,7 +_,7 @@
+             return this.players[type.ordinal()];
+         }
+ 
+-        public void addPlayer(final ServerPlayer player, final NearbyMapType type) {
++        public void addPlayer(final ServerPlayer player, final NearbyMapType type) { // EvangeliumServer
+             ++this.updateCount;
+ 
+             final int idx = type.ordinal();
+@@ -189,7 +_,7 @@
+             if (list == null) {
+                 ++this.nonEmptyLists;
+                 final ReferenceList<ServerPlayer> players = (this.players[idx] = new ReferenceList<>(EMPTY_PLAYERS_ARRAY));
+-                this.nearbyPlayers.directByChunk[idx].put(this.chunkKey, players);
++                this.nearbyPlayers.directByChunkLock[idx].write(() -> this.nearbyPlayers.directByChunk[idx].put(this.chunkKey, players)); // EvangeliumServer
+                 players.add(player);
+                 return;
+             }
+@@ -199,7 +_,7 @@
+             }
+         }
+ 
+-        public void removePlayer(final ServerPlayer player, final NearbyMapType type) {
++        public void removePlayer(final ServerPlayer player, final NearbyMapType type) { // EvangeliumServer
+             ++this.updateCount;
+ 
+             final int idx = type.ordinal();
+@@ -214,7 +_,7 @@
+ 
+             if (list.size() == 0) {
+                 this.players[idx] = null;
+-                this.nearbyPlayers.directByChunk[idx].remove(this.chunkKey);
++                this.nearbyPlayers.directByChunkLock[idx].write(() -> this.nearbyPlayers.directByChunk[idx].remove(this.chunkKey)); // EvangeliumServer
+                 --this.nonEmptyLists;
+             }
+         }
+@@ -233,26 +_,29 @@
+         protected void addCallback(final ServerPlayer parameter, final int chunkX, final int chunkZ) {
+             final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+ 
+-            final TrackedChunk chunk = NearbyPlayers.this.byChunk.get(chunkKey);
++            NearbyPlayers.this.chunkModificationLock.write(chunkKey, () -> { // EvangeliumServer
++            TrackedChunk chunk = NearbyPlayers.this.byChunkLock.optimisticRead(() -> NearbyPlayers.this.byChunk.get(chunkKey)); // EvangeliumServer
+             final NearbyMapType type = this.type;
+             if (chunk != null) {
+                 chunk.addPlayer(parameter, type);
+                 type.addTo(parameter, NearbyPlayers.this.world, chunkX, chunkZ);
+             } else {
+                 final TrackedChunk created = new TrackedChunk(chunkKey, NearbyPlayers.this);
+-                NearbyPlayers.this.byChunk.put(chunkKey, created);
++                NearbyPlayers.this.byChunkLock.write(() -> NearbyPlayers.this.byChunk.put(chunkKey, created)); // EvangeliumServer
+                 created.addPlayer(parameter, type);
+                 type.addTo(parameter, NearbyPlayers.this.world, chunkX, chunkZ);
+ 
+                 ((ChunkSystemLevel)NearbyPlayers.this.world).moonrise$requestChunkData(chunkKey).nearbyPlayers = created;
+             }
++            }); // EvangeliumServer
+         }
+ 
+         @Override
+         protected void removeCallback(final ServerPlayer parameter, final int chunkX, final int chunkZ) {
+             final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+ 
+-            final TrackedChunk chunk = NearbyPlayers.this.byChunk.get(chunkKey);
++            NearbyPlayers.this.chunkModificationLock.write(chunkKey, () -> { // EvangeliumServer
++            final TrackedChunk chunk = NearbyPlayers.this.byChunkLock.optimisticRead(() -> NearbyPlayers.this.byChunk.get(chunkKey)); // EvangeliumServer
+             if (chunk == null) {
+                 throw new IllegalStateException("Chunk should exist at " + new ChunkPos(chunkKey));
+             }
+@@ -262,12 +_,13 @@
+             type.removeFrom(parameter, NearbyPlayers.this.world, chunkX, chunkZ);
+ 
+             if (chunk.isEmpty()) {
+-                NearbyPlayers.this.byChunk.remove(chunkKey);
++                NearbyPlayers.this.byChunkLock.write(() -> NearbyPlayers.this.byChunk.remove(chunkKey)); // EvangeliumServer
+                 final ChunkData chunkData = ((ChunkSystemLevel)NearbyPlayers.this.world).moonrise$releaseChunkData(chunkKey);
+                 if (chunkData != null) {
+                     chunkData.nearbyPlayers = null;
+                 }
+             }
++            }); // EvangeliumServer
+         }
+     }
+ }

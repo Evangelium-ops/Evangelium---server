@@ -1,0 +1,15 @@
+--- a/net/minecraft/world/level/chunk/storage/RegionFile.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
+@@ -638,7 +_,11 @@
+                     } else {
+                         JvmProfiler.INSTANCE.onRegionFileRead(this.info, chunkPos, this.version, i1);
+                         // Paper start - recalculate header on regionfile corruption
+-                        final DataInputStream ret = this.createChunkInputStream(chunkPos, b, createStream(byteBuffer, i1));
++                        // EvangeliumServer start - fast chunk NBT read: deflate chunks are inflated in one go when the NBT is read
++                        final DataInputStream ret = RegionFileVersion.fromId(b) == RegionFileVersion.VERSION_DEFLATE && net.minecraft.world.level.chunk.storage.InflatedChunkInput.enabled()
++                            ? new net.minecraft.world.level.chunk.storage.InflatedChunkInput(byteBuffer.array(), byteBuffer.position(), i1)
++                            : this.createChunkInputStream(chunkPos, b, createStream(byteBuffer, i1));
++                        // EvangeliumServer end - fast chunk NBT read
+                         if (ret == null && this.canRecalcHeader && this.recalculateHeader()) {
+                             return this.getChunkDataInputStream(chunkPos);
+                         }

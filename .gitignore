@@ -46,16 +46,16 @@ out/
 # other stuff
 run/
 
-/shreddedpaper-server/build.gradle.kts
-/shreddedpaper-server/src/minecraft
+/evangeliumserver-server/build.gradle.kts
+/evangeliumserver-server/src/minecraft
 /paper-server
 /purpur-server
-/shreddedpaper-api/build.gradle.kts
+/evangeliumserver-api/build.gradle.kts
 /paper-api
 /paper-api-generator
 /purpur-api
 
 *.sh
-shreddedpaper.jar
+evangeliumserver.jar
 
 !gradle/wrapper/gradle-wrapper.jar

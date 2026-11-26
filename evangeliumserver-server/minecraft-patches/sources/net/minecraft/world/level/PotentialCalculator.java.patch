@@ -1,0 +1,61 @@
+--- a/net/minecraft/world/level/PotentialCalculator.java
++++ b/net/minecraft/world/level/PotentialCalculator.java
+@@ -1,15 +_,24 @@
+ package net.minecraft.world.level;
+ 
+-import com.google.common.collect.Lists;
+-import java.util.List;
+ import net.minecraft.core.BlockPos;
+ 
+ public class PotentialCalculator {
+-    private final List<PotentialCalculator.PointCharge> charges = Lists.newArrayList();
++    // Evangelium start - region threads add charges (afterSpawn) while other region threads read them: a plain ArrayList could lose
++    // entries, throw while growing or hand a reader a null slot. Writers take the lock and publish the count last; readers take a
++    // snapshot (count first, then the array: the array only ever grows and keeps the first count entries).
++    private PotentialCalculator.PointCharge[] charges = new PotentialCalculator.PointCharge[16];
++    private int size;
++    private volatile int published;
+ 
+     public void addCharge(BlockPos pos, double charge) {
+         if (charge != 0.0) {
+-            this.charges.add(new PotentialCalculator.PointCharge(pos, charge));
++            synchronized (this) {
++                if (this.size == this.charges.length) {
++                    this.charges = java.util.Arrays.copyOf(this.charges, this.size * 2);
++                }
++                this.charges[this.size] = new PotentialCalculator.PointCharge(pos, charge);
++                this.published = ++this.size;
++            }
+         }
+     }
+ 
+@@ -18,14 +_,27 @@
+             return 0.0;
+         } else {
+             double d = 0.0;
++            final int n = this.published;
++            final PotentialCalculator.PointCharge[] charges = this.charges;
+ 
+-            for (PotentialCalculator.PointCharge pointCharge : this.charges) {
+-                d += pointCharge.getPotentialChange(pos);
++            for (int i = 0; i < n; i++) {
++                d += charges[i].getPotentialChange(pos);
+             }
+ 
+             return d * charge;
+         }
+     }
++
++    /** Test hook (NaturalSpawner verify): the same charges in the same order. */
++    public boolean evangeliumSameAs(PotentialCalculator other) {
++        int n = this.published;
++        if (n != other.published) return false;
++        for (int i = 0; i < n; i++) {
++            if (!this.charges[i].pos.equals(other.charges[i].pos) || this.charges[i].charge != other.charges[i].charge) return false;
++        }
++        return true;
++    }
++    // Evangelium end
+ 
+     static class PointCharge {
+         private final BlockPos pos;

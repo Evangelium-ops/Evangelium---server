@@ -1,0 +1,180 @@
+--- a/net/minecraft/world/level/material/FlowingFluid.java
++++ b/net/minecraft/world/level/material/FlowingFluid.java
+@@ -410,7 +_,177 @@
+         return i;
+     }
+ 
++    // Fork start - slope search as a breadth-first search over plain arrays (vanilla walks every path depth-first, hashing each
++    // lookup); same result: the shortest path to a hole, holes end a path, the first step may not go back to the spreading block
++    private static final boolean VERIFY_SLOPE_SEARCH = Boolean.getBoolean("evangeliumserver.verifyFluidSearch");
++    private static final int SLOPE_R = 8, SLOPE_W = 2 * SLOPE_R + 1;
++    private static final Direction[] SLOPE_DIRECTIONS = {Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST};
++    private final ThreadLocal<SlopeSearch> slopeSearch = ThreadLocal.withInitial(SlopeSearch::new);
++
+     protected Map<Direction, FluidState> getSpread(ServerLevel level, BlockPos pos, BlockState state) {
++        int limit = this.getSlopeFindDistance(level);
++        if (limit >= SLOPE_R) {
++            return this.getSpreadVanilla(level, pos, state);
++        }
++        Map<Direction, FluidState> map = this.getSpreadFast(level, pos, state, limit);
++        if (VERIFY_SLOPE_SEARCH) {
++            Map<Direction, FluidState> vanilla = this.getSpreadVanilla(level, pos, state);
++            if (!vanilla.equals(map)) {
++                throw new IllegalStateException("fluid slope search differs at " + pos + ": " + map + " vanilla " + vanilla);
++            }
++        }
++        return map;
++    }
++
++    private Map<Direction, FluidState> getSpreadFast(ServerLevel level, BlockPos pos, BlockState state, int limit) {
++        int i = 1000;
++        Map<Direction, FluidState> map = Maps.newEnumMap(Direction.class);
++        SlopeSearch search = null;
++
++        for (Direction direction : Direction.Plane.HORIZONTAL) {
++            BlockPos blockPos = pos.relative(direction);
++            BlockState blockState = level.getBlockStateIfLoaded(blockPos);
++            if (blockState == null) continue;
++            FluidState fluidState = blockState.getFluidState();
++            if (this.canMaybePassThrough(level, pos, state, direction, blockPos, blockState, fluidState)) {
++                FluidState newLiquid = this.getNewLiquid(level, blockPos, blockState);
++                if (canHoldSpecificFluid(level, blockPos, blockState, newLiquid.getType())) {
++                    if (search == null) {
++                        search = this.slopeSearch.get();
++                        search.begin(level, pos);
++                    }
++
++                    int i1 = search.distance(blockPos, blockState, direction.getOpposite(), Math.min(limit, i));
++                    if (i1 < i) {
++                        map.clear();
++                    }
++
++                    if (i1 <= i) {
++                        if (fluidState.canBeReplacedWith(level, blockPos, newLiquid.getType(), direction)) {
++                            map.put(direction, newLiquid);
++                        }
++
++                        i = i1;
++                    }
++                }
++            }
++        }
++
++        if (search != null) {
++            search.level = null; // do not keep the world alive from a thread local
++        }
++        return map;
++    }
++
++    private final class SlopeSearch {
++        private final BlockState[] states = new BlockState[SLOPE_W * SLOPE_W];
++        private final int[] stateGen = new int[SLOPE_W * SLOPE_W];
++        private final boolean[] holes = new boolean[SLOPE_W * SLOPE_W];
++        private final int[] holeGen = new int[SLOPE_W * SLOPE_W];
++        private final int[] visitGen = new int[SLOPE_W * SLOPE_W];
++        private int[] frontier = new int[SLOPE_W * SLOPE_W];
++        private int[] next = new int[SLOPE_W * SLOPE_W];
++        private final BlockPos.MutableBlockPos from = new BlockPos.MutableBlockPos();
++        private final BlockPos.MutableBlockPos to = new BlockPos.MutableBlockPos();
++        private final BlockPos.MutableBlockPos below = new BlockPos.MutableBlockPos();
++        private ServerLevel level;
++        private int ox, y, oz, gen, visit;
++
++        void begin(ServerLevel level, BlockPos origin) {
++            this.level = level;
++            this.ox = origin.getX() - SLOPE_R;
++            this.y = origin.getY();
++            this.oz = origin.getZ() - SLOPE_R;
++            if (++this.gen == 0) { // wrapped: forget all stamps
++                java.util.Arrays.fill(this.stateGen, 0);
++                java.util.Arrays.fill(this.holeGen, 0);
++                this.gen = 1;
++            }
++        }
++
++        private int slot(int x, int z) {
++            return (x - this.ox) * SLOPE_W + (z - this.oz);
++        }
++
++        // like vanilla's state cache: only loaded blocks are remembered
++        private BlockState stateIfLoaded(int slot, BlockPos pos) {
++            if (this.stateGen[slot] == this.gen) {
++                return this.states[slot];
++            }
++            BlockState blockState = this.level.getBlockStateIfLoaded(pos);
++            if (blockState != null) {
++                this.states[slot] = blockState;
++                this.stateGen[slot] = this.gen;
++            }
++            return blockState;
++        }
++
++        private boolean isHole(int slot, BlockPos pos, BlockState blockState) {
++            if (this.holeGen[slot] == this.gen) {
++                return this.holes[slot];
++            }
++            this.below.set(pos.getX(), pos.getY() - 1, pos.getZ());
++            boolean hole = FlowingFluid.this.isWaterHole(this.level, pos, blockState, this.below, this.level.getBlockState(this.below));
++            this.holes[slot] = hole;
++            this.holeGen[slot] = this.gen;
++            return hole;
++        }
++
++        // vanilla: isHole(start) ? 0 : getSlopeDistance(start, 1, back, ...); here anything farther than cap counts as 1000
++        int distance(BlockPos start, BlockState startState, Direction back, int cap) {
++            int startSlot = this.slot(start.getX(), start.getZ());
++            this.states[startSlot] = startState;
++            this.stateGen[startSlot] = this.gen;
++            if (this.isHole(startSlot, start, startState)) {
++                return 0;
++            }
++            if (cap < 1) {
++                return 1000;
++            }
++            if (++this.visit == 0) {
++                java.util.Arrays.fill(this.visitGen, 0);
++                this.visit = 1;
++            }
++            Fluid flowing = FlowingFluid.this.getFlowing();
++            this.visitGen[startSlot] = this.visit;
++            this.frontier[0] = startSlot;
++            int count = 1;
++            for (int depth = 1; depth <= cap && count > 0; depth++) {
++                int nextCount = 0;
++                for (int k = 0; k < count; k++) {
++                    int fromSlot = this.frontier[k];
++                    int fx = fromSlot / SLOPE_W + this.ox, fz = fromSlot % SLOPE_W + this.oz;
++                    this.from.set(fx, this.y, fz);
++                    BlockState fromState = this.states[fromSlot];
++                    for (Direction direction : SLOPE_DIRECTIONS) {
++                        if (fromSlot == startSlot && direction == back) continue;
++                        int tx = fx + direction.getStepX(), tz = fz + direction.getStepZ();
++                        int toSlot = this.slot(tx, tz);
++                        if (this.visitGen[toSlot] == this.visit) continue; // reached already, by a path no longer than this one
++                        this.to.set(tx, this.y, tz);
++                        BlockState toState = this.stateIfLoaded(toSlot, this.to);
++                        if (toState == null) continue;
++                        if (!FlowingFluid.this.canPassThrough(this.level, flowing, this.from, fromState, direction, this.to, toState, toState.getFluidState())) continue;
++                        if (this.isHole(toSlot, this.to, toState)) {
++                            return depth;
++                        }
++                        if (depth < cap) {
++                            this.visitGen[toSlot] = this.visit;
++                            this.next[nextCount++] = toSlot;
++                        }
++                    }
++                }
++                int[] swap = this.frontier;
++                this.frontier = this.next;
++                this.next = swap;
++                count = nextCount;
++            }
++            return 1000;
++        }
++    }
++
++    protected Map<Direction, FluidState> getSpreadVanilla(ServerLevel level, BlockPos pos, BlockState state) {
++    // Fork end - slope search
+         int i = 1000;
+         Map<Direction, FluidState> map = Maps.newEnumMap(Direction.class);
+         FlowingFluid.SpreadContext spreadContext = null;

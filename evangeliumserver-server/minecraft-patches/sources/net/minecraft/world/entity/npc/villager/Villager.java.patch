@@ -1,0 +1,73 @@
+--- a/net/minecraft/world/entity/npc/villager/Villager.java
++++ b/net/minecraft/world/entity/npc/villager/Villager.java
+@@ -7,6 +_,7 @@
+ import com.mojang.datafixers.util.Pair;
+ import com.mojang.logging.LogUtils;
+ import com.mojang.serialization.Dynamic;
++import io.evangelium.server.EvangeliumServer;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -376,6 +_,10 @@
+     }
+ 
+     // Paper start - EAR 2
++    // Evangelium - a villager far from every player runs its AI only every few ticks (it was a third of a villager town's tick); the
++    // rest (trade timers, level ups, restock bookkeeping) still runs every tick, and the work it does just takes a little longer
++    private static final int EVANGELIUM_INACTIVE_BRAIN_INTERVAL = Math.max(1, Integer.getInteger("evangeliumserver.inactiveVillagerBrainInterval", 2));
++
+     @Override
+     public void inactiveTick() {
+         // SPIGOT-3874, SPIGOT-3894, SPIGOT-3846, SPIGOT-5286 :(
+@@ -383,7 +_,8 @@
+             this.setUnhappyCounter(this.getUnhappyCounter() - 1);
+         }
+         if (this.isEffectiveAi()) {
+-            if (this.level().spigotConfig.tickInactiveVillagers) {
++            if (this.level().spigotConfig.tickInactiveVillagers
++                    && (this.level().getGameTime() + this.getId()) % EVANGELIUM_INACTIVE_BRAIN_INTERVAL == 0) { // Evangelium - see below
+                 this.customServerAiStep(this.level().getMinecraftWorld());
+             } else {
+                 this.customServerAiStep(this.level().getMinecraftWorld(), true);
+@@ -798,13 +_,15 @@
+             this.brain.getMemory(moduleType).ifPresent(pos -> {
+                 ServerLevel level = server.getLevel(pos.dimension());
+                 if (level != null) {
++                    BiPredicate<Villager, Holder<PoiType>> biPredicate = POI_MEMORIES.get(moduleType); // EvangeliumServer - don't run on poi's region
++                    EvangeliumServer.ensureSync(level, pos.pos(), () -> { // EvangeliumServer - run on poi's region
+                     PoiManager poiManager = level.getPoiManager();
+                     Optional<Holder<PoiType>> type = poiManager.getType(pos.pos());
+-                    BiPredicate<Villager, Holder<PoiType>> biPredicate = POI_MEMORIES.get(moduleType);
+                     if (type.isPresent() && biPredicate.test(this, type.get())) {
+                         poiManager.release(pos.pos());
+                         level.debugSynchronizers().updatePoi(pos.pos());
+                     }
++                    }); // EvangeliumServer - run on poi's region
+                 }
+             });
+         }
+@@ -973,6 +_,24 @@
+ 
+     private int countFoodPointsInInventory() {
+         SimpleContainer inventory = this.getInventory();
++        // Evangelium start - one pass over the inventory, same integer sum as counting each food item separately
++        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++            int points = 0;
++            for (int i = 0, size = inventory.getContainerSize(); i < size; i++) {
++                ItemStack item = inventory.getItem(i);
++                if (!item.isEmpty()) {
++                    Integer value = FOOD_POINTS.get(item.getItem());
++                    if (value != null) points += item.getCount() * value;
++                }
++            }
++            if (net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("food")) points++;
++            if (net.minecraft.world.entity.ai.AiOptimizations.VERIFY) {
++                int vanilla = FOOD_POINTS.entrySet().stream().mapToInt(entry -> inventory.countItem(entry.getKey()) * entry.getValue()).sum();
++                if (vanilla != points) net.minecraft.world.entity.ai.AiOptimizations.mismatch("countFoodPointsInInventory " + points + " vs " + vanilla);
++            }
++            return points;
++        }
++        // Evangelium end
+         return FOOD_POINTS.entrySet().stream().mapToInt(entry -> inventory.countItem(entry.getKey()) * entry.getValue()).sum();
+     }
+ 

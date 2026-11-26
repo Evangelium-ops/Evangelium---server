@@ -1,0 +1,41 @@
+--- a/net/minecraft/world/entity/ai/behavior/AcquirePoi.java
++++ b/net/minecraft/world/entity/ai/behavior/AcquirePoi.java
+@@ -55,6 +_,9 @@
+         int i1 = 20;
+         MutableLong mutableLong = new MutableLong(0L);
+         Long2ObjectMap<AcquirePoi.JitteredLinearRetry> map = new Long2ObjectOpenHashMap<>();
++        // Evangelium - the last search found no POI of these types with space within range: origin, POI version, radius, manager
++        final long[] evangeliumMemo = {Long.MIN_VALUE, 0L, -1L};
++        final Object[] evangeliumMemoManager = new Object[1];
+         OneShot<PathfinderMob> oneShot = BehaviorBuilder.create(
+             instance -> instance.group(instance.absent(acquiringMemory))
+                 .apply(
+@@ -85,7 +_,28 @@
+                             };
+                             // Paper start - optimise POI access
+                             final java.util.List<Pair<Holder<PoiType>, BlockPos>> poiposes = new java.util.ArrayList<>();
++                            // Evangelium start - same origin and radius and no POI changed, loaded or unloaded in this level since a search that
++                            // found no candidate: it finds none again (and never calls the position predicate), so skip it
++                            final long evangeliumOrigin = mob.blockPosition().asLong();
++                            final int evangeliumRadius = level.purpurConfig.villagerAcquirePoiSearchRadius;
++                            final long evangeliumVersion = poiManager.evangelium$version;
++                            final boolean evangeliumHit = net.minecraft.world.entity.ai.AiOptimizations.poiNoCandidateMemo() && evangeliumMemoManager[0] == poiManager
++                                && evangeliumMemo[0] == evangeliumOrigin && evangeliumMemo[2] == evangeliumRadius
++                                && (evangeliumMemo[1] == evangeliumVersion || net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("poimemo"));
++                            if (!evangeliumHit || net.minecraft.world.entity.ai.AiOptimizations.VERIFY) {
++                            // Evangelium end
+                             io.papermc.paper.util.PoiAccess.findNearestPoiPositions(poiManager, acquirablePois, predicate1, mob.blockPosition(), level.purpurConfig.villagerAcquirePoiSearchRadius, level.purpurConfig.villagerAcquirePoiSearchRadius*level.purpurConfig.villagerAcquirePoiSearchRadius, PoiManager.Occupancy.HAS_SPACE, false, 5, poiposes); // Purpur - Configurable villager search radius
++                            // Evangelium start
++                            boolean evangeliumNone = io.papermc.paper.util.PoiAccess.evangeliumLastNoCandidate();
++                            if (evangeliumHit && (!evangeliumNone || !poiposes.isEmpty())) net.minecraft.world.entity.ai.AiOptimizations.mismatch("poiNoCandidateMemo: candidates appeared at " + mob.blockPosition() + " for " + mob);
++                            if (evangeliumNone) {
++                                evangeliumMemo[0] = evangeliumOrigin;
++                                evangeliumMemo[1] = evangeliumVersion;
++                                evangeliumMemo[2] = evangeliumRadius;
++                                evangeliumMemoManager[0] = poiManager;
++                            }
++                            }
++                            // Evangelium end
+                             final Set<Pair<Holder<PoiType>, BlockPos>> set = new java.util.HashSet<>(poiposes.size());
+                             for (final Pair<Holder<PoiType>, BlockPos> poiPose : poiposes) {
+                                 if (predicate.test(level, poiPose.getSecond())) {

@@ -1,0 +1,286 @@
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1,5 +_,6 @@
+ package net.minecraft.server;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
+ import com.google.common.base.Splitter;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.Lists;
+@@ -10,6 +_,9 @@
+ import com.mojang.jtracy.DiscontinuousFrame;
+ import com.mojang.jtracy.TracyClient;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.EvangeliumServer;
++import io.evangelium.server.threading.EvangeliumServerPlayerTicker;
++import io.evangelium.server.threading.EvangeliumServerTickThread;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import it.unimi.dsi.fastutil.objects.ObjectArraySet;
+ import java.io.File;
+@@ -23,6 +_,7 @@
+ import java.nio.file.Files;
+ import java.nio.file.Path;
+ import java.security.KeyPair;
++import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -309,6 +_,7 @@
+     public static final long SERVER_INIT = System.nanoTime(); // Paper - Lag compensation
+     public boolean lagging = false; // Purpur - Lagging threshold
+     protected boolean upnp = false; // Purpur - UPnP Port Forwarding
++    public static boolean isBukkitSchedulerHearbeat = false;
+     // Paper start - improve tick loop
+     public final ca.spottedleaf.moonrise.common.time.TickData tickTimes1s  = new ca.spottedleaf.moonrise.common.time.TickData(java.util.concurrent.TimeUnit.SECONDS.toNanos(1L));
+     public final ca.spottedleaf.moonrise.common.time.TickData tickTimes5s  = new ca.spottedleaf.moonrise.common.time.TickData(java.util.concurrent.TimeUnit.SECONDS.toNanos(5L));
+@@ -437,6 +_,8 @@
+         return executed;
+     }
+ 
++    public final ThreadLocal<Boolean> executingMidTickTasks = ThreadLocal.withInitial(() -> false); // EvangeliumServer
++
+     @Override
+     public final void moonrise$executeMidTickTasks() {
+         final long startTime = System.nanoTime();
+@@ -446,6 +_,7 @@
+             return;
+         }
+ 
++        this.executingMidTickTasks.set(true); try { // EvangeliumServer
+         for (;;) {
+             final boolean moreTasks = this.tickMidTickTasks();
+             final long currTime = System.nanoTime();
+@@ -470,6 +_,7 @@
+                 return;
+             }
+         }
++        } finally { this.executingMidTickTasks.set(false); } // EvangeliumServer
+     }
+ 
+    @Override
+@@ -893,6 +_,8 @@
+ 
+     // CraftBukkit start
+     public void prepareLevel(ServerLevel serverLevel) {
++        if (!TickThread.isTickThread()) throw new IllegalStateException("Cannot load worlds async!!"); // EvangeliumServer
++        if (EvangeliumServerTickThread.isEvangeliumServerTickThread()) throw new IllegalStateException("Must load worlds from the global scheduler!"); // EvangeliumServer
+         this.forceTicks = true;
+         // CraftBukkit end
+         ChunkLoadCounter chunkLoadCounter = new ChunkLoadCounter();
+@@ -1018,6 +_,7 @@
+ 
+         LOGGER.info("Stopping server");
+         Commands.COMMAND_SENDING_POOL.shutdownNow(); // Paper - Perf: Async command map building; Shutdown and don't bother finishing
++        EvangeliumServerTickThread.stopServer(); // EvangeliumServer
+         // Purpur start - UPnP Port Forwarding
+         if (upnp) {
+             if (dev.omega24.upnp4j.UPnP4J.close(this.getPort(), dev.omega24.upnp4j.util.Protocol.TCP)) {
+@@ -1057,7 +_,7 @@
+ 
+             for (ServerLevel serverLevelx : this.getAllLevels()) {
+                 serverLevelx.getChunkSource().deactivateTicketsOnClosing();
+-                serverLevelx.getChunkSource().tick(() -> true, false);
++                serverLevelx.getChunkSource().tick(() -> true, false).join(); // EvangeliumServer - run async
+             }
+ 
+             this.waitUntilNextTick();
+@@ -1098,6 +_,7 @@
+         }
+         // Paper end - rewrite chunk system
+         // Paper start - Improved watchdog support - move final shutdown items here
++        net.minecraft.world.level.storage.PlayerDataStorage.awaitPendingWrites(null); // Evangelium - player saves still queued are written before the IO pool gets only 3 s
+         Util.shutdownExecutors();
+         this.onServerExit();
+         // Paper end - Improved watchdog support - move final shutdown items here
+@@ -1284,6 +_,7 @@
+             // everything is init before watchdog tick.
+             // anything at 3+ won't be caught here but also will trip watchdog....
+             // tasks are default scheduled at -1 + delay, and first tick will tick at 1
++            io.evangelium.server.threading.OnDemandRegionAccess.endServerTick(); // Evangelium - plugin compatibility: startup (onEnable, world loads) may have taken the world
+             final long actualDoneTimeMs = System.currentTimeMillis() - org.bukkit.craftbukkit.Main.BOOT_TIME.toEpochMilli(); // Paper - Improve startup message
+             LOGGER.info("Done ({})! For help, type \"help\"", String.format(java.util.Locale.ROOT, "%.3fs", actualDoneTimeMs / 1000.00D)); // Paper - Improve startup message
+             org.spigotmc.WatchdogThread.tick();
+@@ -1339,7 +_,7 @@
+                         org.purpurmc.purpur.PurpurConfig.tpsCatchup ? 5 : 1 //ConfigHolder.getConfig().tickLoop.catchupTicks.getOrDefault(MoonriseConfig.TickLoop.DEFAULT_CATCHUP_TICKS).intValue() // Purpur - Configurable TPS Catchup
+                     );
+ 
+-                    lagging = getTPS()[0] < org.purpurmc.purpur.PurpurConfig.laggingThreshold; // Purpur - Lagging threshold
++                    lagging = getTPS(this.tickTimes5s, this.tickRateManager().nanosecondsPerTick()) < org.purpurmc.purpur.PurpurConfig.laggingThreshold; // Purpur - Lagging threshold // Evangelium - only the 5 s average, not all four windows (about 25000 tick times) every tick
+ 
+                     // adjust ticksBehind so that it is not greater-than catchup
+                     if (ticksBehind > catchup) {
+@@ -1485,6 +_,8 @@
+ 
+     @Override
+     public void managedBlock(BooleanSupplier isDone) {
++        // Evangelium - nothing runs server tasks inside an intra-region parallel phase (a kick in another region, isChunkGenerated...): fail fast
++        if (io.evangelium.server.threading.IntraRegion.inParallelPhase() && !isDone.getAsBoolean()) throw new io.evangelium.server.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a wait for server tasks inside a parallel phase on " + Thread.currentThread().getName());
+         super.managedBlock(() -> throwIfFatalException() && isDone.getAsBoolean());
+     }
+ 
+@@ -1532,7 +_,10 @@
+ 
+     @Override
+     public boolean pollTask() {
+-        boolean flag = this.packetProcessor.executeSinglePacket() | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks
++        if (io.evangelium.server.threading.IntraRegion.inParallelPhase()) {
++            return false; // Evangelium - no server tasks inside an intra-region parallel phase (owner or helper), e.g. a managedBlock on a helper
++        }
++        boolean flag = (!io.evangelium.server.threading.EvangeliumServerTickThread.isEvangeliumServerTickThread() && this.packetProcessor.executeSinglePacket()) | this.pollTaskInternal(); // Paper - improve tick loop - process packets while waiting inbetween ticks // Evangelium - main thread packets only on the main thread: on a tick thread waiting in managedBlock they failed with RunningOnDifferentThreadException and were queued again
+         this.mayHaveDelayedTasks = flag;
+         return flag;
+     }
+@@ -1622,7 +_,9 @@
+                     this.autoSave();
+                 }
+ 
++                MinecraftServer.isBukkitSchedulerHearbeat = true; // EvangeliumServer
+                 this.server.getScheduler().mainThreadHeartbeat(); // CraftBukkit
++                MinecraftServer.isBukkitSchedulerHearbeat = false; // EvangeliumServer
+                 // Paper start - avoid issues with certain tasks not processing during sleep
+                 Runnable task;
+                 while ((task = this.processQueue.poll()) != null) {
+@@ -1630,7 +_,7 @@
+                 }
+                 for (final ServerLevel level : this.levels.values()) {
+                     // process unloads
+-                    level.getChunkSource().tick(() -> true, false);
++                    level.getChunkSource().tick(() -> true, false).join(); // EvangeliumServer - run async
+                 }
+                 // Paper end - avoid issues with certain tasks not processing during sleep
+                 this.server.spark.executeMainThreadTasks(); // Paper - spark
+@@ -1700,7 +_,9 @@
+         this.tickFrame.start();
+         // Paper - improve tick loop - moved into runAllTasksAtTickStart
+         this.runAllTasksAtTickStart(); // Paper - improve tick loop
++        io.evangelium.server.threading.OnDemandRegionAccess.beginServerTick(); // Evangelium - plugin compatibility: the Server thread may take the world during the tick
+         this.tickServer(sprinting ? () -> false : this::haveTime);
++        io.evangelium.server.threading.OnDemandRegionAccess.endServerTick(); // Evangelium - plugin compatibility: gives back the world, not held across the sleep
+         // Paper start - rewrite chunk system
+         final Throwable crash = this.chunkSystemCrash;
+         if (crash != null) {
+@@ -1787,18 +_,23 @@
+     public final io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList entitySchedulerTickList = new io.papermc.paper.threadedregions.EntityScheduler.EntitySchedulerTickList(); // Paper - optimise Folia entity scheduler
+ 
+     protected void tickChildren(BooleanSupplier hasTimeLeft) {
++        final long evangeliumTickStart = System.nanoTime(); // Evangelium - tick timings
+         ProfilerFiller profilerFiller = Profiler.get();
+         this.getPlayerList().getPlayers().forEach(serverPlayer1 -> serverPlayer1.connection.suspendFlushing());
++        MinecraftServer.isBukkitSchedulerHearbeat = true; // EvangeliumServer
+         this.server.getScheduler().mainThreadHeartbeat(); // CraftBukkit
++        MinecraftServer.isBukkitSchedulerHearbeat = false; // EvangeliumServer
+         // Paper start - optimise Folia entity scheduler
+-        ((io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler)org.bukkit.Bukkit.getGlobalRegionScheduler()).tick();
+-        for (io.papermc.paper.threadedregions.EntityScheduler scheduler : this.entitySchedulerTickList.getAllSchedulers()) {
+-            if (scheduler.isRetired()) {
+-                continue;
+-            }
+-
+-            scheduler.executeTick();
+-        }
++        // ((io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler)org.bukkit.Bukkit.getGlobalRegionScheduler()).tick(); // EvangeliumServer - moved global scheduler down
++        // EvangeliumServer start - moved to EvangeliumServerChunkTicker
++//        for (io.papermc.paper.threadedregions.EntityScheduler scheduler : this.entitySchedulerTickList.getAllSchedulers()) {
++//            if (scheduler.isRetired()) {
++//                continue;
++//            }
++//
++//            scheduler.executeTick();
++//        }
++        // EvangeliumServer end - moved to EvangeliumServerChunkTicker
+         // Paper end - optimise Folia entity scheduler
+         io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.ADVENTURE_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
+         io.papermc.paper.adventure.providers.ClickCallbackProviderImpl.DIALOG_CLICK_MANAGER.handleQueue(this.tickCount); // Paper
+@@ -1834,7 +_,26 @@
+             }
+         }
+ 
++        profilerFiller.popPush("connection"); // EvangeliumServer - moved up
++        this.tickConnection(); // EvangeliumServer - moved up
++        // EvangeliumServer start - some players aren't registered in their level if they're dead, let's manually add a task for them to process them
++        for (ServerPlayer player : this.playerList.getPlayers()) {
++            if (player.isRemoved()) {
++                EvangeliumServer.runSync((ServerLevel) player.level(), player.chunkPosition(), () -> {
++                    if (TickThread.isTickThreadFor(player)) {
++                        player.getBukkitEntity().taskScheduler.executeTick();
++                        EvangeliumServerPlayerTicker.tickPlayer(player);
++                    }
++                });
++            }
++        }
++        // EvangeliumServer end
++
++        final long evangeliumWorldsStart = System.nanoTime(); // Evangelium - tick timings
++        io.evangelium.server.util.TickTimings.add(io.evangelium.server.util.TickTimings.Phase.MAIN_BEFORE_WORLDS, evangeliumWorldsStart - evangeliumTickStart); // Evangelium - tick timings
++        io.evangelium.server.threading.OnDemandRegionAccess.setWorldsTicking(true); // Evangelium - plugin compatibility: from here the regions own the world
+         this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
++        List<CompletableFuture<Void>> futures = new ArrayList<>(); // EvangeliumServer - tick worlds async
+         for (ServerLevel serverLevel : this.getAllLevels()) {
+             serverLevel.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
+             serverLevel.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
+@@ -1853,7 +_,11 @@
+             profilerFiller.push("tick");
+ 
+             try {
+-                serverLevel.tick(hasTimeLeft);
++                final long evangeliumWorldStart = System.nanoTime(); // Evangelium - tick timings
++                futures.add(CompletableFuture.supplyAsync(() -> serverLevel.tickAsync(hasTimeLeft), serverLevel.levelThread).thenCompose(v -> v).thenRun(() -> { // EvangeliumServer - tick worlds async
++                    io.evangelium.server.util.TickTimings.add(io.evangelium.server.util.TickTimings.Phase.WORLD, System.nanoTime() - evangeliumWorldStart); // Evangelium - tick timings
++                    serverLevel.explosionDensityCache.clear(); // Paper - Optimize explosions // EvangeliumServer - moved up from below
++                })); // EvangeliumServer
+             } catch (Throwable var7) {
+                 CrashReport crashReport = CrashReport.forThrowable(var7, "Exception ticking world");
+                 serverLevel.fillReportDetails(crashReport);
+@@ -1862,12 +_,23 @@
+ 
+             profilerFiller.pop();
+             profilerFiller.pop();
+-            serverLevel.explosionDensityCache.clear(); // Paper - Optimize explosions
++            // serverLevel.explosionDensityCache.clear(); // Paper - Optimize explosions // EvangeliumServer - moved up
+         }
+         this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
+ 
+-        profilerFiller.popPush("connection");
+-        this.tickConnection();
++        // EvangeliumServer start - tick worlds async
++        ((io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler) org.bukkit.Bukkit.getGlobalRegionScheduler()).tick(); // Run global region scheduler async to world ticking
++        for (CompletableFuture<Void> future : futures) {
++            this.managedBlock(future::isDone);
++            future.join();
++        }
++        io.evangelium.server.threading.OnDemandRegionAccess.setWorldsTicking(false); // Evangelium - plugin compatibility
++        // EvangeliumServer end - tick worlds async
++        final long evangeliumWorldsEnd = System.nanoTime(); // Evangelium - tick timings
++        io.evangelium.server.util.TickTimings.add(io.evangelium.server.util.TickTimings.Phase.WAIT_FOR_WORLDS, evangeliumWorldsEnd - evangeliumWorldsStart); // Evangelium - tick timings
++
++        // profilerFiller.popPush("connection"); // EvangeliumServer - move up
++        // this.tickConnection(); // EvangeliumServer - move up
+         profilerFiller.popPush("players");
+         this.playerList.tick();
+         profilerFiller.popPush("debugSubscribers");
+@@ -1887,11 +_,17 @@
+ 
+         for (ServerPlayer serverPlayer : this.playerList.getPlayers()) {
+             serverPlayer.connection.chunkSender.sendNextChunks(serverPlayer);
++            serverPlayer.connection.keepConnectionAlive(); // EvangeliumServer - send the ping packet right before flushing
+             serverPlayer.connection.resumeFlushing();
+         }
+ 
+         profilerFiller.pop();
+         this.serverActivityMonitor.tick();
++        // Evangelium start - tick timings
++        final long evangeliumTickEnd = System.nanoTime();
++        io.evangelium.server.util.TickTimings.add(io.evangelium.server.util.TickTimings.Phase.MAIN_AFTER_WORLDS, evangeliumTickEnd - evangeliumWorldsEnd);
++        io.evangelium.server.util.TickTimings.endTick(evangeliumTickEnd - evangeliumTickStart);
++        // Evangelium end - tick timings
+     }
+ 
+     // Paper start - per world respawn data - read "server global" respawn data from overworld dimension reference
+@@ -2342,6 +_,7 @@
+                     );
+                     this.worldData.setDataConfiguration(worldDataConfiguration);
+                     this.resources.managers.updateStaticRegistryTags();
++                    io.evangelium.server.player.RegistrySyncCache.invalidate(); // Evangelium - datapack reload: rebuild the cached configuration packets
+                     this.resources.managers.getRecipeManager().finalizeRecipeLoading(this.worldData.enabledFeatures());
+                     this.potionBrewing = this.potionBrewing.reload(this.worldData.enabledFeatures()); // Paper - Custom Potion Mixes
+                     if (Thread.currentThread() != this.serverThread) return; // Paper

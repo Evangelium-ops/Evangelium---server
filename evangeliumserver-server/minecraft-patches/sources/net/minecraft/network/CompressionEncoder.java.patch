@@ -1,0 +1,58 @@
+--- a/net/minecraft/network/CompressionEncoder.java
++++ b/net/minecraft/network/CompressionEncoder.java
+@@ -88,11 +_,55 @@
+             // - Uncompressed
+             //    This is fairly obvious - we will then have one more than the uncompressed size.
+             final int initialBufferSize = msg.readableBytes() + 1;
++            // EvangeliumServer start - write each packet once: room for the frame length in front
++            if (io.evangelium.server.network.PacketFraming.IN_PLACE) {
++                final ByteBuf out = com.velocitypowered.natives.util.MoreByteBufUtils.preferredBuffer(ctx.alloc(), this.compressor, initialBufferSize + Varint21LengthFieldPrepender.MAX_VARINT21_BYTES);
++                out.setIndex(Varint21LengthFieldPrepender.MAX_VARINT21_BYTES, Varint21LengthFieldPrepender.MAX_VARINT21_BYTES);
++                return out;
++            }
++            // EvangeliumServer end - write each packet once
+             return com.velocitypowered.natives.util.MoreByteBufUtils.preferredBuffer(ctx.alloc(), this.compressor, initialBufferSize);
+         }
+ 
++        // EvangeliumServer start - write each packet once: room for the frame length in front
++        if (io.evangelium.server.network.PacketFraming.IN_PLACE) {
++            final int initialBufferSize = msg.readableBytes() + 1 + Varint21LengthFieldPrepender.MAX_VARINT21_BYTES;
++            final ByteBuf out = preferDirect ? ctx.alloc().ioBuffer(initialBufferSize) : ctx.alloc().heapBuffer(initialBufferSize);
++            out.setIndex(Varint21LengthFieldPrepender.MAX_VARINT21_BYTES, Varint21LengthFieldPrepender.MAX_VARINT21_BYTES);
++            return out;
++        }
++        // EvangeliumServer end - write each packet once
+         return super.allocateBuffer(ctx, msg, preferDirect);
+     }
++
++    // EvangeliumServer start - write each packet once: below the threshold the data length 0 goes into the room in front of the packet
++    @Override
++    public void write(ChannelHandlerContext ctx, Object msg, io.netty.channel.ChannelPromise promise) throws Exception {
++        if (io.evangelium.server.network.PacketFraming.IN_PLACE && msg instanceof ByteBuf buf) {
++            final int i = buf.readableBytes();
++            if (i < this.threshold && io.evangelium.server.network.PacketFraming.hasOwnHeadroom(buf, 1)) {
++                ByteBuf expected = null;
++                if (io.evangelium.server.network.PacketFraming.VERIFY) {
++                    expected = ctx.alloc().buffer(i + 1);
++                    this.encode(ctx, buf.duplicate(), expected);
++                }
++                io.evangelium.server.network.PacketFraming.prependVarInt(buf, 0, 1);
++                if (expected != null) {
++                    io.evangelium.server.network.PacketFraming.FRAME_VERIFIED.increment();
++                    io.evangelium.server.network.PacketFraming.compare("compress-raw", expected, buf, i);
++                    expected.release();
++                }
++                if (io.evangelium.server.network.PacketFraming.STATS) io.evangelium.server.network.PacketFraming.COMPRESS_RAW_IN_PLACE.increment();
++                ctx.write(buf, promise);
++                return;
++            }
++            if (io.evangelium.server.network.PacketFraming.STATS) {
++                (i < this.threshold ? io.evangelium.server.network.PacketFraming.COMPRESS_RAW_COPY : io.evangelium.server.network.PacketFraming.COMPRESS_DEFLATE).increment();
++            }
++        }
++        super.write(ctx, msg, promise);
++    }
++    // EvangeliumServer end - write each packet once
+ 
+     @Override
+     public void handlerRemoved(ChannelHandlerContext ctx) {

@@ -1,5 +1,5 @@
-import io.multipaper.shreddedpaper.ticks.LegacyChunkTicks;
-import io.multipaper.shreddedpaper.ticks.LegacyLevelTicks;
+import io.evangelium.server.ticks.LegacyChunkTicks;
+import io.evangelium.server.ticks.LegacyLevelTicks;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;

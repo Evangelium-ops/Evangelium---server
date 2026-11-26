@@ -1,0 +1,337 @@
+--- a/net/minecraft/world/level/chunk/LevelChunkSection.java
++++ b/net/minecraft/world/level/chunk/LevelChunkSection.java
+@@ -18,6 +_,25 @@
+     private short tickingBlockCount;
+     private short tickingFluidCount;
+     public final PalettedContainer<BlockState> states;
++    // Evangelium start - fluid counts: entity fluid checks skip sections without the fluid they look for (PhysicsOptimizations)
++    public short evangelium$fluidCount, evangelium$waterCount, evangelium$lavaCount;
++    private void evangelium$countFluid(final FluidState fluid, final int delta) {
++        if (fluid.isEmpty()) return;
++        this.evangelium$fluidCount += (short)delta;
++        final net.minecraft.world.level.material.Fluid type = fluid.getType();
++        if (type == net.minecraft.world.level.material.Fluids.WATER || type == net.minecraft.world.level.material.Fluids.FLOWING_WATER) this.evangelium$waterCount += (short)delta;
++        else if (type == net.minecraft.world.level.material.Fluids.LAVA || type == net.minecraft.world.level.material.Fluids.FLOWING_LAVA) this.evangelium$lavaCount += (short)delta;
++    }
++    private static int evangelium$fluidKind(final FluidState fluid) { // 0 none, 1 water, 2 lava, 3 other: the counts only change with the kind
++        if (fluid.isEmpty()) return 0;
++        final net.minecraft.world.level.material.Fluid type = fluid.getType();
++        if (type == net.minecraft.world.level.material.Fluids.WATER || type == net.minecraft.world.level.material.Fluids.FLOWING_WATER) return 1;
++        if (type == net.minecraft.world.level.material.Fluids.LAVA || type == net.minecraft.world.level.material.Fluids.FLOWING_LAVA) return 2;
++        return 3;
++    }
++    // Evangelium end
++    public int evangelium$waterLayers = -1; // Evangelium - natural spawn skip: bit y set = layer y may hold water (-1 = not scanned yet; bits are only added, see SpawnSkip)
++    public int evangelium$changes; // Evangelium - counts block changes, so a resting entity can tell its surroundings are unchanged (Entity resting cache)
+     private PalettedContainer<Holder<Biome>> biomes; // CraftBukkit - read/write
+ 
+     // Paper start - block counting
+@@ -31,7 +_,46 @@
+     private boolean isClient;
+     private static final short CLIENT_FORCED_SPECIAL_COLLIDING_BLOCKS = (short)9999;
+     private short specialCollidingBlocks;
+-    private final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = new ca.spottedleaf.moonrise.common.list.ShortList();
++    // Evangelium start - ticking-block set: list or 4096 bits, nothing while the section has no randomly ticking block
++    // null, short[] list or long[] bits (TickingBlockSet); Moonrise's ShortList when the switch is off (one field for both keeps the section at 48 bytes)
++    private Object evangelium$tickingData = io.evangelium.server.util.TickingBlockSet.ENABLED ? null : new ca.spottedleaf.moonrise.common.list.ShortList();
++
++    /** Moonrise's list: the data itself with the switch off, a side copy in verify mode, else null. */
++    private ca.spottedleaf.moonrise.common.list.ShortList evangelium$oldList() {
++        if (!io.evangelium.server.util.TickingBlockSet.ENABLED) return (ca.spottedleaf.moonrise.common.list.ShortList)this.evangelium$tickingData;
++        return io.evangelium.server.util.TickingBlockVerify.VERIFY ? io.evangelium.server.util.TickingBlockVerify.oldList(this) : null;
++    }
++    private short evangelium$tickingSize; // kept here so a random tick try that hits nothing reads only the section
++
++    /** The position (x | z << 4 | y << 8) to random tick for r in [0, 4096), or -1 (each ticking block has chance 1/4096). */
++    public final int evangelium$pickTicking(final int r) {
++        final int size = this.evangelium$tickingSize;
++        return r >= size ? -1 : io.evangelium.server.util.TickingBlockSet.get(this.evangelium$tickingData, size, r);
++    }
++
++    private void evangelium$addTicking(final short position) {
++        final int size = this.evangelium$tickingSize;
++        final Object data = this.evangelium$tickingData;
++        if (io.evangelium.server.util.TickingBlockSet.contains(data, size, position)) return;
++        if (io.evangelium.server.util.TickingBlockVerify.PLANT_BUG > 0 && io.evangelium.server.util.TickingBlockVerify.plantBug()) return; // verify self-test only
++        this.evangelium$tickingData = io.evangelium.server.util.TickingBlockSet.addNew(data, size, position);
++        this.evangelium$tickingSize = (short)(size + 1);
++    }
++
++    private void evangelium$removeTicking(final short position) {
++        final int size = this.evangelium$tickingSize;
++        final Object data = this.evangelium$tickingData;
++        if (!io.evangelium.server.util.TickingBlockSet.contains(data, size, position)) return;
++        this.evangelium$tickingData = io.evangelium.server.util.TickingBlockSet.remove(data, size, position);
++        this.evangelium$tickingSize = (short)(size - 1);
++    }
++
++    /** Verify mode: the set against the block states themselves (catches update paths that both old and new structures miss). */
++    public final void evangelium$verifyTickingTruth() {
++        if (this.isClient) return;
++        io.evangelium.server.util.TickingBlockVerify.truth(this.states, this.evangelium$tickingData, this.evangelium$tickingSize, this.tickingBlockCount);
++    }
++    // Evangelium end - ticking-block set
+ 
+     @Override
+     public final boolean moonrise$hasSpecialCollidingBlocks() {
+@@ -40,7 +_,7 @@
+ 
+     @Override
+     public final ca.spottedleaf.moonrise.common.list.ShortList moonrise$getTickingBlockList() {
+-        return this.tickingBlocks;
++        return this.evangelium$oldList(); // Evangelium - null with the ticking-block set (outside verify mode)
+     }
+     // Paper end - block counting
+ 
+@@ -48,6 +_,7 @@
+         this.nonEmptyBlockCount = section.nonEmptyBlockCount;
+         this.tickingBlockCount = section.tickingBlockCount;
+         this.tickingFluidCount = section.tickingFluidCount;
++        this.evangelium$fluidCount = section.evangelium$fluidCount; this.evangelium$waterCount = section.evangelium$waterCount; this.evangelium$lavaCount = section.evangelium$lavaCount; // Evangelium
+         this.states = section.states.copy();
+         this.biomes = section.biomes.copy();
+     }
+@@ -116,14 +_,17 @@
+         final boolean oldTicking = oldState.isRandomlyTicking();
+         final boolean newTicking = newState.isRandomlyTicking();
+         if (oldTicking != newTicking) {
+-            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.evangelium$oldList();
+             final short position = (short)(x | (z << 4) | (y << (4+4)));
+ 
+             if (oldTicking) {
+-                tickingBlocks.remove(position);
++                if (tickingBlocks != null) tickingBlocks.remove(position); // Evangelium - null with the ticking-block set
++                if (io.evangelium.server.util.TickingBlockSet.ENABLED) this.evangelium$removeTicking(position); // Evangelium
+             } else {
+-                tickingBlocks.add(position);
++                if (tickingBlocks != null) tickingBlocks.add(position); // Evangelium - null with the ticking-block set
++                if (io.evangelium.server.util.TickingBlockSet.ENABLED) this.evangelium$addTicking(position); // Evangelium
+             }
++            if (io.evangelium.server.util.TickingBlockVerify.VERIFY) io.evangelium.server.util.TickingBlockVerify.compare(tickingBlocks, this.evangelium$tickingData, this.evangelium$tickingSize, this.tickingBlockCount, "set"); // Evangelium
+         }
+     }
+     // Paper end - block counting
+@@ -136,6 +_,7 @@
+             blockState = this.states.getAndSetUnchecked(x, y, z, state);
+         }
+ 
++        if (blockState != state) this.evangelium$changes++; // Evangelium - resting cache
+         FluidState fluidState = blockState.getFluidState();
+         FluidState fluidState1 = state.getFluidState();
+         if (!blockState.isAir()) {
+@@ -148,6 +_,7 @@
+         if (!!fluidState.isRandomlyTicking()) { // Paper - block counting
+             this.tickingFluidCount--;
+         }
++        if (fluidState != fluidState1 && evangelium$fluidKind(fluidState) != evangelium$fluidKind(fluidState1)) { this.evangelium$countFluid(fluidState, -1); this.evangelium$countFluid(fluidState1, 1); } // Evangelium - level changes of flowing water/lava keep the counts
+ 
+         if (!state.isAir()) {
+             this.nonEmptyBlockCount++;
+@@ -181,6 +_,136 @@
+         return this.tickingFluidCount > 0;
+     }
+ 
++    // EvangeliumServer start - count with plain arrays
++    private static final ThreadLocal<int[]> RECALC_IDS = ThreadLocal.withInitial(() -> new int[16 * 16 * 16]);
++
++    // same counts as the map version; the ticking positions end up in position order instead of palette-map order
++    private void recalcBlockCountsSmallPalette(final Palette<BlockState> palette, final int paletteSize, final net.minecraft.util.BitStorage storage) {
++        // EvangeliumServer start - count only air when nothing else in the palette needs counting or positions
++        if (storage instanceof net.minecraft.util.SimpleBitStorage simple && countAirOnly()) {
++            boolean onlyAirMatters = true;
++            for (int id = 0; id < paletteSize; ++id) {
++                final BlockState state = palette.valueFor(id);
++                if (!state.isAir() && (state.isRandomlyTicking() || ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isSpecialCollidingBlock(state)
++                    || (!state.getFluidState().isEmpty() && state.getFluidState().isRandomlyTicking()))) {
++                    onlyAirMatters = false;
++                    break;
++                }
++            }
++            if (onlyAirMatters) {
++                int air = 0;
++                for (int id = 0; id < paletteSize; ++id) {
++                    if (palette.valueFor(id).isAir()) {
++                        air += countValue(simple, id);
++                    }
++                }
++                this.nonEmptyBlockCount = (short)(16 * 16 * 16 - air);   // ticking, fluid and special counts stay 0, no ticking positions
++                for (int id = 0; id < paletteSize; ++id) {   // Evangelium fluid counts (water/lava per section) as in the full count below
++                    final FluidState fluid = palette.valueFor(id).getFluidState();
++                    if (!fluid.isEmpty()) {
++                        this.evangelium$countFluid(fluid, countValue(simple, id));
++                    }
++                }
++                return;
++            }
++        }
++        // EvangeliumServer end - count only air when nothing else in the palette needs counting or positions
++        final int[] ids = RECALC_IDS.get();
++        storage.unpack(ids);
++        final int[] counts = new int[256];
++        for (final int id : ids) {
++            ++counts[id];
++        }
++        boolean[] ticking = null;
++        int tickingTotal = 0;
++        for (int id = 0; id < 256; ++id) {
++            final int paletteCount = counts[id];
++            if (paletteCount == 0) {
++                continue;
++            }
++            final BlockState state = palette.valueFor(id);
++            if (state.isAir()) {
++                continue;
++            }
++            if (ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isSpecialCollidingBlock(state)) {
++                this.specialCollidingBlocks += (short)paletteCount;
++            }
++            this.nonEmptyBlockCount += (short)paletteCount;
++            if (state.isRandomlyTicking()) {
++                this.tickingBlockCount += (short)paletteCount;
++                if (ticking == null) {
++                    ticking = new boolean[256];
++                }
++                ticking[id] = true;
++                tickingTotal += paletteCount;
++            }
++            final FluidState fluid = state.getFluidState();
++            if (!fluid.isEmpty() && fluid.isRandomlyTicking()) {
++                this.tickingFluidCount += (short)paletteCount;
++            }
++            this.evangelium$countFluid(fluid, paletteCount); // Evangelium
++        }
++        if (ticking != null) {
++            final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.evangelium$oldList();
++            if (tickingBlocks != null) { // Evangelium - null with the ticking-block set
++            tickingBlocks.setMinCapacity(tickingTotal);
++            for (int index = 0; index < ids.length; ++index) {
++                if (ticking[ids[index]]) {
++                    tickingBlocks.add((short)index);
++                }
++            }
++            } // Evangelium
++            // Evangelium start - ticking-block set
++            if (io.evangelium.server.util.TickingBlockSet.ENABLED) {
++                Object data = io.evangelium.server.util.TickingBlockSet.withCapacity(tickingTotal);
++                int size = 0;
++                for (int index = 0; index < ids.length; ++index) {
++                    if (ticking[ids[index]]) {
++                        data = io.evangelium.server.util.TickingBlockSet.addNew(data, size++, index);
++                    }
++                }
++                this.evangelium$tickingData = data;
++                this.evangelium$tickingSize = (short)size;
++            }
++            if (io.evangelium.server.util.TickingBlockVerify.VERIFY) io.evangelium.server.util.TickingBlockVerify.compare(tickingBlocks, this.evangelium$tickingData, this.evangelium$tickingSize, this.tickingBlockCount, "recalc");
++            // Evangelium end - ticking-block set
++        }
++    }
++    // EvangeliumServer end - count with plain arrays
++
++    // EvangeliumServer start - count only air when nothing else in the palette needs counting or positions
++    private static final boolean COUNT_AIR_ONLY = io.evangelium.server.util.DevSwitch.on("fast-section-block-counts");
++
++    private static boolean countAirOnly() {
++        return COUNT_AIR_ONLY && io.evangelium.server.config.EvangeliumServerConfiguration.get() != null;
++    }
++
++    // how many of the storage's entries equal value, straight on the packed longs (SWAR: a field is non-zero after xor with the
++    // value iff its top bit is set in ((x & low) + low) | x, where low holds every bit of a field except its top bit)
++    static int countValue(final net.minecraft.util.SimpleBitStorage storage, final int value) {
++        final int bits = storage.getBits();
++        final int perLong = 64 / bits;
++        long low = 0L, top = 0L, pattern = 0L;
++        for (int i = 0; i < perLong; ++i) {
++            low |= ((1L << (bits - 1)) - 1L) << (i * bits);
++            top |= 1L << (i * bits + bits - 1);
++            pattern |= ((long)value) << (i * bits);
++        }
++        final long[] raw = storage.getRaw();
++        int remaining = storage.getSize();
++        int count = 0;
++        for (int w = 0; w < raw.length && remaining > 0; ++w) {
++            final int fields = Math.min(perLong, remaining);
++            final long fieldTops = fields == perLong ? top : top & ((1L << (fields * bits)) - 1L);
++            final long x = raw[w] ^ pattern;
++            final long nonZero = (((x & low) + low) | x) & fieldTops;
++            count += fields - Long.bitCount(nonZero);
++            remaining -= fields;
++        }
++        return count;
++    }
++    // EvangeliumServer end - count only air when nothing else in the palette needs counting or positions
++
+     public void recalcBlockCounts() {
+         // Paper start - block counting
+         // reset, then recalculate
+@@ -188,7 +_,10 @@
+         this.tickingBlockCount = (short)0;
+         this.tickingFluidCount = (short)0;
+         this.specialCollidingBlocks = (short)0;
+-        this.tickingBlocks.clear();
++        this.evangelium$fluidCount = this.evangelium$waterCount = this.evangelium$lavaCount = (short)0; // Evangelium
++        final ca.spottedleaf.moonrise.common.list.ShortList oldTickingList = this.evangelium$oldList(); // Evangelium - null with the ticking-block set
++        if (oldTickingList != null) oldTickingList.clear();
++        if (io.evangelium.server.util.TickingBlockSet.ENABLED) { this.evangelium$tickingData = null; this.evangelium$tickingSize = 0; } // Evangelium - ticking-block set
+ 
+         if (this.maybeHas((final BlockState state) -> !state.isAir())) {
+             final PalettedContainer.Data<BlockState> data = this.states.data;
+@@ -196,6 +_,12 @@
+             final int paletteSize = palette.getSize();
+             final net.minecraft.util.BitStorage storage = data.storage();
+ 
++            // EvangeliumServer start - count with plain arrays and collect positions only for randomly ticking states
++            if (paletteSize > 1 && paletteSize <= 256 && storage.getSize() == 16 * 16 * 16) {
++                this.recalcBlockCountsSmallPalette(palette, paletteSize, storage);
++                return;
++            }
++            // EvangeliumServer end - count with plain arrays
+             final it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<it.unimi.dsi.fastutil.shorts.ShortArrayList> counts;
+             if (paletteSize == 1) {
+                 counts = new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(1);
+@@ -225,17 +_,35 @@
+                     final short[] raw = coordinates.elements();
+                     final int rawLen = raw.length;
+ 
+-                    final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.tickingBlocks;
++                    final ca.spottedleaf.moonrise.common.list.ShortList tickingBlocks = this.evangelium$oldList();
+ 
++                    if (tickingBlocks != null) { // Evangelium - null with the ticking-block set
+                     tickingBlocks.setMinCapacity(Math.min((rawLen + tickingBlocks.size()) * 3 / 2, 16*16*16));
+ 
+                     java.util.Objects.checkFromToIndex(0, paletteCount, raw.length);
+                     for (int i = 0; i < paletteCount; ++i) {
+                         tickingBlocks.add(raw[i]);
+                     }
++                    } // Evangelium
++                    // Evangelium start - ticking-block set
++                    if (io.evangelium.server.util.TickingBlockSet.ENABLED) {
++                        int tickSize = this.evangelium$tickingSize;
++                        Object tickData = this.evangelium$tickingData;
++                        if (tickData == null) {
++                            tickData = io.evangelium.server.util.TickingBlockSet.withCapacity(paletteCount);
++                        }
++                        java.util.Objects.checkFromToIndex(0, paletteCount, raw.length);
++                        for (int i = 0; i < paletteCount; ++i) {
++                            tickData = io.evangelium.server.util.TickingBlockSet.addNew(tickData, tickSize++, raw[i] & 0xFFFF);
++                        }
++                        this.evangelium$tickingData = tickData;
++                        this.evangelium$tickingSize = (short)tickSize;
++                    }
++                    // Evangelium end - ticking-block set
+                 }
+ 
+                 final FluidState fluid = state.getFluidState();
++                this.evangelium$countFluid(fluid, paletteCount); // Evangelium
+ 
+                 if (!fluid.isEmpty()) {
+                     //this.nonEmptyBlockCount += count; // fix vanilla bug: make non-empty block count correct
+@@ -244,6 +_,7 @@
+                     }
+                 }
+             }
++            if (io.evangelium.server.util.TickingBlockVerify.VERIFY) io.evangelium.server.util.TickingBlockVerify.compare(this.evangelium$oldList(), this.evangelium$tickingData, this.evangelium$tickingSize, this.tickingBlockCount, "recalc"); // Evangelium
+         }
+         // Paper end - block counting
+     }

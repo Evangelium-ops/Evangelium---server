@@ -1,0 +1,21 @@
+--- a/net/minecraft/world/entity/ai/memory/ExpirableValue.java
++++ b/net/minecraft/world/entity/ai/memory/ExpirableValue.java
+@@ -36,6 +_,18 @@
+         return this.value;
+     }
+ 
++    // Evangelium start - the Optional view of the (final) value, made once: brains read memories many times per tick
++    private Optional<T> evangelium$optional;
++
++    public Optional<T> evangelium$optional() {
++        Optional<T> optional = this.evangelium$optional;
++        if (optional == null) {
++            this.evangelium$optional = optional = Optional.ofNullable(this.value);
++        }
++        return optional;
++    }
++    // Evangelium end
++
+     public boolean hasExpired() {
+         return this.timeToLive <= 0L;
+     }

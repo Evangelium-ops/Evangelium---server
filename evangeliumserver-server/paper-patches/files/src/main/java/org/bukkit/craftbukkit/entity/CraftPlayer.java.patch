@@ -1,0 +1,104 @@
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+@@ -1,5 +_,6 @@
+ package org.bukkit.craftbukkit.entity;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
+ import com.destroystokyo.paper.event.player.PlayerSetSpawnEvent;
+ import com.google.common.base.Preconditions;
+ import com.google.common.collect.ImmutableList;
+@@ -8,6 +_,7 @@
+ import com.mojang.authlib.GameProfile;
+ import com.mojang.datafixers.util.Pair;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.config.EvangeliumServerConfiguration;
+ import io.papermc.paper.FeatureHooks;
+ import io.papermc.paper.connection.PlayerGameConnection;
+ import io.papermc.paper.connection.PluginMessageBridgeImpl;
+@@ -1457,9 +_,12 @@
+             return CraftLocation.toBukkit(respawnData.pos(), world, respawnData.yaw(), respawnData.pitch());
+         }
+ 
+-        return ServerPlayer.findRespawnAndUseSpawnBlock(world, respawnConfig, false)
+-            .map(pos -> CraftLocation.toBukkit(pos.position(), world, pos.yaw(), pos.pitch()))
+-            .orElse(null);
++        // EvangeliumServer start - can't get respawn location sync
++        throw new UnsupportedOperationException("Cannot get respawn location synchronously");
++        // return ServerPlayer.findRespawnAndUseSpawnBlock(world, respawnConfig, false)
++        //     .map(pos -> CraftLocation.toBukkit(pos.position(), world, pos.yaw(), pos.pitch()))
++        //     .orElse(null);
++        // EvangeliumServer end - can't get respawn location sync
+     }
+ 
+     @Override
+@@ -1957,7 +_,7 @@
+     private void unregisterEntity(Entity other) {
+         // Paper end
+         ChunkMap tracker = ((ServerLevel) this.getHandle().level()).getChunkSource().chunkMap;
+-        ChunkMap.TrackedEntity entry = tracker.entityMap.get(other.getId());
++        ChunkMap.TrackedEntity entry = other.moonrise$getTrackedEntity(); // tracker.entityMap.get(other.getId()); // EvangeliumServer - don't use map
+         if (entry != null) {
+             entry.removePlayer(this.getHandle());
+         }
+@@ -2046,7 +_,7 @@
+             if (original != null) otherPlayer.setUUID(original); // Paper - uuid override
+         }
+ 
+-        ChunkMap.TrackedEntity entry = tracker.entityMap.get(other.getId());
++        ChunkMap.TrackedEntity entry = other.moonrise$getTrackedEntity(); // tracker.entityMap.get(other.getId()); // EvangeliumServer - don't use map
+         if (entry != null && !entry.seenBy.contains(this.getHandle().connection)) {
+             entry.updatePlayer(this.getHandle());
+         }
+@@ -2131,15 +_,18 @@
+ 
+     @Override
+     public boolean canSee(Player player) {
++        if (EvangeliumServerConfiguration.get().optimizations.disableVanishApi) return true; // EvangeliumServer - optimize canSee
+         return this.canSee((org.bukkit.entity.Entity) player);
+     }
+ 
+     @Override
+     public boolean canSee(org.bukkit.entity.Entity entity) {
++        if (EvangeliumServerConfiguration.get().optimizations.disableVanishApi) return true; // EvangeliumServer - optimize canSee
+         return this.equals(entity) || entity.isVisibleByDefault() ^ this.invertedVisibilityEntities.containsKey(entity.getUniqueId()); // SPIGOT-7312: Can always see self
+     }
+ 
+     public boolean canSeePlayer(UUID uuid) {
++        if (EvangeliumServerConfiguration.get().optimizations.disableVanishApi) return true; // EvangeliumServer - optimize canSee
+         org.bukkit.entity.Entity entity = this.getServer().getPlayer(uuid);
+ 
+         return (entity != null) ? this.canSee(entity) : false; // If we can't find it, we can't see it
+@@ -3130,8 +_,9 @@
+         @Override
+         public void respawn() {
+             if (CraftPlayer.this.getHealth() <= 0 && CraftPlayer.this.isOnline()) {
+-                CraftPlayer.this.server.getServer().getPlayerList().respawn(CraftPlayer.this.getHandle(), false, Entity.RemovalReason.KILLED, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason.PLUGIN);
++                CraftPlayer.this.server.getServer().getPlayerList().respawnAsync(CraftPlayer.this.getHandle(), false, Entity.RemovalReason.KILLED, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason.PLUGIN).thenRun(() -> { // EvangeliumServer - async respawn
+                 CraftPlayer.this.getHandle().connection.restartClientLoadTimerAfterRespawn();
++                }); // EvangeliumServer - async respawn
+             }
+         }
+ 
+@@ -3261,19 +_,19 @@
+     // Paper start - Add chunk view API
+     @Override
+     public Set<java.lang.Long> getSentChunkKeys() {
+-        org.spigotmc.AsyncCatcher.catchOp("accessing sent chunks");
++        TickThread.ensureTickThread(this.getHandle(), "accessing sent chunks"); // EvangeliumServer
+         return FeatureHooks.getSentChunkKeys(this.getHandle());
+     }
+ 
+     @Override
+     public Set<org.bukkit.Chunk> getSentChunks() {
+-        org.spigotmc.AsyncCatcher.catchOp("accessing sent chunks");
++        TickThread.ensureTickThread(this.getHandle(), "accessing sent chunks"); // EvangeliumServer
+         return FeatureHooks.getSentChunks(this.getHandle());
+     }
+ 
+     @Override
+     public boolean isChunkSent(final long chunkKey) {
+-        org.spigotmc.AsyncCatcher.catchOp("accessing sent chunks");
++        TickThread.ensureTickThread(this.getHandle(), "accessing sent chunks"); // EvangeliumServer
+         return FeatureHooks.isChunkSent(this.getHandle(), chunkKey);
+     }
+     // Paper end

@@ -1,0 +1,699 @@
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -1,11 +_,14 @@
+ package net.minecraft.world.entity;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.Sets;
+ import com.google.common.collect.ImmutableList.Builder;
+ import com.mojang.logging.LogUtils;
+ import com.mojang.serialization.Codec;
++import io.evangelium.server.EvangeliumServer;
++import io.evangelium.server.region.RegionPos;
+ import it.unimi.dsi.fastutil.floats.FloatArraySet;
+ import it.unimi.dsi.fastutil.floats.FloatArrays;
+ import it.unimi.dsi.fastutil.floats.FloatSet;
+@@ -24,6 +_,7 @@
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.atomic.AtomicInteger;
+ import java.util.function.BiConsumer;
+ import java.util.function.Predicate;
+@@ -148,6 +_,7 @@
+ import net.minecraft.world.scores.ScoreHolder;
+ import net.minecraft.world.scores.Team;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.bukkit.craftbukkit.util.CraftLocation;
+ import org.jetbrains.annotations.Contract;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+@@ -283,6 +_,8 @@
+     public double xOld;
+     public double yOld;
+     public double zOld;
++    public @Nullable ChunkPos previousTickingChunkPosRegion; // EvangeliumServer
++    public @Nullable ChunkPos previousTrackedChunkPosRegion; // EvangeliumServer
+     public float maxUpStep; // Purpur - Add option to set armorstand step height
+     public boolean noPhysics;
+     public final RandomSource random; // Paper - Share random for entities to make them more random // Add toggle for RNG manipulation
+@@ -330,6 +_,138 @@
+     public boolean wasInPowderSnow;
+     public Optional<BlockPos> mainSupportingBlockPos = Optional.empty();
+     private boolean onGroundNoBlocks = false;
++    // Evangelium start - resting cache: a mob standing still in a block area where nothing changed gets last tick's block answers
++    private net.minecraft.world.level.chunk.LevelChunkSection @Nullable [] evangelium$restSections; // null: no area taken
++    private final int[] evangelium$restVersions = new int[8];
++    private int evangelium$restCount;
++    private @Nullable Level evangelium$restLevel;
++    private double evangelium$restX, evangelium$restY, evangelium$restZ;
++    private @Nullable AABB evangelium$restBox;
++    private int evangelium$restSince;
++    private @Nullable Vec3 evangelium$restMoveIn, evangelium$restMoveOut;
++    private @Nullable AABB evangelium$restSupportBox;
++    private @Nullable Optional<BlockPos> evangelium$restSupport;
++    private boolean evangelium$restAir, evangelium$restNoFluid;
++    private static final boolean EVANGELIUM_RESTING_CACHE = io.evangelium.server.util.DevSwitch.on("resting-entity-cache");
++    private static final boolean EVANGELIUM_VERIFY_REST = Boolean.getBoolean("evangeliumserver.verifyRestCache"); // tests: recompute every cached answer and throw on a difference
++
++    private void evangelium$verifyRest(String what, Object cached, Object fresh) {
++        if (!java.util.Objects.equals(cached, fresh)) throw new IllegalStateException("resting cache " + what + " out of date for " + this + ": " + cached + " vs " + fresh);
++    }
++
++    /** Same level, same spot, same box, taken under a second ago, and no block of the sections around it changed since. */
++    private boolean evangelium$restValid() {
++        final net.minecraft.world.level.chunk.LevelChunkSection[] sections = this.evangelium$restSections;
++        if (sections == null || this.evangelium$restLevel != this.level
++            || this.position.x != this.evangelium$restX || this.position.y != this.evangelium$restY || this.position.z != this.evangelium$restZ
++            || !this.getBoundingBox().equals(this.evangelium$restBox)
++            || net.minecraft.server.MinecraftServer.currentTick - this.evangelium$restSince > 20) { // a fresh look every second, also for edits that bypass the section counter
++            return false;
++        }
++        for (int i = 0; i < this.evangelium$restCount; i++) {
++            if (sections[i].evangelium$changes != this.evangelium$restVersions[i]) return false;
++        }
++        return true;
++    }
++
++    /** Take the area around a mob that just came to rest: the sections within 2 blocks of its box, plus the answers that only depend on them. */
++    private void evangelium$takeRest(final double moveY) {
++        this.evangelium$restSections = null;
++        if (!(this instanceof LivingEntity) || this instanceof net.minecraft.world.entity.player.Player
++            || !EVANGELIUM_RESTING_CACHE) return;
++        if (moveY < -1.0) return; // Evangelium - the scan and the sections below cover a cut-down box at most a block deep
++        final AABB box = this.getBoundingBox();
++        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();
++        final int sx0 = Mth.floor(box.minX - 2.0) >> 4, sx1 = Mth.floor(box.maxX + 2.0) >> 4;
++        final int sz0 = Mth.floor(box.minZ - 2.0) >> 4, sz1 = Mth.floor(box.maxZ + 2.0) >> 4;
++        final int sy0 = Mth.floor(box.minY - 2.0) >> 4, sy1 = Mth.floor(box.maxY + 2.0) >> 4;
++        if ((sx1 - sx0 + 1) * (sz1 - sz0 + 1) * (sy1 - sy0 + 1) > 8 || sy0 < minSection || sy1 > maxSection) return;
++        final net.minecraft.world.level.chunk.LevelChunkSection[] sections = new net.minecraft.world.level.chunk.LevelChunkSection[8];
++        int count = 0;
++        for (int cx = sx0; cx <= sx1; cx++) {
++            for (int cz = sz0; cz <= sz1; cz++) {
++                final net.minecraft.world.level.chunk.LevelChunk chunk = this.level.getChunkIfLoaded(cx, cz);
++                if (chunk == null) return;
++                for (int cy = sy0; cy <= sy1; cy++) {
++                    final net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSections()[cy - minSection];
++                    this.evangelium$restVersions[count] = section.evangelium$changes;
++                    sections[count++] = section;
++                }
++            }
++        }
++        // the cached collision answers hold only for blocks whose shape depends on the block state alone: no dynamic shape (moving
++        // pistons), and a shape that does not ask the entity (scaffolding, powder snow and fluids do)
++        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
++        final ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext context = new ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.LazyEntityCollisionContext(this);
++        boolean air = true, noFluid = true;
++        final AABB inside = this.makeBoundingBox(this.position()).deflate(1.0E-5F);
++        final AABB fluidBox = box.deflate(1.0E-3);
++        // Evangelium - only the cells the cached answers read (collision scan of the box cut down by moveY, supporting block, inside
++        // and fluid boxes), each range taken a little wider than its reader's: about a third of the old +-2 block cube
++        final int cx0 = Mth.floor(box.minX - 1.0E-6) - 1, cx1 = Mth.floor(box.maxX + 1.0E-6) + 1;
++        final int cz0 = Mth.floor(box.minZ - 1.0E-6) - 1, cz1 = Mth.floor(box.maxZ + 1.0E-6) + 1;
++        final int cy0 = Mth.floor(box.minY + Math.min(moveY, 0.0) - 1.0E-5) - 1, cy1 = Math.max(Mth.floor(box.maxY + 1.0E-6), Mth.floor(box.minY + 1.0E-6) + 1);
++        for (int x = cx0; x <= cx1; x++) {
++            for (int y = cy0; y <= cy1; y++) {
++                for (int z = cz0; z <= cz1; z++) {
++                    final BlockState state = this.level.getBlockState(pos.set(x, y, z));
++                    if (!state.isAir()) {
++                        if (state.getBlock().hasDynamicShape()) return;
++                        state.getCollisionShape(this.level, pos, context);
++                        if (context.isDelegated()) return;
++                    }
++                    if (air && !state.isAir() && x >= Mth.floor(inside.minX) && x <= Mth.floor(inside.maxX) && y >= Mth.floor(inside.minY) && y <= Mth.floor(inside.maxY)
++                        && z >= Mth.floor(inside.minZ) && z <= Mth.floor(inside.maxZ)) {
++                        air = false;
++                    }
++                    if (noFluid && !state.getFluidState().isEmpty() && x >= Mth.floor(fluidBox.minX) && x <= Mth.ceil(fluidBox.maxX) - 1
++                        && y >= Mth.floor(fluidBox.minY) && y <= Mth.ceil(fluidBox.maxY) - 1 && z >= Mth.floor(fluidBox.minZ) && z <= Mth.ceil(fluidBox.maxZ) - 1) {
++                        noFluid = false;
++                    }
++                }
++            }
++        }
++        this.evangelium$restCount = count;
++        this.evangelium$restLevel = this.level;
++        this.evangelium$restX = this.position.x; this.evangelium$restY = this.position.y; this.evangelium$restZ = this.position.z;
++        this.evangelium$restBox = box;
++        this.evangelium$restSince = net.minecraft.server.MinecraftServer.currentTick;
++        this.evangelium$restMoveIn = null; this.evangelium$restMoveOut = null;
++        this.evangelium$restSupportBox = null; this.evangelium$restSupport = null;
++        this.evangelium$restAir = air;
++        this.evangelium$restNoFluid = noFluid;
++        this.evangelium$restSections = sections;
++    }
++    // Evangelium end
++    // Evangelium start - tickThreadCheckMemo: a region check that passed for the same chunk position (or supporting block) object on the
++    // same thread in the same tick passes again: the region lock is held for the whole region tick and the object did not change
++    private @Nullable Object evangelium$ownChecked, evangelium$supportCheckedFor;
++    private int evangelium$ownCheckedTick = Integer.MIN_VALUE, evangelium$supportCheckedTick = Integer.MIN_VALUE;
++    private @Nullable Thread evangelium$ownCheckedThread, evangelium$supportCheckedThread;
++
++    private boolean evangelium$ownRegionChecked() {
++        return this.evangelium$ownChecked == this.chunkPosition && this.evangelium$ownCheckedTick == net.minecraft.server.MinecraftServer.currentTick
++            && this.evangelium$ownCheckedThread == Thread.currentThread() && PhysicsOptimizations.tickThreadCheckMemo();
++    }
++
++    private void evangelium$ownRegionPassed() {
++        this.evangelium$ownChecked = this.chunkPosition;
++        this.evangelium$ownCheckedTick = net.minecraft.server.MinecraftServer.currentTick;
++        this.evangelium$ownCheckedThread = Thread.currentThread();
++    }
++
++    private boolean evangelium$supportChecked() {
++        return this.evangelium$supportCheckedFor == this.mainSupportingBlockPos && this.evangelium$supportCheckedTick == net.minecraft.server.MinecraftServer.currentTick
++            && this.evangelium$supportCheckedThread == Thread.currentThread() && PhysicsOptimizations.tickThreadCheckMemo();
++    }
++
++    private boolean evangelium$supportPassed() {
++        this.evangelium$supportCheckedFor = this.mainSupportingBlockPos;
++        this.evangelium$supportCheckedTick = net.minecraft.server.MinecraftServer.currentTick;
++        this.evangelium$supportCheckedThread = Thread.currentThread();
++        return true;
++    }
++    // Evangelium end
+     private float crystalSoundIntensity;
+     private int lastCrystalSoundPlayTick;
+     public boolean hasVisualFire;
+@@ -709,7 +_,7 @@
+     public void resendPossiblyDesyncedEntityData(net.minecraft.server.level.ServerPlayer player) {
+         if (player.getBukkitEntity().canSee(this.getBukkitEntity())) {
+             ServerLevel world = (net.minecraft.server.level.ServerLevel)this.level();
+-            net.minecraft.server.level.ChunkMap.TrackedEntity tracker = world == null ? null : world.getChunkSource().chunkMap.entityMap.get(this.getId());
++            net.minecraft.server.level.ChunkMap.TrackedEntity tracker = this.moonrise$getTrackedEntity(); // world == null ? null : world.getChunkSource().chunkMap.entityMap.get(this.getId()); // EvangeliumServer - don't use map
+             if (tracker == null) {
+                 return;
+             }
+@@ -830,6 +_,14 @@
+     }
+ 
+     public void setPos(double x, double y, double z) {
++        // EvangeliumServer start
++        Vec3 vec3 = new Vec3(x, y, z);
++        if (!this.firstTick && !this.blockPosition().equals(BlockPos.containing(vec3)) && (!TickThread.isTickThreadFor(level, vec3) || !TickThread.isTickThreadFor(this))) {
++            LOGGER.error("Trying to async move {} to {} {} {}", this, x, y, z);
++            TickThread.ensureTickThread(this, "Cannot async move entity");
++            TickThread.ensureTickThread(level, BlockPos.containing(vec3), "Cannot move entity to async destination");
++        }
++        // EvangeliumServer end
+         this.setPosRaw(x, y, z, true); // Paper - Block invalid positions and bounding box; force update
+         // this.setBoundingBox(this.makeBoundingBox()); // Paper - Block invalid positions and bounding box; move into setPosRaw
+     }
+@@ -1113,7 +_,17 @@
+         if (onGround) {
+             AABB boundingBox = this.getBoundingBox();
+             AABB aabb = new AABB(boundingBox.minX, boundingBox.minY - 1.0E-6, boundingBox.minZ, boundingBox.maxX, boundingBox.minY, boundingBox.maxZ);
+-            Optional<BlockPos> optional = this.level.findSupportingBlock(this, aabb);
++            Optional<BlockPos> optional; // Evangelium start - resting cache
++            if (this.evangelium$restSupport != null && aabb.equals(this.evangelium$restSupportBox) && this.evangelium$restValid()) {
++                optional = this.evangelium$restSupport;
++                if (EVANGELIUM_VERIFY_REST) this.evangelium$verifyRest("support", optional, this.level.findSupportingBlock(this, aabb));
++            } else {
++                optional = this.level.findSupportingBlock(this, aabb);
++                if (this.evangelium$restSections != null && this.evangelium$restValid()) {
++                    this.evangelium$restSupportBox = aabb;
++                    this.evangelium$restSupport = optional;
++                }
++            } // Evangelium end
+             if (optional.isPresent() || this.onGroundNoBlocks) {
+                 this.mainSupportingBlockPos = optional;
+             } else if (movement != null) {
+@@ -1148,8 +_,12 @@
+     public void move(MoverType type, Vec3 movement) {
+         final Vec3 originalMovement = movement; // Paper - Expose pre-collision velocity
+         // Paper start - detailed watchdog information
+-        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread("Cannot move an entity off-main");
+-        synchronized (this.posLock) {
++        if (!this.evangelium$ownRegionChecked()) { ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this, "Cannot move an entity off-main"); this.evangelium$ownRegionPassed(); } // EvangeliumServer // Evangelium - memo
++        BlockPos newPos = new BlockPos((int) (this.getX() + movement.x), (int) (this.getY() + movement.y), (int) (this.getZ() + movement.z)); // EvangeliumServer - check destination region
++        if ((newPos.getX() >> 4) != this.chunkPosition.x || (newPos.getZ() >> 4) != this.chunkPosition.z) // Evangelium - same chunk: the check above already passed for it
++        TickThread.ensureTickThread((ServerLevel) this.level, newPos, "Cannot move an entity into off-main"); // EvangeliumServer - check destination region
++        final boolean evangeliumNoLock = PhysicsOptimizations.noPosLock(); // Evangelium - nothing reads these watchdog fields in this fork
++        if (!evangeliumNoLock) synchronized (this.posLock) {
+             this.moveStartX = this.getX();
+             this.moveStartY = this.getY();
+             this.moveStartZ = this.getZ();
+@@ -1286,7 +_,7 @@
+         }
+         // Paper start - detailed watchdog information
+         } finally {
+-            synchronized (this.posLock) { // Paper
++            if (!evangeliumNoLock) synchronized (this.posLock) { // Paper // Evangelium
+                 this.moveVector = null;
+             } // Paper
+         }
+@@ -1381,6 +_,10 @@
+             int remainingFireTicks = this.getRemainingFireTicks();
+             this.checkInsideBlocks(movements, this.insideEffectCollector);
+             this.insideEffectCollector.applyAndClear(this);
++            if (this.evangelium$expectWater) { // Evangelium - verifyPhysics: the skipped water effects changed nothing
++                this.evangelium$expectWater = false;
++                PhysicsOptimizations.check(this.remainingFireTicks == this.evangelium$waterFireBefore, "water block walk fire " + this.evangelium$waterFireBefore + " -> " + this.remainingFireTicks, this);
++            }
+             if (this.isInRain()) {
+                 this.clearFire();
+             }
+@@ -1475,8 +_,41 @@
+         return this.getOnPos(1.0E-5F);
+     }
+ 
++    // Evangelium start - onPosMemo: getOnPos(0.2) / getOnPos(0.500001) asked 4-5 times per tick with the same supporting block; the answer
++    // depends on that block's state (block change epoch of this tick thread), the Optional object, position.y and the offset
++    private @Nullable PhysicsCache evangelium$onPosCache;
++    private int evangelium$onPosEpoch;
++    private @Nullable Optional<BlockPos> evangelium$onPosSupport;
++    private double evangelium$onPosY;
++    private float evangelium$onPosOffset0, evangelium$onPosOffset1;
++    private @Nullable BlockPos evangelium$onPos0, evangelium$onPos1;
++
+     protected BlockPos getOnPos(float yOffset) {
+-        if (this.mainSupportingBlockPos.isPresent() && this.level().getChunkIfLoadedImmediately(this.mainSupportingBlockPos.get()) != null) { // Paper - ensure no loads
++        if (yOffset > 1.0E-5F && this.mainSupportingBlockPos.isPresent() && PhysicsOptimizations.onPosMemo()) {
++            final PhysicsCache cache = PhysicsCache.tickCache();
++            if (cache != null) {
++                if (this.evangelium$onPosCache != cache || this.evangelium$onPosEpoch != cache.epoch() || this.evangelium$onPosSupport != this.mainSupportingBlockPos || this.evangelium$onPosY != this.position.y) {
++                    this.evangelium$onPosCache = cache; this.evangelium$onPosEpoch = cache.epoch(); this.evangelium$onPosSupport = this.mainSupportingBlockPos; this.evangelium$onPosY = this.position.y;
++                    this.evangelium$onPos0 = null; this.evangelium$onPos1 = null;
++                }
++                BlockPos memo = this.evangelium$onPos0 != null && this.evangelium$onPosOffset0 == yOffset ? this.evangelium$onPos0
++                    : this.evangelium$onPos1 != null && this.evangelium$onPosOffset1 == yOffset ? this.evangelium$onPos1 : null;
++                if (memo != null) {
++                    if (PhysicsOptimizations.VERIFY) PhysicsOptimizations.check(memo.equals(this.evangelium$getOnPos(yOffset)), "onPos memo " + memo, this);
++                    return memo;
++                }
++                memo = this.evangelium$getOnPos(yOffset);
++                if (this.evangelium$onPos0 == null) { this.evangelium$onPos0 = memo; this.evangelium$onPosOffset0 = yOffset; }
++                else { this.evangelium$onPos1 = memo; this.evangelium$onPosOffset1 = yOffset; }
++                return memo;
++            }
++        }
++        return this.evangelium$getOnPos(yOffset);
++    }
++    // Evangelium end
++
++    private BlockPos evangelium$getOnPos(float yOffset) { // Evangelium - the original getOnPos
++        if (this.mainSupportingBlockPos.isPresent() && (this.evangelium$supportChecked() || this.level().getChunkIfLoadedImmediately(this.mainSupportingBlockPos.get()) != null && TickThread.isTickThreadFor((ServerLevel) this.level(), this.mainSupportingBlockPos.get()) && this.evangelium$supportPassed())) { // Paper - ensure no loads // EvangeliumServer - ensure same region // Evangelium - memo
+             BlockPos blockPos = this.mainSupportingBlockPos.get();
+             if (!(yOffset > 1.0E-5F)) {
+                 return blockPos;
+@@ -1585,12 +_,30 @@
+             this.level, (Entity)(Object)this, initialCollisionBox, entityAABBs, 0, null
+         );
+ 
++        // Evangelium start - resting cache: straight down, nothing hard to collide with, not at the border: last tick's answer
++        final boolean restCandidate = xZero & zZero && movement.y < 0.0 && entityAABBs.isEmpty()
++            && !ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.isCollidingWithBorder(this.level.getWorldBorder(), initialCollisionBox);
++        final boolean restHit = restCandidate && this.evangelium$restMoveIn != null && movement.equals(this.evangelium$restMoveIn) && this.evangelium$restValid();
++        if (restHit && !EVANGELIUM_VERIFY_REST) {
++            return this.evangelium$restMoveOut;
++        }
++        // Evangelium end
+         ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
+             this.level, (Entity)(Object)this, initialCollisionBox, potentialCollisionsVoxel, potentialCollisionsBB,
+             ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
+         );
+         potentialCollisionsBB.addAll(entityAABBs);
+         final Vec3 collided = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(movement, currentBox, potentialCollisionsVoxel, potentialCollisionsBB);
++        // Evangelium start - came to rest: take the area and remember this answer
++        if (restHit) this.evangelium$verifyRest("collide", this.evangelium$restMoveOut, collided);
++        if (restCandidate && collided.y == 0.0) {
++            if (!this.evangelium$restValid()) this.evangelium$takeRest(movement.y);
++            if (this.evangelium$restSections != null) {
++                this.evangelium$restMoveIn = movement;
++                this.evangelium$restMoveOut = collided;
++            }
++        }
++        // Evangelium end
+ 
+         final boolean collidedX = collided.x != movement.x;
+         final boolean collidedY = collided.y != movement.y;
+@@ -1711,6 +_,24 @@
+     }
+ 
+     private void checkInsideBlocks(List<Entity.Movement> movements, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector) {
++        // Fork - falling blocks; Evangelium - every entity (airBlockWalkSkip): a path through air only makes the walk below find nothing
++        final int evangeliumWalk = (this instanceof net.minecraft.world.entity.item.FallingBlockEntity || PhysicsOptimizations.airBlockWalkSkip()) && this.isAffectedByBlocks() ? this.evangelium$walkClass(movements) : 0;
++        if (evangeliumWalk == 1) {
++            if (!PhysicsOptimizations.VERIFY) return;
++            this.evangelium$expectAir = true; // tests: walk anyway and throw if it meets a non-air cell
++        }
++        // Evangelium start - waterWalkSkip: only air and plain water along the path and the entity is not burning: water's one effect
++        // (EXTINGUISH = clearFire, a no-op at fire ticks <= 0, also for players) cannot change anything, so the per-cell fluid
++        // geometry test is skipped; the cells are still visited in the same order (flag2 is true for water anyway)
++        if (evangeliumWalk == 2 && this.remainingFireTicks <= 0 && !(this instanceof net.minecraft.world.entity.item.FallingBlockEntity) && PhysicsOptimizations.waterWalkSkip()) {
++            if (PhysicsOptimizations.VERIFY) { this.evangelium$expectWater = true; this.evangelium$waterFireBefore = this.remainingFireTicks; }
++            // the walk would then only add water cells to the visited set (cleared after), call LiquidBlock's entityInside (the no-op
++            // default) and onInsideBlock (a no-op except for ender pearls): skip it whole
++            else if (!(this instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl)) return;
++            else this.evangelium$skipFluidTest = true;
++        }
++        // Evangelium end
++        try { // Evangelium
+         if (this.isAffectedByBlocks()) {
+             LongSet set = this.visitedBlocks;
+ 
+@@ -1738,13 +_,75 @@
+ 
+             set.clear();
+         }
+-    }
++        } finally { this.evangelium$expectAir = false; this.evangelium$skipFluidTest = false; } // Evangelium
++    }
++    private boolean evangelium$expectAir; // Evangelium - verifyPhysics: the air check said this walk sees air only
++    private boolean evangelium$skipFluidTest; // Evangelium - waterWalkSkip active for this walk
++    private boolean evangelium$expectWater; private int evangelium$waterFireBefore; // Evangelium - verifyPhysics for waterWalkSkip (checked after the effects are applied)
++
++    // Fork start - every block the walk below visits lies inside the deflated boxes at the start and end of each movement (and between);
++    // when all of them are air the walk changes nothing. Not with the block intersection debug view on (it reports air too).
++    // Evangelium - 1: only air along the path, 2: only air and plain water (Blocks.WATER, any level), 0: anything else / not sure
++    private int evangelium$walkClass(List<Entity.Movement> movements) {
++        if (!(this.level instanceof ServerLevel serverLevel) || serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS)) {
++            return 0;
++        }
++        if (this.level.captureTreeGenerationThreadLocal.get()) return 0; // Evangelium - captured states are not in the sections
++        boolean water = false;
++        final int minSection = this.level.getMinSectionY(), maxSection = this.level.getMaxSectionY();
++        for (Entity.Movement movement : movements) {
++            AABB box = this.makeBoundingBox(movement.from()).minmax(this.makeBoundingBox(movement.to())).deflate(1.0E-5F);
++            int minX = Mth.floor(box.minX), minY = Mth.floor(box.minY), minZ = Mth.floor(box.minZ);
++            int maxX = Mth.floor(box.maxX), maxY = Mth.floor(box.maxY), maxZ = Mth.floor(box.maxZ);
++            if ((long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1) > 64) {
++                return 0; // long fall in one tick: let the normal walk handle it
++            }
++            // Evangelium start - read the sections directly (same states as Level.getBlockState; cells outside the height are void air)
++            for (int cx = minX >> 4; cx <= maxX >> 4; cx++) {
++                for (int cz = minZ >> 4; cz <= maxZ >> 4; cz++) {
++                    final net.minecraft.world.level.chunk.LevelChunk chunk = this.level.getChunkIfLoaded(cx, cz);
++                    if (chunk == null) return 0; // the walk would load it: let it
++                    final net.minecraft.world.level.chunk.LevelChunkSection[] sections = chunk.getSections();
++                    final int x0 = Math.max(minX, cx << 4), x1 = Math.min(maxX, (cx << 4) | 15);
++                    final int z0 = Math.max(minZ, cz << 4), z1 = Math.min(maxZ, (cz << 4) | 15);
++                    for (int sy = Math.max(minY >> 4, minSection); sy <= Math.min(maxY >> 4, maxSection); sy++) {
++                        final net.minecraft.world.level.chunk.LevelChunkSection section = sections[sy - minSection];
++                        if (section.hasOnlyAir()) continue;
++                        final net.minecraft.world.level.chunk.PalettedContainer<BlockState> states = section.states;
++                        for (int y = Math.max(minY, sy << 4), y1 = Math.min(maxY, (sy << 4) | 15); y <= y1; y++) {
++                            for (int z = z0; z <= z1; z++) {
++                                for (int x = x0; x <= x1; x++) {
++                                    final BlockState evangeliumState = states.get((x & 15) | ((z & 15) << 4) | ((y & 15) << 8));
++                                    if (!evangeliumState.isAir() && !(PhysicsOptimizations.PLANT.equals("air") && !evangeliumState.getFluidState().isEmpty())) {
++                                        if (evangeliumState.getBlock() == net.minecraft.world.level.block.Blocks.WATER
++                                            || PhysicsOptimizations.PLANT.equals("water") && evangeliumState.getBlock() instanceof net.minecraft.world.level.block.FenceBlock) {
++                                            water = true;
++                                            continue;
++                                        }
++                                        return 0;
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++            // Evangelium end
++        }
++        return water ? 2 : 1;
++    }
++    // Fork end
+ 
+     private int checkInsideBlocks(Vec3 from, Vec3 to, InsideBlockEffectApplier.StepBasedCollector stepBasedCollector, LongSet visited, int maxSteps) {
+         AABB aabb = this.makeBoundingBox(to).deflate(1.0E-5F);
+         boolean flag = from.distanceToSqr(to) > Mth.square(0.9999900000002526);
+         boolean flag1 = this.level instanceof ServerLevel serverLevel
+             && serverLevel.getServer().debugSubscribers().hasAnySubscriberFor(DebugSubscriptions.ENTITY_BLOCK_INTERSECTIONS);
++        // Evangelium - resting cache: standing still among air only, every cell would answer "air, go on" (index 0, so the result is 1)
++        if (!flag1 && this.evangelium$restAir && from.equals(to) && to.equals(this.position) && this.evangelium$restValid()) {
++            if (EVANGELIUM_VERIFY_REST) for (BlockPos p : BlockPos.betweenClosed(aabb)) this.evangelium$verifyRest("inside", true, this.level.getBlockState(p).isAir());
++            return 1;
++        }
+         AtomicInteger atomicInteger = new AtomicInteger();
+         BlockGetter.forEachBlockIntersectedBetween(
+             from,
+@@ -1765,10 +_,13 @@
+ 
+                         return true;
+                     } else {
++                        if (this.evangelium$expectAir) PhysicsOptimizations.check(false, "air block walk at " + pos, this); // Evangelium - verifyPhysics
++                        if (this.evangelium$expectWater) PhysicsOptimizations.check(blockState.is(Blocks.WATER), "water block walk at " + pos + " " + blockState, this); // Evangelium - verifyPhysics
++                        if (visited.contains(pos.asLong())) return true; // Evangelium - already handled this tick: the tests below could only lead to "return true"
+                         VoxelShape entityInsideCollisionShape = blockState.getEntityInsideCollisionShape(this.level(), pos, this);
+                         boolean flag2 = entityInsideCollisionShape == Shapes.block()
+                             || this.collidedWithShapeMovingFrom(from, to, entityInsideCollisionShape.move(new Vec3(pos)).toAabbs());
+-                        boolean flag3 = this.collidedWithFluid(blockState.getFluidState(), pos, from, to);
++                        boolean flag3 = !this.evangelium$skipFluidTest && this.collidedWithFluid(blockState.getFluidState(), pos, from, to); // Evangelium - waterWalkSkip
+                         if ((flag2 || flag3) && visited.add(pos.asLong())) {
+                             if (flag2) {
+                                 try {
+@@ -2377,7 +_,7 @@
+                 }
+                 delta = event.getKnockback();
+             }
+-            this.setDeltaMovement(this.getDeltaMovement().add(delta.getX(), delta.getY(), delta.getZ()));
++            this.setDeltaMovement(this.getDeltaMovement().add(delta.getX(), delta.getY(), delta.getZ()).shreddedPaperCapToRegionSize()); // EvangeliumServer - cap pushing delta to region size
+             // Paper end - Add EntityKnockbackByEntityEvent and EntityPushedByEntityAttackEvent
+             this.needsSync = true;
+         }
+@@ -3546,7 +_,9 @@
+         }
+     }
+ 
++    private @Nullable CompletableFuture<Void> beingPortalled = null; // EvangeliumServer - async teleportation
+     protected void handlePortal() {
++        if (this.beingPortalled != null && !this.beingPortalled.isDone()) return; // Currently being teleported by a portal // EvangeliumServer - async teleportation
+         if (this.level() instanceof ServerLevel serverLevel) {
+             this.processPortalCooldown();
+             if (this.portalProcess != null) {
+@@ -3554,15 +_,19 @@
+                     ProfilerFiller profilerFiller = Profiler.get();
+                     profilerFiller.push("portal");
+                     this.setPortalCooldown();
+-                    TeleportTransition portalDestination = this.portalProcess.getPortalDestination(serverLevel, this);
++                    this.beingPortalled = this.portalProcess.getPortalDestinationAsync(serverLevel, this).thenCompose(portalDestination -> { // EvangeliumServer - async teleportation
+                     if (portalDestination != null) {
++                        return CompletableFuture.runAsync(() -> { // EvangeliumServer - async teleportation
+                         ServerLevel level = portalDestination.newLevel();
+                         if (serverLevel.isAllowedToEnterPortal(level) && (level.dimension() == serverLevel.dimension() || this.canTeleport(serverLevel, level))
+                             )
+                          {
+                             this.teleport(portalDestination);
+                         }
++                        }, r -> io.evangelium.server.threading.TeleportPreload.ensureSyncTeleport(this, portalDestination.newLevel(), portalDestination.position(), ChunkPos.of(BlockPos.containing(portalDestination.position())), r)); // EvangeliumServer - async teleportation // Evangelium - destination chunks loaded asynchronously first
+                     }
++                    return CompletableFuture.completedFuture(null); // EvangeliumServer - async teleportation
++                    }).thenRun(() -> this.beingPortalled = null); // EvangeliumServer - async teleportation
+ 
+                     profilerFiller.pop();
+                 } else if (this.portalProcess.hasExpired()) {
+@@ -4064,6 +_,11 @@
+             PositionMoveRotation absolutePosition = PositionMoveRotation.calculateAbsolute(PositionMoveRotation.of(this), PositionMoveRotation.of(teleportTransition), teleportTransition.relatives());
+             Vec3 velocity = absolutePosition.deltaMovement(); // Paper
+             org.bukkit.Location to = org.bukkit.craftbukkit.util.CraftLocation.toBukkit(absolutePosition.position(), teleportTransition.newLevel(), absolutePosition.yRot(), absolutePosition.xRot());
++            if (!TickThread.isTickThreadFor(this) || !TickThread.isTickThreadFor(teleportTransition.newLevel(), absolutePosition.position())) { // EvangeliumServer
++                LOGGER.error("Trying to teleport {} to {}", this, to); // EvangeliumServer
++                TickThread.ensureTickThread(this, "Cannot teleport entity async"); // EvangeliumServer
++                TickThread.ensureTickThread(teleportTransition.newLevel(), CraftLocation.toBlockPosition(to), "Cannot teleport entity to async destination"); // EvangeliumServer
++            } // EvangeliumServer
+             // Paper start - gateway-specific teleport event
+             final org.bukkit.event.entity.EntityTeleportEvent teleEvent;
+             if (this.portalProcess != null && this.portalProcess.isSamePortal(((net.minecraft.world.level.block.EndGatewayBlock) Blocks.END_GATEWAY)) && this.level.getBlockEntity(this.portalProcess.getEntryPosition()) instanceof net.minecraft.world.level.block.entity.TheEndGatewayBlockEntity theEndGatewayBlockEntity) {
+@@ -4533,7 +_,17 @@
+         if (len > 64) maxZ = minZ + 64.0;
+         this.bb = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+         // CraftBukkit end
++        // Evangelium start - keep the section list's packed copy of this box exact (the only place a box changes)
++        double[] boxes = this.evangelium$boxes;
++        if (boxes != null) {
++            ca.spottedleaf.moonrise.patches.chunk_system.level.entity.ChunkEntitySlices.writeBox(boxes, this.evangelium$boxIndex, this.bb);
++        }
++        // Evangelium end
+     }
++
++    // Evangelium - the packed hitbox array of the chunk section list holding this entity, and its slot there (null: in no packed list)
++    public double[] evangelium$boxes;
++    public int evangelium$boxIndex;
+ 
+     public final float getEyeHeight(Pose pose) {
+         return this.getDimensions(pose).eyeHeight();
+@@ -4807,8 +_,39 @@
+     // Purpur end - Stop squids floating on top of water
+ 
+     // Paper start - optimise collisions
++    // Evangelium start - the water and the lava scan of one tick ask touchingUnloadedChunk for the same box: answer the second from the
++    // first while the box object and this tick thread's epoch are unchanged (chunks cannot unload inside one region tick / work unit)
++    private @Nullable AABB evangelium$unloadedBox;
++    private @Nullable PhysicsCache evangelium$unloadedCache;
++    private int evangelium$unloadedEpoch;
++    private boolean evangelium$unloaded;
++
++    private boolean evangelium$touchingUnloadedChunk() {
++        final PhysicsCache cache = PhysicsOptimizations.onPosMemo() ? PhysicsCache.tickCache() : null;
++        if (cache == null) return this.touchingUnloadedChunk();
++        final AABB box = this.getBoundingBox();
++        if (this.evangelium$unloadedBox == box && this.evangelium$unloadedCache == cache && this.evangelium$unloadedEpoch == cache.epoch()) {
++            if (PhysicsOptimizations.VERIFY) PhysicsOptimizations.check(this.evangelium$unloaded == this.touchingUnloadedChunk(), "touchingUnloadedChunk memo", this);
++            return this.evangelium$unloaded;
++        }
++        this.evangelium$unloaded = this.touchingUnloadedChunk();
++        this.evangelium$unloadedBox = box; this.evangelium$unloadedCache = cache; this.evangelium$unloadedEpoch = cache.epoch();
++        return this.evangelium$unloaded;
++    }
++    // Evangelium end
++
+     public boolean updateFluidHeightAndDoFluidPushing(final TagKey<Fluid> fluid, final double flowScale) {
+-        if (this.touchingUnloadedChunk()) {
++        if (this.evangelium$touchingUnloadedChunk()) { // Evangelium - memo for the water + lava pair
++            return false;
++        }
++        // Evangelium - resting cache: no fluid in the cells of the box, so the scan below would find nothing
++        if (this.evangelium$restNoFluid && this.evangelium$restValid()) {
++            if (EVANGELIUM_VERIFY_REST) {
++                final AABB b = this.getBoundingBox().deflate(1.0E-3);
++                for (BlockPos p : BlockPos.betweenClosed(Mth.floor(b.minX), Mth.floor(b.minY), Mth.floor(b.minZ), Mth.ceil(b.maxX) - 1, Mth.ceil(b.maxY) - 1, Mth.ceil(b.maxZ) - 1))
++                    this.evangelium$verifyRest("fluid", true, this.level.getFluidState(p).isEmpty());
++            }
++            this.fluidHeight.put(fluid, 0.0);
+             return false;
+         }
+ 
+@@ -4830,6 +_,7 @@
+         final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+ 
+         Vec3 pushVector = Vec3.ZERO;
++        double pushX = 0.0, pushY = 0.0, pushZ = 0.0; boolean pushed = false; Vec3 evangeliumVerifyPush = Vec3.ZERO; // Evangelium - the same additions as Vec3.add/scale, without a Vec3 per cell
+         double totalPushes = 0.0;
+         double maxHeightDiff = 0.0;
+         boolean inFluid = false;
+@@ -4855,6 +_,14 @@
+                 sections[currChunkX + chunkLenX*currChunkZ + chunkOffset] = chunkSource.getChunk(currChunkX, currChunkZ, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false).getSections();
+             }
+         }
++        // Evangelium start - fluidSectionCounts: no section of the box holds this fluid, so the scan below would find nothing
++        final boolean evangeliumNone = PhysicsOptimizations.fluidSectionCounts() && evangelium$noFluid(sections, minBlockY >> 4, maxBlockY >> 4, minSection, fluid);
++        if (evangeliumNone && !PhysicsOptimizations.VERIFY) {
++            this.fluidHeight.put(fluid, 0.0);
++            return false;
++        }
++        boolean evangeliumSeen = false;
++        // Evangelium end
+ 
+         for (int currX = minBlockX; currX <= maxBlockX; ++currX) {
+             for (int currY = minBlockY; currY <= maxBlockY; ++currY) {
+@@ -4865,6 +_,7 @@
+                     if (fluidState.isEmpty() || !fluidState.is(fluid)) {
+                         continue;
+                     }
++                    evangeliumSeen = true; // Evangelium
+ 
+                     mutablePos.set(currX, currY, currZ);
+ 
+@@ -4890,19 +_,24 @@
+ 
+                     ++totalPushes;
+ 
+-                    final Vec3 flow = fluidState.getFlow(world, mutablePos);
++                    final Vec3 flow = PhysicsCache.flow(world, mutablePos, fluidState, sections[(currX >> 4) + chunkLenX*(currZ >> 4) + chunkOffset][(currY >> 4) - minSection]); // Evangelium - flowCache
+ 
+                     if (maxHeightDiff < 0.4) {
+-                        pushVector = pushVector.add(flow.scale(maxHeightDiff));
++                        pushX = pushX + flow.x * maxHeightDiff; pushY = pushY + flow.y * maxHeightDiff; pushZ = pushZ + flow.z * maxHeightDiff; pushed = true; // Evangelium
++                        if (PhysicsOptimizations.VERIFY) evangeliumVerifyPush = evangeliumVerifyPush.add(flow.scale(maxHeightDiff));
+                     } else {
+-                        pushVector = pushVector.add(flow);
++                        pushX = pushX + flow.x; pushY = pushY + flow.y; pushZ = pushZ + flow.z; pushed = true; // Evangelium
++                        if (PhysicsOptimizations.VERIFY) evangeliumVerifyPush = evangeliumVerifyPush.add(flow);
+                     }
+                 }
+             }
+         }
+ 
++        if (evangeliumNone) PhysicsOptimizations.check(!evangeliumSeen, "fluid section count " + fluid, this); // Evangelium - verifyPhysics
+         this.fluidHeight.put(fluid, maxHeightDiff);
+ 
++        if (pushed) pushVector = new Vec3(pushX, pushY, pushZ); // Evangelium
++        if (PhysicsOptimizations.VERIFY && pushed) PhysicsOptimizations.check(pushVector.x == evangeliumVerifyPush.x && pushVector.y == evangeliumVerifyPush.y && pushVector.z == evangeliumVerifyPush.z, "fluid push sum " + pushVector + " vs " + evangeliumVerifyPush, this);
+         if (pushVector == Vec3.ZERO) {
+             return inFluid;
+         }
+@@ -4920,13 +_,33 @@
+             pushVector = pushVector.normalize().scale(0.0045000000000000005);
+         }
+ 
+-        this.setDeltaMovement(currMovement.add(pushVector));
++        this.setDeltaMovement(currMovement.add(pushVector).shreddedPaperCapToRegionSize()); // EvangeliumServer - cap pushing delta to region size
+ 
+         // note: inFluid = true here as pushVector != 0
+         return true;
+     }
+     // Paper end - optimise collisions
+ 
++    // Evangelium start - fluidSectionCounts: true when none of the sections (all chunks, section y sy0..sy1) holds a fluid of the tag
++    private static boolean evangelium$noFluid(final net.minecraft.world.level.chunk.LevelChunkSection[][] sections, final int sy0, final int sy1, final int minSection, final TagKey<Fluid> fluid) {
++        int water = 0, lava = 0;
++        for (final net.minecraft.world.level.chunk.LevelChunkSection[] chunk : sections) {
++            for (int sy = sy0; sy <= sy1; sy++) {
++                final net.minecraft.world.level.chunk.LevelChunkSection section = chunk[sy - minSection];
++                final int all = section.evangelium$fluidCount;
++                if (all == 0) continue;
++                if (all != section.evangelium$waterCount + section.evangelium$lavaCount) return false; // another fluid type: let the scan decide
++                water += section.evangelium$waterCount;
++                lava += section.evangelium$lavaCount;
++            }
++        }
++        if (PhysicsOptimizations.PLANT.equals("fluid")) return true;
++        // the tag decides which fluid types the scan matches (data packs may change fluid tags)
++        return (water == 0 || !(net.minecraft.world.level.material.Fluids.WATER.is(fluid) || net.minecraft.world.level.material.Fluids.FLOWING_WATER.is(fluid)))
++            && (lava == 0 || !(net.minecraft.world.level.material.Fluids.LAVA.is(fluid) || net.minecraft.world.level.material.Fluids.FLOWING_LAVA.is(fluid)));
++    }
++    // Evangelium end
++
+     public boolean touchingUnloadedChunk() {
+         AABB aabb = this.getBoundingBox().inflate(1.0);
+         int floor = Mth.floor(aabb.minX);
+@@ -4996,6 +_,13 @@
+ 
+     public void setDeltaMovement(Vec3 deltaMovement) {
+         if (deltaMovement.isFinite()) {
++            // EvangeliumServer start - why is something setting the entity velocity to larger than one region...
++            if (deltaMovement.horizontalDistanceSqr() > RegionPos.MAX_DISTANCE_SQR + 1 && deltaMovement.horizontalDistanceSqr() > this.deltaMovement.horizontalDistanceSqr()) {
++                LOGGER.warn("Velocity is being set larger than the EvangeliumServer region size: {} for entity {}", deltaMovement, this, new Exception("Velocity larger than region size, limiting velocity to region size"));
++                deltaMovement = deltaMovement.shreddedPaperCapToRegionSize();
++            }
++            // EvangeliumServer end - why is something setting the entity velocity to larger than one region...
++            if (PhysicsOptimizations.noPosLock()) this.deltaMovement = deltaMovement; else // Evangelium - see setPosRaw
+             synchronized (this.posLock) { // Paper - detailed watchdog information
+             this.deltaMovement = deltaMovement;
+             } // Paper - detailed watchdog information
+@@ -5099,6 +_,15 @@
+         }
+         // Paper end - Block invalid positions and bounding box
+         if (this.position.x != x || this.position.y != y || this.position.z != z) {
++            // Evangelium - reject unsafe raw moves before position changes make the owning region stale.
++            if (this.previousTickingChunkPosRegion != null || this.previousTrackedChunkPosRegion != null) {
++                if (!this.evangelium$ownRegionChecked()) { TickThread.ensureTickThread(this, "Cannot move entity off its owning region"); this.evangelium$ownRegionPassed(); } // Evangelium - memo
++                if ((Mth.floor(x) >> 4) != this.chunkPosition.x || (Mth.floor(z) >> 4) != this.chunkPosition.z) // Evangelium - same chunk: the check above already passed for it
++                TickThread.ensureTickThread(this.level(), BlockPos.containing(x, y, z), "Cannot move entity to an unowned region");
++            }
++
++            if (this instanceof net.minecraft.server.level.ServerPlayer evangeliumPlayer) io.evangelium.server.player.NearbyPlayerIndex.moved(evangeliumPlayer, x, z); // Evangelium - nearby player index
++            if (PhysicsOptimizations.noPosLock()) this.position = new Vec3(x, y, z); else // Evangelium - a reference write needs no lock; nothing reads under posLock
+             synchronized (this.posLock) { // Paper - detailed watchdog information
+             this.position = new Vec3(x, y, z);
+             } // Paper - detailed watchdog information
+@@ -5116,11 +_,12 @@
+             this.levelCallback.onMove();
+             if (!this.firstTick && this.level instanceof ServerLevel serverLevel && !this.isRemoved()) {
+                 if (this instanceof WaypointTransmitter waypointTransmitter && waypointTransmitter.isTransmittingWaypoint()) {
++                    if (this instanceof ServerPlayer serverPlayer) serverPlayer.evangeliumUpdateOwnWaypoint(); else // Evangelium - see ServerPlayer
+                     serverLevel.getWaypointManager().updateWaypoint(waypointTransmitter);
+                 }
+ 
+                 if (this instanceof ServerPlayer serverPlayer && serverPlayer.isReceivingWaypoints() && serverPlayer.connection != null) {
+-                    serverLevel.getWaypointManager().updatePlayer(serverPlayer);
++                    serverPlayer.evangeliumUpdateWaypoints(); // Evangelium - at most every few ticks, see ServerPlayer
+                 }
+             }
+             // Paper start - Fix MC-44654

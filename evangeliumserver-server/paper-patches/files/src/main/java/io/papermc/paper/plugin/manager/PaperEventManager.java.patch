@@ -1,0 +1,38 @@
+--- a/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
++++ b/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
+@@ -4,6 +_,7 @@
+ import com.destroystokyo.paper.event.server.ServerExceptionEvent;
+ import com.destroystokyo.paper.exception.ServerEventException;
+ import com.google.common.collect.Sets;
++import io.evangelium.server.threading.SynchronousPluginExecution;
+ import org.bukkit.Server;
+ import org.bukkit.Warning;
+ import org.bukkit.event.Event;
+@@ -38,7 +_,7 @@
+     public void callEvent(@NotNull Event event) {
+         if (event.isAsynchronous() && this.server.isPrimaryThread()) {
+             throw new IllegalStateException(event.getEventName() + " may only be triggered asynchronously.");
+-        } else if (!event.isAsynchronous() && !this.server.isPrimaryThread() && !this.server.isStopping()) {
++        } else if (!event.isAsynchronous() && this.server != null && !this.server.isPrimaryThread() && !ca.spottedleaf.moonrise.common.util.TickThread.isTickThread() && !this.server.isStopping()) { // Evangelium - sync events keep the forceTicks rule (world loads), only the async check uses the stricter isPrimaryThread
+             throw new IllegalStateException(event.getEventName() + " may only be triggered synchronously.");
+         }
+ 
+@@ -51,7 +_,17 @@
+             }
+ 
+             try {
+-                registration.callEvent(event);
++                // EvangeliumServer start - run unsupported plugins in sync
++                if (event.isAsynchronous()) {
++                    registration.callEvent(event);
++                } else {
++                    SynchronousPluginExecution.execute(registration.getPlugin(), () -> {
++                        registration.callEvent(event);
++                    });
++                }
++                // EvangeliumServer end - run unsupported plugins in sync
++            } catch (io.evangelium.server.threading.RegionTickAbandonedError ex) {
++                throw ex; // Evangelium - an abandoned region tick ends, it is not an event failure to log and skip
+             } catch (AuthorNagException ex) {
+                 Plugin plugin = registration.getPlugin();
+ 

@@ -1,0 +1,21 @@
+--- a/net/minecraft/world/entity/ai/goal/Goal.java
++++ b/net/minecraft/world/entity/ai/goal/Goal.java
+@@ -73,11 +_,16 @@
+     // Paper end - Mob Goal API
+ 
+     protected int adjustedTickDelay(int adjustment) {
+-        return this.requiresUpdateEveryTick() ? adjustment : reducedTickDelay(adjustment);
++        // EvangeliumServer - a far mob's goals tick every N ticks (FarAi): timers and chances follow, so it acts on vanilla's real-time schedule
++        if (this.requiresUpdateEveryTick()) {
++            int spacing = io.evangelium.server.ai.FarAi.spacing();
++            return spacing > 1 ? Mth.positiveCeilDiv(adjustment, spacing) : adjustment;
++        }
++        return reducedTickDelay(adjustment);
+     }
+ 
+     protected static int reducedTickDelay(int reduction) {
+-        return Mth.positiveCeilDiv(reduction, 2);
++        return Mth.positiveCeilDiv(reduction, Math.max(2, io.evangelium.server.ai.FarAi.spacing())); // EvangeliumServer - FarAi spacing
+     }
+ 
+     protected static ServerLevel getServerLevel(Entity entity) {

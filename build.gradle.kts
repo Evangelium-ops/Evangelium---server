@@ -12,23 +12,23 @@ paperweight {
 
         patchFile {
             path = "purpur-server/build.gradle.kts"
-            outputFile = file("shreddedpaper-server/build.gradle.kts")
-            patchFile = file("shreddedpaper-server/build.gradle.kts.patch")
+            outputFile = file("evangeliumserver-server/build.gradle.kts")
+            patchFile = file("evangeliumserver-server/build.gradle.kts.patch")
         }
         patchFile {
             path = "purpur-api/build.gradle.kts"
-            outputFile = file("shreddedpaper-api/build.gradle.kts")
-            patchFile = file("shreddedpaper-api/build.gradle.kts.patch")
+            outputFile = file("evangeliumserver-api/build.gradle.kts")
+            patchFile = file("evangeliumserver-api/build.gradle.kts.patch")
         }
         patchRepo("paperApi") {
             upstreamPath = "paper-api"
-            patchesDir = file("shreddedpaper-api/paper-patches")
+            patchesDir = file("evangeliumserver-api/paper-patches")
             outputDir = file("paper-api")
         }
         patchDir("purpurApi") {
             upstreamPath = "purpur-api"
             excludes = listOf("build.gradle.kts", "build.gradle.kts.patch", "paper-patches")
-            patchesDir = file("shreddedpaper-api/purpur-patches")
+            patchesDir = file("evangeliumserver-api/purpur-patches")
             outputDir = file("purpur-api")
         }
     }

@@ -1,0 +1,183 @@
+--- /dev/null
++++ b/net/minecraft/world/level/chunk/storage/InflatedChunkInput.java
+@@ -1,0 +_,180 @@
++package net.minecraft.world.level.chunk.storage;
++
++import java.io.ByteArrayInputStream;
++import java.io.DataInput;
++import java.io.DataInputStream;
++import java.io.EOFException;
++import java.io.IOException;
++import java.lang.invoke.MethodHandles;
++import java.lang.invoke.VarHandle;
++import java.nio.ByteOrder;
++import java.nio.charset.StandardCharsets;
++import java.util.zip.DataFormatException;
++import java.util.zip.Inflater;
++import java.util.zip.InflaterInputStream;
++import net.minecraft.util.FastBufferedInputStream;
++
++/**
++ * A deflate (zlib) chunk from a region file. As a stream it is exactly what vanilla builds (FastBufferedInputStream over an
++ * InflaterInputStream); {@link #fastInput()} instead inflates the whole chunk into a per-thread buffer at once and reads the NBT
++ * from that array (big-endian like DataInputStream, same EOF behaviour), without the per-value stream layers. Inflating happens
++ * when the NBT is read (on the worker thread), not when the region file hands out the stream.
++ */
++public final class InflatedChunkInput extends DataInputStream {
++
++    private static final boolean SWITCH_ON = io.evangelium.server.util.DevSwitch.on("fast-chunk-nbt-read");
++    private static final ThreadLocal<Inflater> INFLATER = ThreadLocal.withInitial(Inflater::new);
++    private static final ThreadLocal<byte[][]> BUFFER = ThreadLocal.withInitial(() -> new byte[][] {new byte[64 * 1024]});
++    private static final VarHandle SHORT = MethodHandles.byteArrayViewVarHandle(short[].class, ByteOrder.BIG_ENDIAN);
++    private static final VarHandle INT = MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.BIG_ENDIAN);
++    private static final VarHandle LONG = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
++
++    private final byte[] compressed;
++    private final int offset;
++    private final int length;
++
++    public static boolean enabled() {
++        return SWITCH_ON && io.evangelium.server.config.EvangeliumServerConfiguration.get() != null;
++    }
++
++    public InflatedChunkInput(byte[] compressed, int offset, int length) {
++        super(new FastBufferedInputStream(new InflaterInputStream(new ByteArrayInputStream(compressed, offset, length))));
++        this.compressed = compressed;
++        this.offset = offset;
++        this.length = length;
++    }
++
++    // the whole chunk inflated; valid until the next call on this thread (the NBT reader copies everything it keeps). null for
++    // damaged or truncated data: the caller then reads this stream like vanilla, so damaged chunks fail (or not) exactly as before
++    public DataInput fastInput() throws IOException {
++        Inflater inflater = INFLATER.get();
++        byte[][] holder = BUFFER.get();
++        byte[] out = holder[0];
++        int size = 0;
++        inflater.reset();
++        inflater.setInput(this.compressed, this.offset, this.length);
++        try {
++            while (!inflater.finished()) {
++                if (size == out.length) {
++                    out = java.util.Arrays.copyOf(out, out.length * 2);
++                    holder[0] = out;
++                }
++                int n = inflater.inflate(out, size, out.length - size);
++                if (n == 0 && (inflater.needsInput() || inflater.needsDictionary())) {
++                    return null;   // truncated data
++                }
++                size += n;
++            }
++        } catch (DataFormatException e) {
++            return null;
++        }
++        return new ArrayInput(out, size);
++    }
++
++    static final class ArrayInput implements DataInput {
++        private final byte[] data;
++        private final int end;
++        private int pos;
++
++        ArrayInput(byte[] data, int end) {
++            this.data = data;
++            this.end = end;
++        }
++
++        private int take(int n) throws EOFException {
++            int p = this.pos;
++            if (n > this.end - p) {
++                this.pos = this.end;
++                throw new EOFException();
++            }
++            this.pos = p + n;
++            return p;
++        }
++
++        @Override
++        public void readFully(byte[] b) throws IOException {
++            this.readFully(b, 0, b.length);
++        }
++
++        @Override
++        public void readFully(byte[] b, int off, int len) throws IOException {
++            System.arraycopy(this.data, this.take(len), b, off, len);
++        }
++
++        @Override
++        public int skipBytes(int n) {
++            int skip = Math.max(0, Math.min(n, this.end - this.pos));
++            this.pos += skip;
++            return skip;
++        }
++
++        @Override
++        public boolean readBoolean() throws IOException {
++            return this.data[this.take(1)] != 0;
++        }
++
++        @Override
++        public byte readByte() throws IOException {
++            return this.data[this.take(1)];
++        }
++
++        @Override
++        public int readUnsignedByte() throws IOException {
++            return this.data[this.take(1)] & 0xFF;
++        }
++
++        @Override
++        public short readShort() throws IOException {
++            return (short) SHORT.get(this.data, this.take(2));
++        }
++
++        @Override
++        public int readUnsignedShort() throws IOException {
++            return ((short) SHORT.get(this.data, this.take(2))) & 0xFFFF;
++        }
++
++        @Override
++        public char readChar() throws IOException {
++            return (char) this.readUnsignedShort();
++        }
++
++        @Override
++        public int readInt() throws IOException {
++            return (int) INT.get(this.data, this.take(4));
++        }
++
++        @Override
++        public long readLong() throws IOException {
++            return (long) LONG.get(this.data, this.take(8));
++        }
++
++        @Override
++        public float readFloat() throws IOException {
++            return Float.intBitsToFloat(this.readInt());
++        }
++
++        @Override
++        public double readDouble() throws IOException {
++            return Double.longBitsToDouble(this.readLong());
++        }
++
++        @Override
++        public String readLine() {
++            throw new UnsupportedOperationException();
++        }
++
++        @Override
++        public String readUTF() throws IOException {
++            int start = this.pos;
++            int len = this.readUnsignedShort();
++            int p = this.take(len);
++            for (int i = p, e = p + len; i < e; i++) {
++                if (this.data[i] < 0) {   // not plain ASCII: modified UTF-8 decoding (and its errors) exactly as DataInputStream
++                    this.pos = start;
++                    return DataInputStream.readUTF(this);
++                }
++            }
++            return new String(this.data, p, len, StandardCharsets.ISO_8859_1);
++        }
++    }
++}

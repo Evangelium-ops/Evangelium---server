@@ -1,0 +1,67 @@
+--- a/net/minecraft/world/level/portal/TeleportTransition.java
++++ b/net/minecraft/world/level/portal/TeleportTransition.java
+@@ -1,6 +_,9 @@
+ package net.minecraft.world.level.portal;
+ 
+ import java.util.Set;
++import java.util.concurrent.CompletableFuture;
++
++import io.evangelium.server.EvangeliumServer;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.network.protocol.game.ClientboundLevelEventPacket;
+ import net.minecraft.server.level.ServerLevel;
+@@ -75,12 +_,13 @@
+         entity.placePortalTicket(BlockPos.containing(entity.position()));
+     }
+ 
+-    public static TeleportTransition createDefault(ServerPlayer player, TeleportTransition.PostTeleportTransition postTeleportTransition) {
++    public static CompletableFuture<TeleportTransition> createDefaultAsync(ServerPlayer player, TeleportTransition.PostTeleportTransition postTeleportTransition) { // EvangeliumServer - respawn async
+         ServerLevel serverLevel = player.level().getServer().findRespawnDimension();
+         LevelData.RespawnData respawnData = serverLevel.getRespawnData();
++        return findAdjustedSharedSpawnPosAsync(serverLevel, player).thenApply(pos -> { // EvangeliumServer - respawn async
+         return new TeleportTransition(
+             serverLevel,
+-            findAdjustedSharedSpawnPos(serverLevel, player),
++            pos, // EvangeliumServer - respawn async
+             Vec3.ZERO,
+             respawnData.yaw(),
+             respawnData.pitch(),
+@@ -89,14 +_,16 @@
+             Set.of(),
+             postTeleportTransition
+         );
++        }); // EvangeliumServer - respawn async
+     }
+ 
+-    public static TeleportTransition missingRespawnBlock(ServerPlayer player, TeleportTransition.PostTeleportTransition postTeleportTransition) {
++    public static CompletableFuture<TeleportTransition> missingRespawnBlockAsync(ServerPlayer player, TeleportTransition.PostTeleportTransition postTeleportTransition) { // EvangeliumServer - respawn async
+         ServerLevel serverLevel = player.level().getServer().findRespawnDimension();
+         LevelData.RespawnData respawnData = serverLevel.getRespawnData();
++        return findAdjustedSharedSpawnPosAsync(serverLevel, player).thenApply(pos -> { // EvangeliumServer - respawn async
+         return new TeleportTransition(
+             serverLevel,
+-            findAdjustedSharedSpawnPos(serverLevel, player),
++            pos, // EvangeliumServer - respawn async
+             Vec3.ZERO,
+             respawnData.yaw(),
+             respawnData.pitch(),
+@@ -105,10 +_,17 @@
+             Set.of(),
+             postTeleportTransition
+         );
++        }); // EvangeliumServer - respawn async
+     }
+ 
+-    private static Vec3 findAdjustedSharedSpawnPos(ServerLevel level, Entity entity) {
+-        return entity.adjustSpawnLocation(level, level.getRespawnData().pos()).getBottomCenter();
++    private static CompletableFuture<Vec3> findAdjustedSharedSpawnPosAsync(ServerLevel level, Entity entity) { // EvangeliumServer - respawn async
++        // Evangelium start - a player's spawn search (ServerPlayer.adjustSpawnLocation) is asynchronous already: use its future instead
++        // of parking a region thread on it in managedBlock while that thread holds the spawn region's locks; same result
++        if (io.evangelium.server.threading.TeleportPreload.ENABLED && entity instanceof net.minecraft.server.level.ServerPlayer) {
++            return net.minecraft.server.level.PlayerSpawnFinder.findSpawn(level, level.getRespawnData().pos()).thenApply(vec3 -> BlockPos.containing(vec3).getBottomCenter());
++        }
++        // Evangelium end
++        return CompletableFuture.supplyAsync(() -> entity.adjustSpawnLocation(level, level.getRespawnData().pos()).getBottomCenter(), io.evangelium.server.threading.TeleportPreload.onRegionWhenLoaded(level, level.getRespawnData().pos(), 0)); // EvangeliumServer - respawn async // Evangelium - spawn chunk loaded asynchronously first
+     }
+ 
+     public TeleportTransition withRotation(float yRot, float xRot) {

@@ -1,0 +1,898 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1,10 +_,20 @@
+ package net.minecraft.server.level;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
++import ca.spottedleaf.moonrise.common.util.WorldUtil;
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.collect.Lists;
+ import com.mojang.datafixers.DataFixer;
+ import com.mojang.datafixers.util.Pair;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.EvangeliumServer;
++import io.evangelium.server.config.EvangeliumServerConfiguration;
++import io.evangelium.server.region.LevelChunkRegion;
++import io.evangelium.server.region.LevelTicksRegionProxy;
++import io.evangelium.server.region.RegionPos;
++import io.evangelium.server.threading.EvangeliumServerRegionScheduler;
++import io.evangelium.server.threading.EvangeliumServerTickThread;
++import io.evangelium.server.util.NoOpServerWaypointManager;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.LongSet;
+@@ -26,7 +_,10 @@
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.CopyOnWriteArrayList;
+ import java.util.concurrent.Executor;
++import java.util.concurrent.Executors;
+ import java.util.function.BooleanSupplier;
+ import java.util.function.Function;
+ import java.util.function.Predicate;
+@@ -190,11 +_,12 @@
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final int EMPTY_TIME_NO_TICK = 300;
+     private static final int MAX_SCHEDULED_TICKS_PER_TICK = 65536;
+-    final List<ServerPlayer> players = Lists.newArrayList();
++    final List<ServerPlayer> players = new CopyOnWriteArrayList<>(); // EvangeliumServer - thread-safe (players should not be changing worlds often, thus copy-on-write is sufficient)
++    public final io.evangelium.server.player.NearbyPlayerIndex evangeliumPlayerIndex = new io.evangelium.server.player.NearbyPlayerIndex(this.players); // Evangelium - nearest-player searches without walking every player
+     public final ServerChunkCache chunkSource;
+     private final MinecraftServer server;
+     public final net.minecraft.world.level.storage.PrimaryLevelData serverLevelData; // CraftBukkit - type
+-    final EntityTickList entityTickList = new EntityTickList();
++    // final EntityTickList entityTickList = new EntityTickList(); // EvangeliumServer - moved into each region
+     private final ServerWaypointManager waypointManager;
+     private final EnvironmentAttributeSystem environmentAttributes;
+     // Paper - rewrite chunk system
+@@ -203,15 +_,15 @@
+     private final SleepStatus sleepStatus;
+     private int emptyTime;
+     private final PortalForcer portalForcer;
+-    private final LevelTicks<Block> blockTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded);
+-    private final LevelTicks<Fluid> fluidTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded);
++    public final LevelTicksRegionProxy<Block> blockTicks = new LevelTicksRegionProxy<>(this::isPositionTickingWithEntitiesLoaded); // EvangeliumServer
++    public final LevelTicksRegionProxy<Fluid> fluidTicks = new LevelTicksRegionProxy<>(this::isPositionTickingWithEntitiesLoaded); // EvangeliumServer
+     private final PathTypeCache pathTypesByPosCache = new PathTypeCache();
+-    final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>();
+-    volatile boolean isUpdatingNavigations;
++    // final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>(); // EvangeliumServer - handled ourselves
++    final ThreadLocal<Boolean> isUpdatingNavigations = new io.evangelium.server.util.ThreadFlag(false); // EvangeliumServer - make thread local // Evangelium - cheap read while unset
+     protected final Raids raids;
+-    private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
+-    private final List<BlockEventData> blockEventsToReschedule = new ArrayList<>(64);
+-    private boolean handlingTick;
++    // private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>(); // EvangeliumServer - moved into each region
++    private final ThreadLocal<List<BlockEventData>> blockEventsToRescheduleThreadLocal = ThreadLocal.withInitial(() -> new ArrayList<>(64)); // EvangeliumServer
++    public ThreadLocal<Boolean> handlingTickThreadLocal = ThreadLocal.withInitial(() -> false); // EvangeliumServer
+     private final List<CustomSpawner> customSpawners;
+     private @Nullable EndDragonFight dragonFight;
+     final Int2ObjectMap<EnderDragonPart> dragonParts = new Int2ObjectOpenHashMap<>();
+@@ -221,6 +_,8 @@
+     private double preciseTime; // Purpur - Configurable daylight cycle
+     private boolean forceTime; // Purpur - Configurable daylight cycle
+     private final RandomSequences randomSequences;
++    public final EvangeliumServerRegionScheduler chunkScheduler = new EvangeliumServerRegionScheduler(); // EvangeliumServer
++    public final Executor levelThread; // EvangeliumServer
+     final LevelDebugSynchronizers debugSynchronizers = new LevelDebugSynchronizers(this);
+ 
+     // CraftBukkit start
+@@ -229,7 +_,7 @@
+     public final net.minecraft.server.level.progress.LevelLoadListener levelLoadListener;
+     public boolean hasPhysicsEvent = true; // Paper - BlockPhysicsEvent
+     public boolean hasEntityMoveEvent; // Paper - Add EntityMoveEvent
+-    private final alternate.current.wire.WireHandler wireHandler = new alternate.current.wire.WireHandler(this); // Paper - optimize redstone (Alternate Current)
++    private final ThreadLocal<alternate.current.wire.WireHandler> wireHandlerThreadLocal = ThreadLocal.withInitial(() -> new alternate.current.wire.WireHandler(this)); // Paper - optimize redstone (Alternate Current) // EvangeliumServer - ThreadLocal
+     public boolean hasRidableMoveEvent = false; // Purpur - Ridables
+ 
+     @Override
+@@ -316,9 +_,9 @@
+     private long tickedBlocksOrFluids;
+     private final ca.spottedleaf.moonrise.common.misc.NearbyPlayers nearbyPlayers = new ca.spottedleaf.moonrise.common.misc.NearbyPlayers((ServerLevel)(Object)this);
+     private static final LevelChunk[] EMPTY_LEVEL_CHUNKS = new LevelChunk[0];
+-    private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> loadedChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS);
+-    private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> tickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS);
+-    private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> entityTickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS);
++    // private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> loadedChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS); // EvangeliumServer - loadedChunks is unused, remove
++    // private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> tickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS); // EvangeliumServer - unused, ensure it remains that way
++    // private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> entityTickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS); // EvangeliumServer - unused, ensure it remains that way
+ 
+     @Override
+     public final LevelChunk moonrise$getFullChunkIfLoaded(final int chunkX, final int chunkZ) {
+@@ -492,19 +_,21 @@
+         return this.nearbyPlayers;
+     }
+ 
+-    @Override
+-    public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getLoadedChunks() {
+-        return this.loadedChunks;
+-    }
++    // EvangeliumServer start - loadedChunks is unused, remove
++//    @Override
++//    public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getLoadedChunks() {
++//        return this.loadedChunks;
++//    }
++    // EvangeliumServer start - loadedChunks is unused, remove
+ 
+     @Override
+     public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getTickingChunks() {
+-        return this.tickingChunks;
++        throw new UnsupportedOperationException("Removed by EvangeliumServer"); // return this.tickingChunks; // EvangeliumServer - unused, ensure it remains that way
+     }
+ 
+     @Override
+     public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getEntityTickingChunks() {
+-        return this.entityTickingChunks;
++        throw new UnsupportedOperationException("Removed by EvangeliumServer"); // return this.entityTickingChunks; // EvangeliumServer - unused, ensure it remains that way
+     }
+ 
+     @Override
+@@ -530,75 +_,77 @@
+    }
+     // Paper end - rewrite chunk system
+     // Paper start - chunk tick iteration
+-    private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> playerTickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS);
+-    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap playerTickingRequests = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
+-
+-    @Override
+-    public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getPlayerTickingChunks() {
+-        return this.playerTickingChunks;
+-    }
+-
+-    @Override
+-    public final void moonrise$markChunkForPlayerTicking(final LevelChunk chunk) {
+-        final ChunkPos pos = chunk.getPos();
+-        if (!this.playerTickingRequests.containsKey(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(pos))) {
+-            return;
+-        }
+-
+-        this.playerTickingChunks.add(chunk);
+-    }
+-
+-    @Override
+-    public final void moonrise$removeChunkForPlayerTicking(final LevelChunk chunk) {
+-        this.playerTickingChunks.remove(chunk);
+-    }
+-
+-    @Override
+-    public final void moonrise$addPlayerTickingRequest(final int chunkX, final int chunkZ) {
+-        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread((ServerLevel)(Object)this, chunkX, chunkZ, "Cannot add ticking request async");
+-
+-        final long chunkKey = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(chunkX, chunkZ);
+-
+-        if (this.playerTickingRequests.addTo(chunkKey, 1) != 0) {
+-            // already added
+-            return;
+-        }
+-
+-        final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkHolder = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)(ServerLevel)(Object)this).moonrise$getChunkTaskScheduler()
+-            .chunkHolderManager.getChunkHolder(chunkKey);
+-
+-        if (chunkHolder == null || !chunkHolder.isTickingReady()) {
+-            return;
+-        }
+-
+-        this.playerTickingChunks.add((LevelChunk)chunkHolder.getCurrentChunk());
+-    }
+-
+-    @Override
+-    public final void moonrise$removePlayerTickingRequest(final int chunkX, final int chunkZ) {
+-        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread((ServerLevel)(Object)this, chunkX, chunkZ, "Cannot remove ticking request async");
+-
+-        final long chunkKey = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(chunkX, chunkZ);
+-        final int val = this.playerTickingRequests.addTo(chunkKey, -1);
+-
+-        if (val <= 0) {
+-            throw new IllegalStateException("Negative counter");
+-        }
+-
+-        if (val != 1) {
+-            // still has at least one request
+-            return;
+-        }
+-
+-        final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkHolder = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)(ServerLevel)(Object)this).moonrise$getChunkTaskScheduler()
+-            .chunkHolderManager.getChunkHolder(chunkKey);
+-
+-        if (chunkHolder == null || !chunkHolder.isTickingReady()) {
+-            return;
+-        }
+-
+-        this.playerTickingChunks.remove((LevelChunk)chunkHolder.getCurrentChunk());
+-    }
++    // EvangeliumServer start - handled by the regions
++//    private final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> playerTickingChunks = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_LEVEL_CHUNKS);
++//    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap playerTickingRequests = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
++//
++//    @Override
++//    public final ca.spottedleaf.moonrise.common.list.ReferenceList<LevelChunk> moonrise$getPlayerTickingChunks() {
++//        return this.playerTickingChunks;
++//    }
++//
++//    @Override
++//    public final void moonrise$markChunkForPlayerTicking(final LevelChunk chunk) {
++//        final ChunkPos pos = chunk.getPos();
++//        if (!this.playerTickingRequests.containsKey(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(pos))) {
++//            return;
++//        }
++//
++//        this.playerTickingChunks.add(chunk);
++//    }
++//
++//    @Override
++//    public final void moonrise$removeChunkForPlayerTicking(final LevelChunk chunk) {
++//        this.playerTickingChunks.remove(chunk);
++//    }
++//
++//    @Override
++//    public final void moonrise$addPlayerTickingRequest(final int chunkX, final int chunkZ) {
++//        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread((ServerLevel)(Object)this, chunkX, chunkZ, "Cannot add ticking request async");
++//
++//        final long chunkKey = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(chunkX, chunkZ);
++//
++//        if (this.playerTickingRequests.addTo(chunkKey, 1) != 0) {
++//            // already added
++//            return;
++//        }
++//
++//        final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkHolder = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)(ServerLevel)(Object)this).moonrise$getChunkTaskScheduler()
++//            .chunkHolderManager.getChunkHolder(chunkKey);
++//
++//        if (chunkHolder == null || !chunkHolder.isTickingReady()) {
++//            return;
++//        }
++//
++//        this.playerTickingChunks.add((LevelChunk)chunkHolder.getCurrentChunk());
++//    }
++//
++//    @Override
++//    public final void moonrise$removePlayerTickingRequest(final int chunkX, final int chunkZ) {
++//        ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread((ServerLevel)(Object)this, chunkX, chunkZ, "Cannot remove ticking request async");
++//
++//        final long chunkKey = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(chunkX, chunkZ);
++//        final int val = this.playerTickingRequests.addTo(chunkKey, -1);
++//
++//        if (val <= 0) {
++//            throw new IllegalStateException("Negative counter");
++//        }
++//
++//        if (val != 1) {
++//            // still has at least one request
++//            return;
++//        }
++//
++//        final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkHolder = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)(ServerLevel)(Object)this).moonrise$getChunkTaskScheduler()
++//            .chunkHolderManager.getChunkHolder(chunkKey);
++//
++//        if (chunkHolder == null || !chunkHolder.isTickingReady()) {
++//            return;
++//        }
++//
++//        this.playerTickingChunks.remove((LevelChunk)chunkHolder.getCurrentChunk());
++//    }
++    // EvangeliumServer end - handled by the regions
+     // Paper end - chunk tick iteration
+ 
+     public ServerLevel(
+@@ -711,7 +_,7 @@
+         this.sleepStatus = new SleepStatus();
+         this.gameEventDispatcher = new GameEventDispatcher(this);
+         this.randomSequences = Objects.requireNonNullElseGet(randomSequences, () -> this.getDataStorage().computeIfAbsent(RandomSequences.TYPE));
+-        this.waypointManager = new ServerWaypointManager();
++        this.waypointManager = EvangeliumServerConfiguration.get().optimizations.disableLocatorBar ? new NoOpServerWaypointManager() : io.evangelium.server.util.ConcurrentWaypointManager.ENABLED ? new io.evangelium.server.util.ConcurrentWaypointManager() : new ServerWaypointManager(); // EvangeliumServer - Optimise ServerWaypointManager // Evangelium - without one world-wide lock
+         this.environmentAttributes = EnvironmentAttributeSystem.builder().addDefaultLayers(this).build();
+         this.updateSkyBrightness();
+         // Paper start - rewrite chunk system
+@@ -730,6 +_,7 @@
+         // Paper end - rewrite chunk system
+         this.getCraftServer().addWorld(this.getWorld()); // CraftBukkit
+         this.preciseTime = this.serverLevelData.getDayTime(); // Purpur - Configurable daylight cycle
++        this.levelThread = Executors.newSingleThreadExecutor(r -> new EvangeliumServerTickThread(r, "ServerLevel-%s".formatted(WorldUtil.getWorldName(this)))); // EvangeliumServer
+     }
+ 
+     // Paper start
+@@ -767,9 +_,9 @@
+         return this.environmentAttributes;
+     }
+ 
+-    public void tick(BooleanSupplier hasTimeLeft) {
++    public CompletableFuture<Void> tickAsync(BooleanSupplier hasTimeLeft) { // EvangeliumServer - run async
+         ProfilerFiller profilerFiller = Profiler.get();
+-        this.handlingTick = true;
++        this.handlingTickThreadLocal.set(true); // EvangeliumServer
+         TickRateManager tickRateManager = this.tickRateManager();
+         boolean runsNormally = tickRateManager.runsNormally();
+         if (runsNormally) {
+@@ -827,13 +_,13 @@
+         }
+ 
+         profilerFiller.popPush("chunkSource");
+-        this.getChunkSource().tick(hasTimeLeft, true);
++        return this.getChunkSource().tick(hasTimeLeft, true).thenRun(() -> { // EvangeliumServer - run async
+         profilerFiller.popPush("blockEvents");
+         if (runsNormally) {
+-            this.runBlockEvents();
++            // this.runBlockEvents(); // EvangeliumServer - moved into each region
+         }
+ 
+-        this.handlingTick = false;
++        this.handlingTickThreadLocal.set(false); // EvangeliumServer
+         profilerFiller.pop();
+         boolean hasActiveTickets = !paperConfig().unsupportedSettings.disableWorldTickingWhenEmpty || this.chunkSource.hasActiveTickets(); // CraftBukkit - this prevents entity cleanup, other issues on servers with no players // Paper - restore this
+         if (hasActiveTickets) {
+@@ -853,34 +_,36 @@
+             }
+ 
+             io.papermc.paper.entity.activation.ActivationRange.activateEntities(this); // Paper - EAR
+-            this.entityTickList
+-                .forEach(
+-                    entity -> {
+-                        if (!entity.isRemoved()) {
+-                            if (!tickRateManager.isEntityFrozen(entity)) {
+-                                profilerFiller.push("checkDespawn");
+-                                entity.checkDespawn();
+-                                profilerFiller.pop();
+-                                if (true) { // Paper - rewrite chunk system
+-                                    Entity vehicle = entity.getVehicle();
+-                                    if (vehicle != null) {
+-                                        if (!vehicle.isRemoved() && vehicle.hasPassenger(entity)) {
+-                                            return;
+-                                        }
+-
+-                                        entity.stopRiding();
+-                                    }
+-
+-                                    profilerFiller.push("tick");
+-                                    this.guardEntityTick(this::tickNonPassenger, entity);
+-                                    profilerFiller.pop();
+-                                }
+-                            }
+-                        }
+-                    }
+-                );
++            // EvangeliumServer start - moved to EvangeliumServerEntityTicker
++//            this.entityTickList
++//                .forEach(
++//                    entity -> {
++//                        if (!entity.isRemoved()) {
++//                            if (!tickRateManager.isEntityFrozen(entity)) {
++//                                profilerFiller.push("checkDespawn");
++//                                entity.checkDespawn();
++//                                profilerFiller.pop();
++//                                if (true) { // Paper - rewrite chunk system
++//                                    Entity vehicle = entity.getVehicle();
++//                                    if (vehicle != null) {
++//                                        if (!vehicle.isRemoved() && vehicle.hasPassenger(entity)) {
++//                                            return;
++//                                        }
++//
++//                                        entity.stopRiding();
++//                                    }
++//
++//                                    profilerFiller.push("tick");
++//                                    this.guardEntityTick(this::tickNonPassenger, entity);
++//                                    profilerFiller.pop();
++//                                }
++//                            }
++//                        }
++//                    }
++//                );
++            // EvangeliumServer end - moved to EvangeliumServerEntityTicker
+             profilerFiller.popPush("blockEntities");
+-            this.tickBlockEntities();
++            // this.tickBlockEntities(); // EvangeliumServer - handled locally in the region
+             profilerFiller.pop();
+         }
+ 
+@@ -889,15 +_,16 @@
+         profilerFiller.pop();
+         profilerFiller.push("debugSynchronizers");
+         if (this.debugSynchronizers.hasAnySubscriberFor(DebugSubscriptions.NEIGHBOR_UPDATES)) {
+-            this.neighborUpdater
+-                .setDebugListener(blockPos -> this.debugSynchronizers.broadcastEventToTracking(blockPos, DebugSubscriptions.NEIGHBOR_UPDATES, blockPos));
++            // this.neighborUpdater // EvangeliumServer - unneeded
++            //     .setDebugListener(blockPos -> this.debugSynchronizers.broadcastEventToTracking(blockPos, DebugSubscriptions.NEIGHBOR_UPDATES, blockPos)); // EvangeliumServer - unneeded
+         } else {
+-            this.neighborUpdater.setDebugListener(null);
++            // this.neighborUpdater.setDebugListener(null); // EvangeliumServer - unneeded
+         }
+ 
+         this.debugSynchronizers.tick(this.server.debugSubscribers());
+         profilerFiller.pop();
+         this.environmentAttributes().invalidateTickCache();
++        }); // EvangeliumServer - run async
+     }
+ 
+     @Override
+@@ -958,7 +_,7 @@
+ 
+     private void wakeUpAllPlayers() {
+         this.sleepStatus.removeAllSleepers();
+-        this.players.stream().filter(LivingEntity::isSleeping).collect(Collectors.toList()).forEach(player -> player.stopSleepInBed(false, false));
++        this.players.stream().filter(LivingEntity::isSleeping).collect(Collectors.toList()).forEach(player -> EvangeliumServer.runSync(player, () -> player.stopSleepInBed(false, false))); // EvangeliumServer - run on player's thread
+     }
+ 
+     // Paper start - optimise random ticking
+@@ -982,6 +_,29 @@
+                 continue;
+             }
+ 
++            // Evangelium start - ticking-block set (list or 4096 bits): each ticking block still has chance 1/4096 per try
++            if (io.evangelium.server.util.TickingBlockSet.ENABLED) {
++                if (io.evangelium.server.util.TickingBlockVerify.VERIFY && (simpleRandom.nextInt() & 63) == 0) section.evangelium$verifyTickingTruth();
++                for (int i = 0; i < tickSpeed; ++i) {
++                    final int location = section.evangelium$pickTicking(simpleRandom.nextInt() & ((16 * 16 * 16) - 1));
++                    if (location < 0) {
++                        // most of the time we fall here
++                        continue;
++                    }
++                    final BlockState state = states.get(location);
++                    final BlockPos pos = new BlockPos((location & 15) | offsetX, ((location >>> (4 + 4)) & 15) | offsetY, ((location >>> 4) & 15) | offsetZ);
++                    state.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                    if (doubleTickFluids) {
++                        final FluidState fluidState = state.getFluidState();
++                        if (fluidState.isRandomlyTicking()) {
++                            fluidState.randomTick((ServerLevel)(Object)this, pos, simpleRandom);
++                        }
++                    }
++                }
++                continue;
++            }
++            // Evangelium end - ticking-block set
++
+             final ca.spottedleaf.moonrise.common.list.ShortList tickList = ((ca.spottedleaf.moonrise.patches.block_counting.BlockCountingChunkSection)section).moonrise$getTickingBlockList();
+ 
+             for (int i = 0; i < tickSpeed; ++i) {
+@@ -1182,7 +_,7 @@
+     }
+ 
+     public boolean isHandlingTick() {
+-        return this.handlingTick;
++        return this.handlingTickThreadLocal.get();
+     }
+ 
+     public boolean canSleepThroughNights() {
+@@ -1392,27 +_,29 @@
+         this.emptyTime = 0;
+     }
+ 
+-    private void tickFluid(BlockPos pos, Fluid fluid) {
++    public void tickFluid(BlockPos pos, Fluid fluid) { // EvangeliumServer - make public
++        TickThread.ensureTickThread(this, pos, "Cannot tick fluid outside of tick thread"); // EvangeliumServer
+         BlockState blockState = this.getBlockState(pos);
+         FluidState fluidState = blockState.getFluidState();
+         if (fluidState.is(fluid)) {
+             fluidState.tick(this, pos, blockState);
+         }
+         // Paper start - rewrite chunk system
+-        if ((++this.tickedBlocksOrFluids & 7L) != 0L) {
++        if (false && (++this.tickedBlocksOrFluids & 7L) != 0L) { // EvangeliumServer - no mid tick tasks
+             ((ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer)this.server).moonrise$executeMidTickTasks();
+         }
+         // Paper end - rewrite chunk system
+ 
+     }
+ 
+-    private void tickBlock(BlockPos pos, Block block) {
++    public void tickBlock(BlockPos pos, Block block) { // EvangeliumServer - make public
++        TickThread.ensureTickThread(this, pos, "Cannot tick block outside of tick thread"); // EvangeliumServer
+         BlockState blockState = this.getBlockState(pos);
+         if (blockState.is(block)) {
+             blockState.tick(this, pos, this.random);
+         }
+         // Paper start - rewrite chunk system
+-        if ((++this.tickedBlocksOrFluids & 7L) != 0L) {
++        if (false && (++this.tickedBlocksOrFluids & 7L) != 0L) { // EvangeliumServer - no mid tick tasks
+             ((ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer)this.server).moonrise$executeMidTickTasks();
+         }
+         // Paper end - rewrite chunk system
+@@ -1465,9 +_,13 @@
+     }
+ 
+     private void tickPassenger(Entity ridingEntity, Entity passengerEntity, final boolean isActive) { // Paper - EAR 2
++        if (!io.evangelium.server.EvangeliumServer.isSync((ServerLevel) passengerEntity.level(), passengerEntity.chunkPosition())) { // EvangeliumServer - sync a passenger from another region with its vehicle
++            io.evangelium.server.EvangeliumServer.ensureSync(ridingEntity, passengerEntity, () -> this.tickPassenger(ridingEntity, passengerEntity, isActive));
++            return;
++        }
+         if (passengerEntity.isRemoved() || passengerEntity.getVehicle() != ridingEntity) {
+             passengerEntity.stopRiding();
+-        } else if (passengerEntity instanceof Player || this.entityTickList.contains(passengerEntity)) {
++        } else if (passengerEntity instanceof Player || passengerEntity.isTicking()) { // EvangeliumServer - use a different method to check if passenger is ticking
+             passengerEntity.setOldPosAndRot();
+             passengerEntity.tickCount++;
+             passengerEntity.totalEntityAge++; // Paper - age-like counter for all entities
+@@ -1710,8 +_,8 @@
+         } else {
+             if (entity instanceof net.minecraft.world.entity.item.ItemEntity itemEntity && itemEntity.getItem().isEmpty()) return false; // Paper - Prevent empty items from being added
+             // Paper start - capture all item additions to the world
+-            if (captureDrops != null && entity instanceof net.minecraft.world.entity.item.ItemEntity) {
+-                captureDrops.add((net.minecraft.world.entity.item.ItemEntity) entity);
++            if (captureDropsThreadLocal.get() != null && entity instanceof net.minecraft.world.entity.item.ItemEntity) { // EvangeliumServer - use thread local
++                captureDropsThreadLocal.get().add((net.minecraft.world.entity.item.ItemEntity) entity); // EvangeliumServer - use thread local
+                 return true;
+             }
+             // Paper end - capture all item additions to the world
+@@ -1797,7 +_,9 @@
+                 .callEvent();
+         }
+         // Paper end - Add BlockBreakProgressUpdateEvent
+-        for (ServerPlayer serverPlayer : this.server.getPlayerList().getPlayers()) {
++        ClientboundBlockDestructionPacket packet = new ClientboundBlockDestructionPacket(breakerId, pos, progress); // EvangeliumServer - BroadcastPacketEvent - move packet creation out of loop
++        new io.evangelium.server.event.BroadcastPacketEvent(this.getWorld(), packet, entity == null ? null : entity.getBukkitEntity()).callEvent(); // EvangeliumServer - BroadcastPacketEvent
++        for (ServerPlayer serverPlayer : this.players) { // EvangeliumServer - BroadcastPacketEvent - optimization: use the level's players instead of all players
+             if (serverPlayer.level() == this && serverPlayer.getId() != breakerId) {
+                 double d = pos.getX() - serverPlayer.getX();
+                 double d1 = pos.getY() - serverPlayer.getY();
+@@ -1808,7 +_,7 @@
+                 }
+                 // CraftBukkit end
+                 if (d * d + d1 * d1 + d2 * d2 < 1024.0) {
+-                    serverPlayer.connection.send(new ClientboundBlockDestructionPacket(breakerId, pos, progress));
++                    serverPlayer.connection.send(packet); // EvangeliumServer - BroadcastPacketEvent - move packet creation out of loop
+                 }
+             }
+         }
+@@ -1903,7 +_,7 @@
+ 
+     @Override
+     public void sendBlockUpdated(BlockPos pos, BlockState oldState, BlockState newState, int flags) {
+-        if (this.isUpdatingNavigations) {
++        if (this.isUpdatingNavigations.get()) { // EvangeliumServer - use thread local
+             String string = "recursive call to sendBlockUpdated";
+             Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
+         }
+@@ -1917,7 +_,7 @@
+             List<PathNavigation> list = new ObjectArrayList<>();
+ 
+             try { // Paper - catch CME see below why
+-            for (Mob mob : this.navigatingMobs) {
++            for (Mob mob : this.chunkSource.tickingRegions.collectRelevantNavigatingMobs(RegionPos.forChunk(new ChunkPos(pos)))) { // EvangeliumServer
+                 PathNavigation navigation = mob.getNavigation();
+                 if (navigation.shouldRecomputePath(pos)) {
+                     list.add(navigation);
+@@ -1934,13 +_,13 @@
+             // Paper end - catch CME see below why
+ 
+             try {
+-                this.isUpdatingNavigations = true;
++                this.isUpdatingNavigations.set(true); // EvangeliumServer - use thread local
+ 
+                 for (PathNavigation pathNavigation : list) {
+                     pathNavigation.recomputePath();
+                 }
+             } finally {
+-                this.isUpdatingNavigations = false;
++                this.isUpdatingNavigations.set(false); // EvangeliumServer - use thread local
+             }
+         }
+         } // Paper - option to disable pathfinding updates
+@@ -1949,17 +_,17 @@
+     @Override
+     public void updateNeighborsAt(BlockPos pos, Block block) {
+         // CraftBukkit start
+-        if (this.populating) {
++        if (this.populatingThreadLocal.get()) { // EvangeliumServer - thread local for populating
+             return;
+         }
+         // CraftBukkit end
+-        if (captureBlockStates) { return; } // Paper - Cancel all physics during placement
++        if (captureBlockStatesThreadLocal.get()) { return; } // Paper - Cancel all physics during placement // EvangeliumServer - use thread local
+         this.updateNeighborsAt(pos, block, ExperimentalRedstoneUtils.initialOrientation(this, null, null));
+     }
+ 
+     @Override
+     public void updateNeighborsAt(BlockPos pos, Block block, @Nullable Orientation orientation) {
+-        if (captureBlockStates) { return; } // Paper - Cancel all physics during placement
++        if (captureBlockStatesThreadLocal.get()) { return; } // Paper - Cancel all physics during placement // EvangeliumServer - use thread local
+         this.neighborUpdater.updateNeighborsAtExceptFromFacing(pos, block, null, orientation);
+     }
+ 
+@@ -2084,14 +_,15 @@
+ 
+     @Override
+     public void blockEvent(BlockPos pos, Block block, int eventId, int eventParam) {
+-        this.blockEvents.add(new BlockEventData(pos, block, eventId, eventParam));
++        this.chunkSource.tickingRegions.addBlockEvent(new BlockEventData(pos, block, eventId, eventParam)); // EvangeliumServer
+     }
+ 
+-    private void runBlockEvents() {
+-        this.blockEventsToReschedule.clear();
++    public void runBlockEvents(LevelChunkRegion region) { // EvangeliumServer
++        List<BlockEventData> blockEventsToReschedule = blockEventsToRescheduleThreadLocal.get(); // EvangeliumServer
++        blockEventsToReschedule.clear(); // EvangeliumServer
+ 
+-        while (!this.blockEvents.isEmpty()) {
+-            BlockEventData blockEventData = this.blockEvents.removeFirst();
++        while (region.hasBlockEvents()) { // EvangeliumServer
++            BlockEventData blockEventData = (BlockEventData) region.removeFirstBlockEvent(); // EvangeliumServer
+             if (this.shouldTickBlocksAt(blockEventData.pos())) {
+                 if (this.doBlockEvent(blockEventData)) {
+                     this.server
+@@ -2107,11 +_,11 @@
+                         );
+                 }
+             } else {
+-                this.blockEventsToReschedule.add(blockEventData);
++                blockEventsToReschedule.add(blockEventData); // EvangeliumServer
+             }
+         }
+ 
+-        this.blockEvents.addAll(this.blockEventsToReschedule);
++        region.addAllBlockEvents(blockEventsToReschedule); // EvangeliumServer
+     }
+ 
+     private boolean doBlockEvent(BlockEventData event) {
+@@ -2303,10 +_,14 @@
+ 
+     @Override
+     public WorldBorder getWorldBorder() {
+-        WorldBorder worldBorder = this.getDataStorage().computeIfAbsent(WorldBorder.TYPE);
++        WorldBorder worldBorder = this.evangeliumWorldBorder; // Evangelium - every ticking block entity asks; the saved data object never changes once loaded
++        if (worldBorder != null) return worldBorder;
++        worldBorder = this.getDataStorage().computeIfAbsent(WorldBorder.TYPE);
+         worldBorder.applyInitialSettings(this.levelData.getGameTime());
++        this.evangeliumWorldBorder = worldBorder;
+         return worldBorder;
+     }
++    private volatile @Nullable WorldBorder evangeliumWorldBorder; // Evangelium
+ 
+     @Override
+     public RecipeManager recipeAccess() {
+@@ -2337,7 +_,7 @@
+             final MapItemSavedData mapData = storage.get(MapItemSavedData.type(mapId)); // get populates the cache
+             if (mapData != null) { // map was read, init it and return
+                 mapData.id = mapId;
+-                new org.bukkit.event.server.MapInitializeEvent(mapData.mapView).callEvent();
++                if (mapData.hasCalledMapInitializeEvent.compareAndSet(false, true)) new org.bukkit.event.server.MapInitializeEvent(mapData.mapView).callEvent(); // EvangeliumServer - ensure only called once
+                 return mapData;
+             }
+ 
+@@ -2356,8 +_,7 @@
+     public void setMapData(MapId mapId, MapItemSavedData data) {
+         // CraftBukkit start
+         data.id = mapId;
+-        org.bukkit.event.server.MapInitializeEvent event = new org.bukkit.event.server.MapInitializeEvent(data.mapView);
+-        event.callEvent();
++        if (data.hasCalledMapInitializeEvent.compareAndSet(false, true)) new org.bukkit.event.server.MapInitializeEvent(data.mapView).callEvent(); // EvangeliumServer - ensure only called once
+         // CraftBukkit end
+         this.getServer().overworld().getDataStorage().set(MapItemSavedData.type(mapId), data);
+     }
+@@ -2406,17 +_,60 @@
+         return this.players;
+     }
+ 
++    // Evangelium start - nearby player index: the same answers as the EntityGetter / ServerEntityGetter defaults, without walking every player
++    @Override
++    public @Nullable Player getNearestPlayer(double x, double y, double z, double distance, java.util.function.@Nullable Predicate<Entity> predicate) {
++        return this.evangeliumPlayerIndex.getNearestPlayer(x, y, z, distance, predicate);
++    }
++
++    @Override
++    @SuppressWarnings("unchecked")
++    public <T extends LivingEntity> @Nullable T getNearestEntity(List<? extends T> entities, net.minecraft.world.entity.ai.targeting.TargetingConditions targetingConditions, @Nullable LivingEntity source, double x, double y, double z) {
++        if (entities == this.players) {
++            return (T) this.evangeliumPlayerIndex.getNearestTargetedPlayer(this, targetingConditions, source, x, y, z);
++        }
++        double d = -1.0;
++        T livingEntity = null;
++        for (T livingEntity1 : entities) {
++            if (targetingConditions.test(this, source, livingEntity1)) {
++                double d1 = livingEntity1.distanceToSqr(x, y, z);
++                if (d == -1.0 || d1 < d) {
++                    d = d1;
++                    livingEntity = livingEntity1;
++                }
++            }
++        }
++        return livingEntity;
++    }
++
++    @Override
++    public List<Player> getNearbyPlayers(net.minecraft.world.entity.ai.targeting.TargetingConditions targetingConditions, LivingEntity source, AABB area) {
++        return this.evangeliumPlayerIndex.getNearbyPlayers(this, targetingConditions, source, area);
++    }
++
++    @Override
++    public boolean hasNearbyAlivePlayerThatAffectsSpawning(double x, double y, double z, double range) {
++        return this.evangeliumPlayerIndex.hasNearbyAlivePlayerThatAffectsSpawning(x, y, z, range);
++    }
++
++    @Override
++    public boolean hasNearbyAlivePlayer(double x, double y, double z, double distance) {
++        return this.evangeliumPlayerIndex.hasNearbyAlivePlayer(x, y, z, distance);
++    }
++    // Evangelium end
++
+     @Override
+     public void updatePOIOnBlockStateChange(BlockPos pos, BlockState oldState, BlockState newState) {
++        if (!oldState.evangeliumHasPoi() && !newState.evangeliumHasPoi()) return; // Evangelium - neither is a POI: both lookups below would be empty
+         Optional<Holder<PoiType>> optional = PoiTypes.forState(oldState);
+         Optional<Holder<PoiType>> optional1 = PoiTypes.forState(newState);
+         if (!Objects.equals(optional, optional1)) {
+             BlockPos blockPos = pos.immutable();
+-            optional.ifPresent(holder -> this.getServer().execute(() -> {
++            optional.ifPresent(holder -> chunkSource.tickingRegions.execute(RegionPos.forChunk(new ChunkPos(pos)), () -> { // EvangeliumServer
+                 this.getPoiManager().remove(blockPos);
+                 this.debugSynchronizers.dropPoi(blockPos);
+             }));
+-            optional1.ifPresent(holder -> this.getServer().execute(() -> {
++            optional1.ifPresent(holder -> chunkSource.tickingRegions.execute(RegionPos.forChunk(new ChunkPos(pos)), () -> { // EvangeliumServer
+                 // Paper start - Remove stale POIs
+                 if (optional.isEmpty() && this.getPoiManager().exists(blockPos, ignored -> true)) {
+                     this.getPoiManager().remove(blockPos);
+@@ -2479,7 +_,7 @@
+             }
+ 
+             bufferedWriter.write(String.format(Locale.ROOT, "entities: %s\n", this.moonrise$getEntityLookup().getDebugInfo()));  // Paper - rewrite chunk system
+-            bufferedWriter.write(String.format(Locale.ROOT, "block_entity_tickers: %d\n", this.blockEntityTickers.size()));
++            // bufferedWriter.write(String.format(Locale.ROOT, "block_entity_tickers: %d\n", this.blockEntityTickers.size())); // EvangeliumServer - removed blockEntityTickers
+             bufferedWriter.write(String.format(Locale.ROOT, "block_ticks: %d\n", this.getBlockTicks().count()));
+             bufferedWriter.write(String.format(Locale.ROOT, "fluid_ticks: %d\n", this.getFluidTicks().count()));
+             bufferedWriter.write("distance_manager: " + chunkMap.getDistanceManager().getDebugStatus() + "\n");
+@@ -2547,17 +_,25 @@
+     }
+ 
+     private void dumpBlockEntityTickers(Writer output) throws IOException {
+-        CsvOutput csvOutput = CsvOutput.builder().addColumn("x").addColumn("y").addColumn("z").addColumn("type").build(output);
+-
+-        for (TickingBlockEntity tickingBlockEntity : this.blockEntityTickers) {
+-            BlockPos pos = tickingBlockEntity.getPos();
+-            csvOutput.writeRow(pos.getX(), pos.getY(), pos.getZ(), tickingBlockEntity.getType());
+-        }
++        // EvangeliumServer start - removed blockEntityTickers
++//        CsvOutput csvOutput = CsvOutput.builder().addColumn("x").addColumn("y").addColumn("z").addColumn("type").build(output);
++//
++//        for (TickingBlockEntity tickingBlockEntity : this.blockEntityTickers) {
++//            BlockPos pos = tickingBlockEntity.getPos();
++//            csvOutput.writeRow(pos.getX(), pos.getY(), pos.getZ(), tickingBlockEntity.getType());
++//        }
++        // EvangeliumServer end - removed blockEntityTickers
+     }
+ 
+     @VisibleForTesting
+     public void clearBlockEvents(BoundingBox boundingBox) {
+-        this.blockEvents.removeIf(blockEventData -> boundingBox.isInside(blockEventData.pos()));
++        // EvangeliumServer start - moved blockEvents into regions
++        this.getLevel().getChunkSource().tickingRegions.forEachRegionInBoundingBox(boundingBox, region -> {
++            region.removeBlockEventsIf((blockactiondata) -> {
++                return boundingBox.isInside(blockactiondata.pos());
++            });
++        });
++        // EvangeliumServer end - moved blockEvents into regions
+     }
+ 
+     @Override
+@@ -2600,8 +_,8 @@
+             this.players.size(),
+             this.moonrise$getEntityLookup().getDebugInfo(), // Paper - rewrite chunk system
+             getTypeCount(this.moonrise$getEntityLookup().getAll(), entity -> BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString()), // Paper - rewrite chunk system
+-            this.blockEntityTickers.size(),
+-            getTypeCount(this.blockEntityTickers, TickingBlockEntity::getType),
++            0 /*this.blockEntityTickers.size()*/, // EvangeliumServer - removed blockEntityTickers
++            0 /*getTypeCount(this.blockEntityTickers, TickingBlockEntity::getType)*/, // EvangeliumServer - removed blockEntityTickers
+             this.getBlockTicks().count(),
+             this.getFluidTicks().count(),
+             this.gatherChunkSourceStats()
+@@ -2630,7 +_,7 @@
+ 
+     @Override
+     public LevelEntityGetter<Entity> getEntities() {
+-        org.spigotmc.AsyncCatcher.catchOp("Chunk getEntities call"); // Spigot
++        // org.spigotmc.AsyncCatcher.catchOp("Chunk getEntities call"); // Spigot // EvangeliumServer - thread safe now
+         return this.moonrise$getEntityLookup(); // Paper - rewrite chunk system
+     }
+ 
+@@ -2816,7 +_,7 @@
+     // Paper start - optimize redstone (Alternate Current)
+     @Override
+     public alternate.current.wire.WireHandler getWireHandler() {
+-        return wireHandler;
++        return wireHandlerThreadLocal.get(); // EvangeliumServer - ThreadLocal
+     }
+     // Paper end - optimize redstone (Alternate Current)
+ 
+@@ -2857,12 +_,12 @@
+         @Override
+         public void onTickingStart(Entity entity) {
+             if (entity instanceof net.minecraft.world.entity.Marker && !paperConfig().entities.markers.tick) return; // Paper - Configurable marker ticking
+-            ServerLevel.this.entityTickList.add(entity);
++            ServerLevel.this.getChunkSource().tickingRegions.addTickingEntity(entity); // EvangeliumServer - move entityTickList to the regions
+         }
+ 
+         @Override
+         public void onTickingEnd(Entity entity) {
+-            ServerLevel.this.entityTickList.remove(entity);
++            ServerLevel.this.getChunkSource().tickingRegions.removeTickingEntity(entity); // EvangeliumServer - move entityTickList to the regions
+             // Paper start - Reset pearls when they stop being ticked
+             if (ServerLevel.this.paperConfig().fixes.disableUnloadedChunkEnderpearlExploit && ServerLevel.this.paperConfig().misc.legacyEnderPearlBehavior && entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl pearl) {
+                 pearl.setOwner(null);
+@@ -2872,10 +_,12 @@
+ 
+         @Override
+         public void onTrackingStart(Entity entity) {
+-            org.spigotmc.AsyncCatcher.catchOp("entity register"); // Spigot
++            TickThread.ensureTickThread(entity, "entity register"); // org.spigotmc.AsyncCatcher.catchOp("entity register"); // Spigot // EvangeliumServer
+             // ServerLevel.this.getChunkSource().addEntity(entity); // Paper - ignore and warn about illegal addEntity calls instead of crashing server; moved down below valid=true
+             if (entity instanceof ServerPlayer serverPlayer) {
+                 ServerLevel.this.players.add(serverPlayer);
++                ServerLevel.this.evangeliumPlayerIndex.invalidate(); // Evangelium - nearby player index
++                ServerLevel.this.getChunkSource().tickingRegions.addPlayer(serverPlayer); // EvangeliumServer - add player to region
+                 if (serverPlayer.isReceivingWaypoints()) {
+                     ServerLevel.this.getWaypointManager().addPlayer(serverPlayer);
+                 }
+@@ -2888,14 +_,14 @@
+             }
+ 
+             if (entity instanceof Mob mob) {
+-                if (false && ServerLevel.this.isUpdatingNavigations) { // Paper - Remove unnecessary onTrackingStart during navigation warning
++                if (false && ServerLevel.this.isUpdatingNavigations.get()) { // Paper - Remove unnecessary onTrackingStart during navigation warning // EvangeliumServer - use thread local
+                     String string = "onTrackingStart called during navigation iteration";
+                     Util.logAndPauseIfInIde(
+                         "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
+                     );
+                 }
+ 
+-                ServerLevel.this.navigatingMobs.add(mob);
++                // ServerLevel.this.navigatingMobs.add(mob); // EvangeliumServer - handled ourselves
+             }
+ 
+             if (entity instanceof EnderDragon enderDragon) {
+@@ -2922,7 +_,7 @@
+ 
+         @Override
+         public void onTrackingEnd(Entity entity) {
+-            org.spigotmc.AsyncCatcher.catchOp("entity unregister"); // Spigot
++            TickThread.ensureTickThread(entity, "entity unregister"); // org.spigotmc.AsyncCatcher.catchOp("entity unregister"); // Spigot // EvangeliumServer
+             // Spigot start // TODO I don't think this is needed anymore
+             if (entity instanceof Player player) {
+                 for (final ServerLevel level : ServerLevel.this.getServer().getAllLevels()) {
+@@ -2931,10 +_,12 @@
+                             continue;
+                         }
+ 
++                        synchronized (map) { // EvangeliumServer - thread-safe
+                         map.carriedByPlayers.remove(player);
+                         if (map.carriedBy.removeIf(holdingPlayer -> holdingPlayer.player == player)) {
+                             map.decorations.remove(player.getName().getString());
+                         }
++                        } // EvangeliumServer - thread-safe
+                     }
+                 }
+             }
+@@ -2953,20 +_,22 @@
+             // Spigot end
+             ServerLevel.this.getChunkSource().removeEntity(entity);
+             if (entity instanceof ServerPlayer serverPlayer) {
++                ServerLevel.this.getChunkSource().tickingRegions.removePlayer(serverPlayer); // EvangeliumServer - remove player from region
+                 ServerLevel.this.players.remove(serverPlayer);
++                ServerLevel.this.evangeliumPlayerIndex.invalidate(); // Evangelium - nearby player index
+                 ServerLevel.this.getWaypointManager().removePlayer(serverPlayer);
+                 ServerLevel.this.updateSleepingPlayerList();
+             }
+ 
+             if (entity instanceof Mob mob) {
+-                if (false && ServerLevel.this.isUpdatingNavigations) { // Paper - Remove unnecessary onTrackingStart during navigation warning
++                if (false && ServerLevel.this.isUpdatingNavigations.get()) { // Paper - Remove unnecessary onTrackingStart during navigation warning // EvangeliumServer - use thread local
+                     String string = "onTrackingStart called during navigation iteration";
+                     Util.logAndPauseIfInIde(
+                         "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
+                     );
+                 }
+ 
+-                ServerLevel.this.navigatingMobs.remove(mob);
++                // ServerLevel.this.navigatingMobs.remove(mob); // EvangeliumServer - handled ourselves
+             }
+ 
+             if (entity instanceof EnderDragon enderDragon) {
+@@ -2991,6 +_,9 @@
+         @Override
+         public void onSectionChange(Entity entity) {
+             entity.updateDynamicGameEventListener(DynamicGameEventListener::move);
++            ServerLevel.this.chunkSource.tickingRegions.moveTickingEntity(entity); // EvangeliumServer - move ticking entity into the new region
++            ServerLevel.this.chunkSource.tickingRegions.moveTrackedEntity(entity); // EvangeliumServer - move tracked entity into the new region
++            if (entity instanceof ServerPlayer serverPlayer) ServerLevel.this.chunkSource.tickingRegions.movePlayer(serverPlayer); // EvangeliumServer - move player into the new region
+         }
+     }
+ 

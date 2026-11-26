@@ -1,0 +1,16 @@
+--- a/net/minecraft/world/level/block/entity/CommandBlockEntity.java
++++ b/net/minecraft/world/level/block/entity/CommandBlockEntity.java
+@@ -39,6 +_,13 @@
+         }
+         // CraftBukkit end
+ 
++        // EvangeliumServer start - Add getBlockPos() for CloseableCommandBlockSource
++        @Override
++        public BlockPos getBlockPos() {
++            return CommandBlockEntity.this.getBlockPos();
++        }
++        // EvangeliumServer end - Add getBlockPos() for CloseableCommandBlockSource
++
+         @Override
+         public void setCommand(String command) {
+             super.setCommand(command);

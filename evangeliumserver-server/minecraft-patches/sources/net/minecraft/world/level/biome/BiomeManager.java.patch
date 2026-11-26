@@ -1,0 +1,70 @@
+--- a/net/minecraft/world/level/biome/BiomeManager.java
++++ b/net/minecraft/world/level/biome/BiomeManager.java
+@@ -15,6 +_,40 @@
+     private final BiomeManager.NoiseBiomeSource noiseBiomeSource;
+     private final long biomeZoomSeed;
+ 
++    // Evangelium start - biome lookup cache: the 8 corner offsets of the last cell asked (shared between threads, so immutable)
++    private final boolean cacheFiddles = net.minecraft.world.level.levelgen.WorldgenOptimizations.biome();
++    private @org.jspecify.annotations.Nullable Fiddles lastFiddles;
++
++    private static final class Fiddles {
++        final int x;
++        final int y;
++        final int z;
++        final double[] offsets = new double[24]; // x, y, z offset of corner 0..7 in getBiome's corner order
++
++        Fiddles(long seed, int x, int y, int z) {
++            this.x = x;
++            this.y = y;
++            this.z = z;
++            for (int corner = 0; corner < 8; corner++) {
++                int cx = (corner & 4) == 0 ? x : x + 1;
++                int cy = (corner & 2) == 0 ? y : y + 1;
++                int cz = (corner & 1) == 0 ? z : z + 1;
++                long l = LinearCongruentialGenerator.next(seed, cx);
++                l = LinearCongruentialGenerator.next(l, cy);
++                l = LinearCongruentialGenerator.next(l, cz);
++                l = LinearCongruentialGenerator.next(l, cx);
++                l = LinearCongruentialGenerator.next(l, cy);
++                l = LinearCongruentialGenerator.next(l, cz);
++                this.offsets[corner * 3] = getFiddle(l);
++                l = LinearCongruentialGenerator.next(l, seed);
++                this.offsets[corner * 3 + 1] = getFiddle(l);
++                l = LinearCongruentialGenerator.next(l, seed);
++                this.offsets[corner * 3 + 2] = getFiddle(l);
++            }
++        }
++    }
++    // Evangelium end - biome lookup cache
++
+     public BiomeManager(BiomeManager.NoiseBiomeSource noiseBiomeSource, long biomeZoomSeed) {
+         this.noiseBiomeSource = noiseBiomeSource;
+         this.biomeZoomSeed = biomeZoomSeed;
+@@ -41,6 +_,26 @@
+         int i6 = 0;
+         double d3 = Double.POSITIVE_INFINITY;
+ 
++        // Evangelium start - biome lookup cache: same distances from cached offsets (same expression, same order)
++        if (this.cacheFiddles) {
++            Fiddles fiddles = this.lastFiddles;
++            if (fiddles == null || fiddles.x != i3 || fiddles.y != i4 || fiddles.z != i5) {
++                fiddles = new Fiddles(this.biomeZoomSeed, i3, i4, i5);
++                this.lastFiddles = fiddles;
++            }
++            double[] offsets = fiddles.offsets;
++            for (int i7 = 0; i7 < 8; i7++) {
++                double d4 = (i7 & 4) == 0 ? d : d - 1.0;
++                double d5 = (i7 & 2) == 0 ? d1 : d1 - 1.0;
++                double d6 = (i7 & 1) == 0 ? d2 : d2 - 1.0;
++                double fiddledDistance = Mth.square(d6 + offsets[i7 * 3 + 2]) + Mth.square(d5 + offsets[i7 * 3 + 1]) + Mth.square(d4 + offsets[i7 * 3]);
++                if (d3 > fiddledDistance) {
++                    i6 = i7;
++                    d3 = fiddledDistance;
++                }
++            }
++        } else
++        // Evangelium end - biome lookup cache
+         for (int i7 = 0; i7 < 8; i7++) {
+             boolean flag = (i7 & 4) == 0;
+             boolean flag1 = (i7 & 2) == 0;

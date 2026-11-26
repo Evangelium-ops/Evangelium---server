@@ -1,0 +1,33 @@
+--- a/net/minecraft/server/commands/ClearInventoryCommands.java
++++ b/net/minecraft/server/commands/ClearInventoryCommands.java
+@@ -6,7 +_,10 @@
+ import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
+ import java.util.Collection;
+ import java.util.Collections;
++import java.util.concurrent.CompletableFuture;
+ import java.util.function.Predicate;
++
++import io.evangelium.server.EvangeliumServer;
+ import net.minecraft.commands.CommandBuildContext;
+ import net.minecraft.commands.CommandSourceStack;
+ import net.minecraft.commands.Commands;
+@@ -73,9 +_,16 @@
+         int i = 0;
+ 
+         for (ServerPlayer serverPlayer : targetPlayers) {
+-            i += serverPlayer.getInventory().clearOrCountMatchingItems(itemPredicate, maxCount, serverPlayer.inventoryMenu.getCraftSlots());
+-            serverPlayer.containerMenu.broadcastChanges();
+-            serverPlayer.inventoryMenu.slotsChanged(serverPlayer.getInventory());
++            // EvangeliumServer start - run on correct thread
++            CompletableFuture<Integer> future = new CompletableFuture<>();
++            EvangeliumServer.ensureSync(serverPlayer, () -> {
++                int j = serverPlayer.getInventory().clearOrCountMatchingItems(itemPredicate, maxCount, serverPlayer.inventoryMenu.getCraftSlots());
++                serverPlayer.containerMenu.broadcastChanges();
++                serverPlayer.inventoryMenu.slotsChanged(serverPlayer.getInventory());
++                future.complete(j);
++            });
++            i += future.getNow(1); // EvangeliumServer - default to 1 if player is on a different thread
++            // EvangeliumServer end - run on correct thread
+         }
+ 
+         if (i == 0) {

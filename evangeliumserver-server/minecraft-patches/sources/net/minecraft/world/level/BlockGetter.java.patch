@@ -1,0 +1,178 @@
+--- a/net/minecraft/world/level/BlockGetter.java
++++ b/net/minecraft/world/level/BlockGetter.java
+@@ -212,40 +_,45 @@
+     static boolean forEachBlockIntersectedBetween(Vec3 from, Vec3 to, AABB boundingBox, BlockGetter.BlockStepVisitor visitor) {
+         Vec3 vec3 = to.subtract(from);
+         if (vec3.lengthSqr() < Mth.square(1.0E-5F)) {
+-            for (BlockPos blockPos : BlockPos.betweenClosed(boundingBox)) {
+-                if (!visitor.visit(blockPos, 0)) {
+-                    return false;
++            // Evangelium start - same cells in the same order as BlockPos.betweenClosed, without the iterator objects
++            final int minX = Mth.floor(boundingBox.minX), minY = Mth.floor(boundingBox.minY), minZ = Mth.floor(boundingBox.minZ);
++            final int maxX = Mth.floor(boundingBox.maxX), maxY = Mth.floor(boundingBox.maxY), maxZ = Mth.floor(boundingBox.maxZ);
++            final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
++            for (int z = Math.min(minZ, maxZ), z2 = Math.max(minZ, maxZ); z <= z2; z++) {
++                for (int y = Math.min(minY, maxY), y2 = Math.max(minY, maxY); y <= y2; y++) {
++                    for (int x = Math.min(minX, maxX), x2 = Math.max(minX, maxX); x <= x2; x++) {
++                        if (!visitor.visit(cursor.set(x, y, z), 0)) {
++                            return false;
++                        }
++                    }
+                 }
+             }
++            // Evangelium end
+ 
+             return true;
+         } else {
+-            LongSet set = new LongOpenHashSet();
+-
+-            for (BlockPos blockPos1 : BlockPos.betweenCornersInDirection(boundingBox.move(vec3.scale(-1.0)), vec3)) {
+-                if (!visitor.visit(blockPos1, 0)) {
+-                    return false;
+-                }
+-
+-                set.add(blockPos1.asLong());
+-            }
+-
+-            int i = addCollisionsAlongTravel(set, vec3, boundingBox, visitor);
+-            if (i < 0) {
+-                return false;
+-            } else {
+-                for (BlockPos blockPos2 : BlockPos.betweenCornersInDirection(boundingBox, vec3)) {
+-                    if (set.add(blockPos2.asLong()) && !visitor.visit(blockPos2, i + 1)) {
+-                        return false;
+-                    }
+-                }
+-
+-                return true;
+-            }
++            // Evangelium start - reused visited set and plain loops instead of iterators; same cells, same order
++            final StepScratch scratch = StepScratch.take();
++            try {
++                final LongSet set = scratch.set;
++                if (!visitCorners(boundingBox.move(vec3.scale(-1.0)), vec3, set, false, 0, visitor, scratch.cursor)) {
++                    return false;
++                }
++
++                int i = addCollisionsAlongTravel(set, vec3, boundingBox, visitor, scratch.cursor);
++                if (i < 0) {
++                    return false;
++                } else {
++                    return visitCorners(boundingBox, vec3, set, true, i + 1, visitor, scratch.cursor);
++                }
++            } finally {
++                scratch.release();
++            }
++            // Evangelium end
+         }
+     }
+ 
+-    private static int addCollisionsAlongTravel(LongSet output, Vec3 travelVector, AABB boundingBox, BlockGetter.BlockStepVisitor stepVisitor) {
++    private static int addCollisionsAlongTravel(LongSet output, Vec3 travelVector, AABB boundingBox, BlockGetter.BlockStepVisitor stepVisitor, BlockPos.MutableBlockPos cursor) { // Evangelium - cursor
+         double xsize = boundingBox.getXsize();
+         double ysize = boundingBox.getYsize();
+         double zsize = boundingBox.getZsize();
+@@ -300,16 +_,99 @@
+                 int floor5 = Mth.floor(d8 - zsize * furthestCorner.getZ());
+                 int i4 = i3;
+ 
+-                for (BlockPos blockPos : BlockPos.betweenCornersInDirection(floor, floor1, floor2, floor3, floor4, floor5, travelVector)) {
+-                    if (output.add(blockPos.asLong()) && !stepVisitor.visit(blockPos, i4)) {
+-                        return -1;
+-                    }
++                if (!visitCorners(floor, floor1, floor2, floor3, floor4, floor5, travelVector, output, true, i4, stepVisitor, cursor)) { // Evangelium - plain loops
++                    return -1;
+                 }
+             }
+         }
+ 
+         return i3;
+     }
++
++    // Evangelium start - entity block-step walks without iterator objects or a new hash set per call
++    /** Per-thread visited set; a visitor that starts another walk on the same thread gets a fresh one. */
++    final class StepScratch {
++        private static final ThreadLocal<StepScratch> LOCAL = ThreadLocal.withInitial(StepScratch::new);
++        final LongOpenHashSet set = new LongOpenHashSet();
++        final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
++        private boolean busy;
++
++        static StepScratch take() {
++            StepScratch scratch = LOCAL.get();
++            if (scratch.busy) {
++                scratch = new StepScratch();
++            }
++            scratch.busy = true;
++            return scratch;
++        }
++
++        void release() {
++            if (this.set.size() > 256) {
++                this.set.trim(16); // one huge walk must not make every later clear slow
++            }
++            this.set.clear();
++            this.busy = false;
++        }
++    }
++
++    private static boolean visitCorners(AABB box, Vec3 direction, LongSet set, boolean addFirst, int index, BlockGetter.BlockStepVisitor visitor, BlockPos.MutableBlockPos cursor) {
++        Vec3 minPosition = box.getMinPosition();
++        Vec3 maxPosition = box.getMaxPosition();
++        return visitCorners(Mth.floor(minPosition.x()), Mth.floor(minPosition.y()), Mth.floor(minPosition.z()),
++            Mth.floor(maxPosition.x()), Mth.floor(maxPosition.y()), Mth.floor(maxPosition.z()), direction, set, addFirst, index, visitor, cursor);
++    }
++
++    /**
++     * The cells of BlockPos.betweenCornersInDirection in its order. addFirst: visit only cells newly added to the set (travel and end box);
++     * otherwise visit every cell, then add it (start box).
++     */
++    private static boolean visitCorners(int x1, int y1, int z1, int x2, int y2, int z2, Vec3 direction, LongSet set, boolean addFirst, int index,
++                                        BlockGetter.BlockStepVisitor visitor, BlockPos.MutableBlockPos cursor) {
++        int min = Math.min(x1, x2);
++        int min1 = Math.min(y1, y2);
++        int min2 = Math.min(z1, z2);
++        int max = Math.max(x1, x2);
++        int max1 = Math.max(y1, y2);
++        int max2 = Math.max(z1, z2);
++        int i = max - min;
++        int i1 = max1 - min1;
++        int i2 = max2 - min2;
++        int i3 = direction.x >= 0.0 ? min : max;
++        int i4 = direction.y >= 0.0 ? min1 : max1;
++        int i5 = direction.z >= 0.0 ? min2 : max2;
++        java.util.List<Direction.Axis> list = Direction.axisStepOrder(direction);
++        Direction.Axis axis = list.get(0);
++        Direction.Axis axis1 = list.get(1);
++        Direction.Axis axis2 = list.get(2);
++        Direction direction1 = direction.get(axis) >= 0.0 ? axis.getPositive() : axis.getNegative();
++        Direction direction2 = direction.get(axis1) >= 0.0 ? axis1.getPositive() : axis1.getNegative();
++        Direction direction3 = direction.get(axis2) >= 0.0 ? axis2.getPositive() : axis2.getNegative();
++        int i6 = axis.choose(i, i1, i2);
++        int i7 = axis1.choose(i, i1, i2);
++        int i8 = axis2.choose(i, i1, i2);
++        int fx = direction1.getStepX(), fy = direction1.getStepY(), fz = direction1.getStepZ();
++        int sx = direction2.getStepX(), sy = direction2.getStepY(), sz = direction2.getStepZ();
++        int tx = direction3.getStepX(), ty = direction3.getStepY(), tz = direction3.getStepZ();
++        for (int first = 0; first <= i6; first++) {
++            for (int second = 0; second <= i7; second++) {
++                for (int third = 0; third <= i8; third++) {
++                    cursor.set(i3 + fx * first + sx * second + tx * third, i4 + fy * first + sy * second + ty * third, i5 + fz * first + sz * second + tz * third);
++                    if (addFirst) {
++                        if (set.add(cursor.asLong()) && !visitor.visit(cursor, index)) {
++                            return false;
++                        }
++                    } else {
++                        if (!visitor.visit(cursor, index)) {
++                            return false;
++                        }
++                        set.add(cursor.asLong());
++                    }
++                }
++            }
++        }
++        return true;
++    }
++    // Evangelium end
+ 
+     private static Vec3i getFurthestCorner(Vec3 vector) {
+         double abs = Math.abs(Vec3.X_AXIS.dot(vector));

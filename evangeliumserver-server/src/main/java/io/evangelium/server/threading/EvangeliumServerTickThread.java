@@ -1,0 +1,68 @@
+package io.evangelium.server.threading;
+
+import ca.spottedleaf.moonrise.common.util.TickThread;
+import com.mojang.logging.LogUtils;
+import org.slf4j.Logger;
+import io.evangelium.server.config.EvangeliumServerConfiguration;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class EvangeliumServerTickThread extends TickThread {
+
+    private static final Logger LOGGER = LogUtils.getClassLogger();
+
+    public static final int THREAD_COUNT;
+
+    private static final AtomicInteger ID_GENERATOR = new AtomicInteger();
+
+    private static final ExecutorService executor;
+
+    static {
+        int threadCount = EvangeliumServerConfiguration.get().multithreading.threadCount;
+
+        if (threadCount <= 0) {
+            threadCount = Math.max(Runtime.getRuntime().availableProcessors() - 1, 1);
+        }
+
+        THREAD_COUNT = threadCount;
+
+        executor = Executors.newFixedThreadPool(THREAD_COUNT, r -> new EvangeliumServerTickThread(r, "EvangeliumTickThread-%d"));
+
+        LOGGER.info("Using {} threads", THREAD_COUNT);
+    }
+
+    public Object evangelium$physicsCache; // Evangelium - net.minecraft.world.entity.PhysicsCache of this thread (no ThreadLocal lookup)
+
+    // Evangelium - one-entry cache for PerThreadNeighborUpdater (skips its ThreadLocal lookup on every neighbour update)
+    Object neighborUpdaterOwner;
+    net.minecraft.world.level.redstone.NeighborUpdater neighborUpdater;
+
+    public EvangeliumServerTickThread(Runnable run, String name) {
+        super(run, String.format(name, ID_GENERATOR.incrementAndGet()));
+    }
+
+    public static boolean isEvangeliumServerTickThread() {
+        // Use this method to check if it's a evangeliumserver tick thread, to ensure future potential support for VirtualThreads
+        return Thread.currentThread() instanceof EvangeliumServerTickThread;
+    }
+
+    public static ExecutorService getExecutor() {
+        return executor;
+    }
+
+    public static void stopServer() {
+        executor.shutdown();
+        try {
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        if (!executor.isTerminated()) {
+            LOGGER.warn("Failed to stop tick threads after 5 seconds. Terminating...");
+            executor.shutdownNow();
+        }
+    }
+}

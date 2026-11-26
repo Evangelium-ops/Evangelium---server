@@ -1,0 +1,19 @@
+--- a/net/minecraft/world/entity/ai/goal/MoveToBlockGoal.java
++++ b/net/minecraft/world/entity/ai/goal/MoveToBlockGoal.java
+@@ -52,6 +_,16 @@
+         }
+     }
+ 
++    // Evangelium start - the scan box, for RemoveBlockGoal's palette pre-check
++    protected final int evangeliumSearchRange() {
++        return this.searchRange;
++    }
++
++    protected final int evangeliumVerticalSearchRange() {
++        return Math.max(this.verticalSearchRange, Math.abs(this.verticalSearchStart));
++    }
++    // Evangelium end
++
+     protected int nextStartTick(PathfinderMob creature) {
+         return reducedTickDelay(200 + creature.getRandom().nextInt(200));
+     }

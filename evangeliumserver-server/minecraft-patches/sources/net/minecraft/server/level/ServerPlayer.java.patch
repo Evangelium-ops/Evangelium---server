@@ -1,0 +1,381 @@
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -22,6 +_,9 @@
+ import java.util.UUID;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.stream.Collectors;
++
++import io.evangelium.server.EvangeliumServer;
++import io.evangelium.server.util.ObjectHolder;
+ import net.minecraft.ChatFormatting;
+ import net.minecraft.CrashReport;
+ import net.minecraft.CrashReportCategory;
+@@ -64,7 +_,6 @@
+ import net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket;
+ import net.minecraft.network.protocol.game.ClientboundMountScreenOpenPacket;
+ import net.minecraft.network.protocol.game.ClientboundOpenBookPacket;
+-import net.minecraft.network.protocol.game.ClientboundOpenScreenPacket;
+ import net.minecraft.network.protocol.game.ClientboundOpenSignEditorPacket;
+ import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
+ import net.minecraft.network.protocol.game.ClientboundPlayerCombatEndPacket;
+@@ -202,6 +_,7 @@
+ import org.slf4j.Logger;
+ 
+ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patches.chunk_system.player.ChunkSystemServerPlayer { // Paper - rewrite chunk system
++    public volatile double evangeliumIndexX = Double.NaN, evangeliumIndexZ = Double.NaN; // Evangelium - position copy of the nearby player index
+     private static final Logger LOGGER = LogUtils.getLogger();
+     public long lastSave = MinecraftServer.currentTick; // Paper - Incremental chunk and player saving
+     private static final int NEUTRAL_MOB_DEATH_NOTIFICATION_RADII_XZ = 32;
+@@ -247,6 +_,7 @@
+     private @Nullable Entity camera;
+     public boolean isChangingDimension;
+     public boolean seenCredits = false;
++    public boolean hasMaximumTrackerBypassPermission; // EvangeliumServer
+     private final ServerRecipeBook recipeBook;
+     private @Nullable Vec3 levitationStartPos;
+     private int levitationStartTime;
+@@ -259,6 +_,7 @@
+     private @Nullable Vec3 enteredLavaOnVehiclePosition;
+     private SectionPos lastSectionPos = SectionPos.of(0, 0, 0);
+     private ChunkTrackingView chunkTrackingView = ChunkTrackingView.EMPTY;
++    public ChunkPos previousChunkPosRegion; // EvangeliumServer
+     private ServerPlayer.@Nullable RespawnConfig respawnConfig;
+     private final TextFilter textFilter;
+     private boolean textFilteringEnabled;
+@@ -405,6 +_,53 @@
+     private int containerUpdateDelay; // Paper - Configurable container update tick rate
+     public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
+     public int patrolSpawnDelay; // Paper - Pillager patrol spawn settings and per player options
++    // Evangelium start - the locator bar: a player's waypoint connections are updated at most every few ticks (each update walks every
++    // other player under one world-wide lock, so a crowd made it quadratic); a move inside the wait is done at the next tick after it
++    public static final int EVANGELIUM_WAYPOINT_INTERVAL = Math.max(1, Integer.getInteger("evangeliumserver.waypointInterval", 4));
++    public int evangeliumWaypointTick = Integer.MIN_VALUE / 2;
++    public boolean evangeliumWaypointPending;
++    public int evangeliumOwnWaypointTick = Integer.MIN_VALUE / 2;
++    public int evangeliumStatTicks, evangeliumStatAlive, evangeliumStatCrouch, evangeliumStatAwake;
++
++    /** Awards the per-tick statistics counted since the last time (see tick). */
++    public void evangeliumFlushStats() {
++        int ticks = this.evangeliumStatTicks;
++        if (ticks > 0) {
++            this.awardStat(Stats.PLAY_TIME, ticks);
++            this.awardStat(Stats.TOTAL_WORLD_TIME, ticks);
++        }
++        if (this.evangeliumStatAlive > 0) this.awardStat(Stats.TIME_SINCE_DEATH, this.evangeliumStatAlive);
++        if (this.evangeliumStatCrouch > 0) this.awardStat(Stats.CROUCH_TIME, this.evangeliumStatCrouch);
++        if (this.evangeliumStatAwake > 0) this.awardStat(Stats.TIME_SINCE_REST, this.evangeliumStatAwake);
++        this.evangeliumStatTicks = this.evangeliumStatAlive = this.evangeliumStatCrouch = this.evangeliumStatAwake = 0;
++    }
++    public boolean evangeliumOwnWaypointPending;
++
++    /** This player's own waypoint (where the others see them), at most every few ticks like the connections below. */
++    public void evangeliumUpdateOwnWaypoint() {
++        if (this.tickCount - this.evangeliumOwnWaypointTick >= EVANGELIUM_WAYPOINT_INTERVAL) {
++            this.evangeliumOwnWaypointTick = this.tickCount;
++            this.evangeliumOwnWaypointPending = false;
++            ServerWaypointManager evangeliumManager = this.level().getWaypointManager(); // Evangelium - far pairs left for later keep it pending
++            if (evangeliumManager instanceof io.evangelium.server.util.ConcurrentWaypointManager concurrent) this.evangeliumOwnWaypointPending = concurrent.updateWaypointSkipping(this); else
++            evangeliumManager.updateWaypoint(this);
++        } else {
++            this.evangeliumOwnWaypointPending = true;
++        }
++    }
++
++    public void evangeliumUpdateWaypoints() {
++        if (this.tickCount - this.evangeliumWaypointTick >= EVANGELIUM_WAYPOINT_INTERVAL) {
++            this.evangeliumWaypointTick = this.tickCount;
++            this.evangeliumWaypointPending = false;
++            ServerWaypointManager evangeliumManager = this.level().getWaypointManager(); // Evangelium - far pairs left for later keep it pending
++            if (evangeliumManager instanceof io.evangelium.server.util.ConcurrentWaypointManager concurrent) this.evangeliumWaypointPending = concurrent.updatePlayerSkipping(this); else
++            evangeliumManager.updatePlayer(this);
++        } else {
++            this.evangeliumWaypointPending = true;
++        }
++    }
++    // Evangelium end
+     // Paper start - cancellable death event
+     public boolean queueHealthUpdatePacket;
+     public net.minecraft.network.protocol.game.@Nullable ClientboundSetHealthPacket queuedHealthUpdatePacket;
+@@ -499,7 +_,8 @@
+         this.wardenSpawnTracker = input.read("warden_spawn_tracker", WardenSpawnTracker.CODEC).orElseGet(WardenSpawnTracker::new);
+         this.enteredNetherPosition = input.read("entered_nether_pos", Vec3.CODEC).orElse(null);
+         this.seenCredits = input.getBooleanOr("seenCredits", false);
+-        input.read("recipeBook", ServerRecipeBook.Packed.CODEC)
++        ServerRecipeBook.Packed preloadedRecipeBook = io.evangelium.server.player.JoinPreload.recipeBookFor(this.getUUID()); // Evangelium - join preload: decoded on the loader thread
++        (preloadedRecipeBook != null ? java.util.Optional.of(preloadedRecipeBook) : input.read("recipeBook", ServerRecipeBook.Packed.CODEC)) // Evangelium - join preload
+             .ifPresent(packed -> this.recipeBook.loadUntrusted(packed, key -> this.server.getRecipeManager().byKey(key).isPresent()));
+         this.getBukkitEntity().readExtraData(input); // CraftBukkit
+         if (this.isSleeping()) {
+@@ -637,12 +_,15 @@
+         if (!optional.isEmpty()) {
+             ServerLevel level = this.level().getServer().getLevel(optional.get());
+             if (level != null) {
++                BlockPos enderpearlPos = BlockPos.containing(input.read("Pos", Vec3.CODEC).orElse(Vec3.ZERO)); // EvangeliumServer - spawn ender pearl on ender pearl thread
++                EvangeliumServer.ensureSync(level, enderpearlPos, () -> { // EvangeliumServer - spawn ender pearl on ender pearl thread
+                 Entity entity = EntityType.loadEntityRecursive(input, level, EntitySpawnReason.LOAD, entity1 -> !level.addWithUUID(entity1) ? null : entity1);
+                 if (entity != null) {
+                     placeEnderPearlTicket(level, entity.chunkPosition());
+                 } else {
+                     LOGGER.warn("Failed to spawn player ender pearl in level ({}), skipping", optional.get());
+                 }
++                }); // EvangeliumServer - spawn ender pearl on ender pearl thread
+             } else {
+                 LOGGER.warn("Trying to load ender pearl without level ({}) being loaded, skipping", optional.get());
+             }
+@@ -723,6 +_,8 @@
+ 
+     @Override
+     public void tick() {
++        if (this.evangeliumWaypointPending && this.isReceivingWaypoints()) this.evangeliumUpdateWaypoints(); // Evangelium - a waypoint update that waited
++        if (this.evangeliumOwnWaypointPending && this.isTransmittingWaypoint()) this.evangeliumUpdateOwnWaypoint(); // Evangelium
+         // CraftBukkit start
+         if (this.joining) {
+             this.joining = false;
+@@ -752,9 +_,11 @@
+ 
+         Entity camera = this.getCamera();
+         if (camera != this) {
+-            if (camera.isAlive()) {
++            if (camera.isAlive() && camera.level() == this.level()) { // EvangeliumServer - ensure telelport to camera sync
++                EvangeliumServer.ensureSync(this, camera, () -> { // EvangeliumServer - ensure telelport to camera sync
+                 this.absSnapTo(camera.getX(), camera.getY(), camera.getZ(), camera.getYRot(), camera.getXRot());
+                 this.level().getChunkSource().move(this);
++                }); // EvangeliumServer - ensure telelport to camera sync
+                 if (this.wantsToStopRiding()) {
+                     this.setCamera(this);
+                 }
+@@ -822,19 +_,16 @@
+                 }
+ 
+                 this.foodData.tick(this);
+-                this.awardStat(Stats.PLAY_TIME);
+-                this.awardStat(Stats.TOTAL_WORLD_TIME);
+-                if (this.isAlive()) {
+-                    this.awardStat(Stats.TIME_SINCE_DEATH);
+-                }
+-
+-                if (this.isDiscrete()) {
+-                    this.awardStat(Stats.CROUCH_TIME);
+-                }
+-
+-                if (!this.isSleeping()) {
+-                    this.awardStat(Stats.TIME_SINCE_REST);
+-                }
++                // Evangelium start - the per-tick statistics are counted here and awarded once a second (same totals): each award
++                // is a stat update plus a Bukkit event, five of them every tick for every player
++                this.evangeliumStatTicks++;
++                if (this.isAlive()) this.evangeliumStatAlive++;
++                if (this.isDiscrete()) this.evangeliumStatCrouch++;
++                if (!this.isSleeping()) this.evangeliumStatAwake++;
++                if (this.evangeliumStatTicks >= 20) {
++                    this.evangeliumFlushStats();
++                }
++                // Evangelium end
+             }
+ 
+             for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+@@ -1352,39 +_,43 @@
+     public record RespawnResult(TeleportTransition transition, boolean isBedSpawn, boolean isAnchorSpawn) {
+     }
+ 
+-    public @Nullable TeleportTransition findRespawnPositionAndUseSpawnBlock(boolean useCharge, TeleportTransition.PostTeleportTransition postTeleportTransition, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) {
+-        RespawnResult result = this.findRespawnPositionAndUseSpawnBlock0(useCharge, postTeleportTransition, respawnReason);
++    public CompletableFuture<TeleportTransition> findRespawnPositionAndUseSpawnBlockAsync(boolean useCharge, TeleportTransition.PostTeleportTransition postTeleportTransition, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) { // EvangeliumServer - respawn async
++        return this.findRespawnPositionAndUseSpawnBlock0Async(useCharge, postTeleportTransition, respawnReason).thenApply(result -> { // EvangeliumServer - respawn async
+         return result == null ? null : result.transition();
++        }); // EvangeliumServer - respawn async
+     }
+ 
+-    public @Nullable RespawnResult findRespawnPositionAndUseSpawnBlock0(boolean useCharge, TeleportTransition.PostTeleportTransition postTeleportTransition, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) {
+-        TeleportTransition teleportTransition;
+-        boolean isBedSpawn = false;
+-        boolean isAnchorSpawn = false;
+-        Runnable consumeAnchorCharge = null;
++    public CompletableFuture<RespawnResult> findRespawnPositionAndUseSpawnBlock0Async(boolean useCharge, TeleportTransition.PostTeleportTransition postTeleportTransition, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) { // EvangeliumServer - respawn async
++        // TeleportTransition teleportTransition; // EvangeliumServer - respawn async
++        ObjectHolder<Boolean> isBedSpawn = new ObjectHolder<>(false); // EvangeliumServer - respawn async
++        ObjectHolder<Boolean> isAnchorSpawn = new ObjectHolder<>(false); // EvangeliumServer - respawn async
++        ObjectHolder<Runnable> consumeAnchorCharge = new ObjectHolder<>(null); // EvangeliumServer - respawn async
+         // Paper end
+         ServerPlayer.RespawnConfig respawnConfig = this.getRespawnConfig();
+         ServerLevel level = this.server.getLevel(ServerPlayer.RespawnConfig.getDimensionOrDefault(respawnConfig));
++        CompletableFuture<TeleportTransition> future; // EvangeliumServer - respawn async
+         if (level != null && respawnConfig != null) {
+-            Optional<ServerPlayer.RespawnPosAngle> optional = findRespawnAndUseSpawnBlock(level, respawnConfig, useCharge);
++            future = findRespawnAndUseSpawnBlockAsync(level, respawnConfig, useCharge).thenCompose(optional -> { // EvangeliumServer - respawn async
+             if (optional.isPresent()) {
+                 ServerPlayer.RespawnPosAngle respawnPosAngle = optional.get();
+                 // CraftBukkit start
+-                isBedSpawn = respawnPosAngle.isBedSpawn();
+-                isAnchorSpawn = respawnPosAngle.isAnchorSpawn();
+-                consumeAnchorCharge = respawnPosAngle.consumeAnchorCharge();
+-                teleportTransition = new TeleportTransition(
++                isBedSpawn.set(respawnPosAngle.isBedSpawn()); // EvangeliumServer - respawn async
++                isAnchorSpawn.set(respawnPosAngle.isAnchorSpawn()); // EvangeliumServer - respawn async
++                consumeAnchorCharge.set(respawnPosAngle.consumeAnchorCharge()); // EvangeliumServer - respawn async
++                return CompletableFuture.completedFuture(new TeleportTransition( // EvangeliumServer - respawn async
+                     level, respawnPosAngle.position(), Vec3.ZERO, respawnPosAngle.yaw(), respawnPosAngle.pitch(), postTeleportTransition
+-                );
++                )); // EvangeliumServer - respawn async
+                 // CraftBukkit end
+             } else {
+-                teleportTransition = TeleportTransition.missingRespawnBlock(this, postTeleportTransition); // CraftBukkit
++                return TeleportTransition.missingRespawnBlockAsync(this, postTeleportTransition); // CraftBukkit // EvangeliumServer - respawn async
+             }
++            }); // EvangeliumServer - respawn async
+         } else {
+             // CraftBukkit start
+-            teleportTransition = TeleportTransition.createDefault(this, postTeleportTransition);
++            future = TeleportTransition.createDefaultAsync(this, postTeleportTransition); // EvangeliumServer - respawn async
+         }
+ 
++        return future.thenApply(teleportTransition -> { // EvangeliumServer - respawn async
+         org.bukkit.entity.Player respawnPlayer = this.getBukkitEntity();
+         org.bukkit.Location location = org.bukkit.craftbukkit.util.CraftLocation.toBukkit(
+             teleportTransition.position(),
+@@ -1397,8 +_,8 @@
+         org.bukkit.event.player.PlayerRespawnEvent respawnEvent = new org.bukkit.event.player.PlayerRespawnEvent(
+             respawnPlayer,
+             location,
+-            isBedSpawn,
+-            isAnchorSpawn,
++            isBedSpawn.get(), // EvangeliumServer - respawn async
++            isAnchorSpawn.get(), // EvangeliumServer - respawn async
+             teleportTransition.missingRespawnBlock(),
+             respawnReason
+         );
+@@ -1411,8 +_,8 @@
+         // Spigot end
+ 
+         // Paper start - consume anchor charge if location hasn't changed
+-        if (location.equals(respawnEvent.getRespawnLocation()) && consumeAnchorCharge != null) {
+-            consumeAnchorCharge.run();
++        if (location.equals(respawnEvent.getRespawnLocation()) && consumeAnchorCharge.get() != null) {
++            consumeAnchorCharge.get().run(); // EvangeliumServer - respawn async
+         }
+         // Paper end - consume anchor charge if location hasn't changed
+         location = respawnEvent.getRespawnLocation();
+@@ -1430,10 +_,11 @@
+                 teleportTransition.postTeleportTransition(),
+                 teleportTransition.cause()
+             ),
+-            isBedSpawn,
+-            isAnchorSpawn
++            isBedSpawn.get(), // EvangeliumServer - respawn async
++            isAnchorSpawn.get() // EvangeliumServer - respawn async
+         );
+         // CraftBukkit end
++        }); // EvangeliumServer - respawn async
+     }
+ 
+     public boolean isReceivingWaypoints() {
+@@ -1454,7 +_,7 @@
+         super.onAttributeUpdated(attribute);
+     }
+ 
+-    public static Optional<ServerPlayer.RespawnPosAngle> findRespawnAndUseSpawnBlock(
++    public static CompletableFuture<Optional<ServerPlayer.RespawnPosAngle>> findRespawnAndUseSpawnBlockAsync( // EvangeliumServer - respawn async
+         ServerLevel level, ServerPlayer.RespawnConfig respawnConfig, boolean useCharge
+     ) {
+         LevelData.RespawnData respawnData = respawnConfig.respawnData;
+@@ -1462,22 +_,32 @@
+         float yaw = respawnData.yaw();
+         float pitch = respawnData.pitch();
+         boolean flag = respawnConfig.forced;
++        return CompletableFuture.supplyAsync(() -> { // EvangeliumServer - respawn async
+         BlockState blockState = level.getBlockState(blockPos);
+         Block block = blockState.getBlock();
+         if (block instanceof RespawnAnchorBlock
+-            && (flag || blockState.getValue(RespawnAnchorBlock.CHARGE) > 0)
+-            && RespawnAnchorBlock.canSetSpawn(level, blockPos)) {
++                && (flag || blockState.getValue(RespawnAnchorBlock.CHARGE) > 0)
++                && RespawnAnchorBlock.canSetSpawn(level, blockPos)) {
+             Optional<Vec3> optional = RespawnAnchorBlock.findStandUpPosition(EntityType.PLAYER, level, blockPos);
+             Runnable consumeAnchorCharge = null; // Paper - Fix SPIGOT-5989 (don't use charge until after respawn event)
+             if (!flag && useCharge && optional.isPresent()) {
+-                consumeAnchorCharge = () -> level.setBlock(blockPos, blockState.setValue(RespawnAnchorBlock.CHARGE, blockState.getValue(RespawnAnchorBlock.CHARGE) - 1), Block.UPDATE_ALL); // Paper - Fix SPIGOT-5989 (don't use charge until after respawn event)
++                // EvangeliumServer start - respawn anchor block update async
++                consumeAnchorCharge = () -> {
++                    EvangeliumServer.ensureSync(level, blockPos, () -> {
++                        BlockState blockState2 = level.getBlockState(blockPos); // Use the latest block state in case it has been modified since
++                        if (blockState2.getBlock() instanceof RespawnAnchorBlock && blockState2.getValue(RespawnAnchorBlock.CHARGE) > 0) { // Ensure this block is still a respawn anchor block
++                            level.setBlock(blockPos, blockState2.setValue(RespawnAnchorBlock.CHARGE, blockState2.getValue(RespawnAnchorBlock.CHARGE) - 1), Block.UPDATE_ALL); // Paper - Fix SPIGOT-5989 (don't use charge until after respawn event)
++                        }
++                    });
++                };
++                // EvangeliumServer end - respawn anchor block update async
+             }
+             final Runnable finalConsumeAnchorCharge = consumeAnchorCharge; // Paper - Fix SPIGOT-5989
+ 
+             return optional.map(pos -> ServerPlayer.RespawnPosAngle.of(pos, blockPos, 0.0F, false, true, finalConsumeAnchorCharge)); // Paper - Fix SPIGOT-5989 (don't use charge until after respawn event)
+         } else if (block instanceof BedBlock && level.environmentAttributes().getValue(EnvironmentAttributes.BED_RULE, blockPos).canSetSpawn(level)) {
+             return BedBlock.findStandUpPosition(EntityType.PLAYER, level, blockPos, blockState.getValue(BedBlock.FACING), yaw)
+-                .map(pos -> ServerPlayer.RespawnPosAngle.of(pos, blockPos, 0.0F, true, false, null)); // Paper - Fix SPIGOT-5989
++                    .map(pos -> ServerPlayer.RespawnPosAngle.of(pos, blockPos, 0.0F, true, false, null)); // Paper - Fix SPIGOT-5989
+         } else if (!flag) {
+             return Optional.empty();
+         } else {
+@@ -1485,9 +_,10 @@
+             BlockState blockState1 = level.getBlockState(blockPos.above());
+             boolean isPossibleToRespawnInThis1 = blockState1.getBlock().isPossibleToRespawnInThis(blockState1);
+             return isPossibleToRespawnInThis && isPossibleToRespawnInThis1
+-                ? Optional.of(new ServerPlayer.RespawnPosAngle(new Vec3(blockPos.getX() + 0.5, blockPos.getY() + 0.1, blockPos.getZ() + 0.5), yaw, pitch, false, false, null)) // Paper - Fix SPIGOT-5989
+-                : Optional.empty();
++                    ? Optional.of(new ServerPlayer.RespawnPosAngle(new Vec3(blockPos.getX() + 0.5, blockPos.getY() + 0.1, blockPos.getZ() + 0.5), yaw, pitch, false, false, null)) // Paper - Fix SPIGOT-5989
++                    : Optional.empty();
+         }
++        }, io.evangelium.server.threading.TeleportPreload.onRegionWhenLoaded(level, blockPos, 3)); // Evangelium - bed / anchor chunks loaded asynchronously first (stand-up search reads +-2 blocks)
+     }
+ 
+     public void showEndCredits() {
+@@ -2095,6 +_,9 @@
+ 
+     @Override
+     public void resetStat(Stat<?> stat) {
++        // Evangelium - counts waiting to be awarded (see evangeliumFlushStats) must not land on top of a reset
++        if (stat == Stats.CUSTOM.get(Stats.TIME_SINCE_DEATH)) this.evangeliumStatAlive = 0;
++        if (stat == Stats.CUSTOM.get(Stats.TIME_SINCE_REST)) this.evangeliumStatAwake = 0;
+         this.stats.setValue(this, stat, 0);
+         this.level().getCraftServer().getScoreboardManager().forAllObjectives(stat, this, ScoreAccess::reset); // CraftBukkit - Get our scores instead
+     }
+@@ -2655,6 +_,7 @@
+     }
+ 
+     public void setCamera(@Nullable Entity entityToSpectate) {
++        EvangeliumServer.ensureSync(this, entityToSpectate == null ? this : entityToSpectate, () -> { // EvangeliumServer - run on entity's thread
+         Entity camera = this.getCamera();
+         this.camera = (Entity)(entityToSpectate == null ? this : entityToSpectate);
+         if (camera != this.camera) {
+@@ -2684,6 +_,7 @@
+             this.connection.send(new ClientboundSetCameraPacket(this.camera));
+             this.connection.resetPosition();
+         }
++        });  // EvangeliumServer - run on entity's thread
+     }
+ 
+     @Override
+@@ -2962,6 +_,8 @@
+             for (MobEffectInstance mobEffectInstance : livingEntity.getActiveEffects()) {
+                 this.connection.send(new ClientboundRemoveMobEffectPacket(vehicle.getId(), mobEffectInstance.getEffect()));
+             }
++
++            if (vehicle.moonrise$getTrackedEntity() != null) vehicle.moonrise$getTrackedEntity().serverEntity.sendChanges(); // EvangeliumServer - send changes now
+         }
+ 
+         if (vehicle != null) {
+@@ -2969,11 +_,14 @@
+         }
+     }
+ 
++    // Evangelium: seed crackers start from the hashed seed sent at join and respawn; the client only needs it for biome blending
++    private static final long EVANGELIUM_SEED_MASK = new java.security.SecureRandom().nextLong();
++
+     public CommonPlayerSpawnInfo createCommonSpawnInfo(ServerLevel level) {
+         return new CommonPlayerSpawnInfo(
+             level.dimensionTypeRegistration(),
+             level.dimension(),
+-            BiomeManager.obfuscateSeed(level.getSeed()),
++            BiomeManager.obfuscateSeed(level.getSeed() ^ EVANGELIUM_SEED_MASK),
+             this.gameMode.getGameModeForPlayer(),
+             this.gameMode.getPreviousGameModeForPlayer(),
+             level.isDebug(),

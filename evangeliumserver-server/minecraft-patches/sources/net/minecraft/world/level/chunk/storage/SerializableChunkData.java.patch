@@ -1,0 +1,192 @@
+--- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
++++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+@@ -93,6 +_,7 @@
+     List<CompoundTag> blockEntities,
+     CompoundTag structureData
+     , net.minecraft.nbt.@Nullable Tag persistentDataContainer // CraftBukkit - persistentDataContainer
++    , long @Nullable [] lightEdges // EvangeliumServer - light edge versions
+ ) {
+     private static final Codec<List<SavedTick<Block>>> BLOCK_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.BLOCK.byNameCodec()).listOf();
+     private static final Codec<List<SavedTick<Fluid>>> FLUID_TICKS_CODEC = SavedTick.codec(BuiltInRegistries.FLUID.byNameCodec()).listOf();
+@@ -166,8 +_,10 @@
+                     compoundTag1.getLongArray(types.getSerializationKey()).ifPresent(longs1 -> map.put(types, longs1));
+                 }
+             });
+-            List<SavedTick<Block>> list = SavedTick.filterTickListForChunk(tag.read("block_ticks", BLOCK_TICKS_CODEC).orElse(List.of()), chunkPos);
+-            List<SavedTick<Fluid>> list1 = SavedTick.filterTickListForChunk(tag.read("fluid_ticks", FLUID_TICKS_CODEC).orElse(List.of()), chunkPos);
++            // Evangelium start - packed ticks: read block_ticks/fluid_ticks without codec objects (clean case only, else the codec)
++            List<SavedTick<Block>> list = io.evangelium.server.ticks.PackedTicks.IO ? readTicks(tag, "block_ticks", BLOCK_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.BLOCK, chunkPos) : SavedTick.filterTickListForChunk(tag.read("block_ticks", BLOCK_TICKS_CODEC).orElse(List.of()), chunkPos);
++            List<SavedTick<Fluid>> list1 = io.evangelium.server.ticks.PackedTicks.IO ? readTicks(tag, "fluid_ticks", FLUID_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.FLUID, chunkPos) : SavedTick.filterTickListForChunk(tag.read("fluid_ticks", FLUID_TICKS_CODEC).orElse(List.of()), chunkPos);
++            // Evangelium end
+             ChunkAccess.PackedTicks packedTicks = new ChunkAccess.PackedTicks(list, list1);
+             ListTag listOrEmpty = tag.getListOrEmpty("PostProcessing");
+             ShortList[] lists = new ShortList[listOrEmpty.size()];
+@@ -201,19 +_,37 @@
+                     LevelChunkSection levelChunkSection;
+                     if (byteOr >= level.getMinSectionY() && byteOr <= level.getMaxSectionY()) {
+                         final BlockState[] presetBlockStates = serverLevel.chunkPacketBlockController.getPresetBlockStates(serverLevel, chunkPos, byteOr); // Paper - Anti-Xray - Add preset block states
+-                        final Codec<PalettedContainer<BlockState>> blockStateCodec = presetBlockStates == null ? codec1 : PalettedContainer.codecRW(BlockState.CODEC, containerFactory.blockStatesStrategy(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), presetBlockStates); // Paper - Anti-Xray
+                         PalettedContainer<BlockState> palettedContainer = compoundTag.getCompound("block_states")
+                             .map(
+-                                compoundTag1 -> blockStateCodec.parse(NbtOps.INSTANCE, compoundTag1) // Paper - Anti-Xray
++                                compoundTag1 -> {
++                                    // EvangeliumServer start - read block states without the codec; the codec handles everything unusual
++                                    PalettedContainer<BlockState> fast = io.evangelium.server.util.FastPaletteCodec.readBlockStates(compoundTag1, containerFactory.blockStatesStrategy(), presetBlockStates);
++                                    if (fast != null) {
++                                        return fast;
++                                    }
++                                    final Codec<PalettedContainer<BlockState>> blockStateCodec = presetBlockStates == null ? codec1 : PalettedContainer.codecRW(BlockState.CODEC, containerFactory.blockStatesStrategy(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), presetBlockStates); // Paper - Anti-Xray
++                                    // EvangeliumServer end - read block states without the codec
++                                    return blockStateCodec.parse(NbtOps.INSTANCE, compoundTag1) // Paper - Anti-Xray
+                                     .promotePartial(string -> logErrors(chunkPos, byteOr, string))
+-                                    .getOrThrow(SerializableChunkData.ChunkReadException::new)
++                                    .getOrThrow(SerializableChunkData.ChunkReadException::new);
++                                }
+                             )
+                             .orElseGet(containerFactory::createForBlockStates);
+                         PalettedContainer<Holder<Biome>> palettedContainerRo = compoundTag.getCompound("biomes") // CraftBukkit - read/write
+                             .map(
+-                                compoundTag1 -> codec.parse(NbtOps.INSTANCE, compoundTag1)
++                                compoundTag1 -> {
++                                    // EvangeliumServer start - read biomes without the codec; the codec handles everything unusual
++                                    if (io.evangelium.server.util.FastPaletteCodec.fastBiomes()) {
++                                        PalettedContainer<Holder<Biome>> fast = io.evangelium.server.util.FastPaletteCodec.readBiomes(compoundTag1, serverLevel.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BIOME), containerFactory.biomeStrategy(), containerFactory.defaultBiome());
++                                        if (fast != null) {
++                                            return fast;
++                                        }
++                                    }
++                                    // EvangeliumServer end - read biomes without the codec
++                                    return codec.parse(NbtOps.INSTANCE, compoundTag1)
+                                     .promotePartial(string -> logErrors(chunkPos, byteOr, string))
+-                                    .getOrThrow(SerializableChunkData.ChunkReadException::new)
++                                    .getOrThrow(SerializableChunkData.ChunkReadException::new);
++                                }
+                             )
+                             .orElseGet(containerFactory::createForBiomes);
+                         levelChunkSection = new LevelChunkSection(palettedContainer, palettedContainerRo);
+@@ -257,9 +_,31 @@
+                 list4,
+                 compoundOrEmpty
+                 , tag.get("ChunkBukkitValues") // CraftBukkit - ChunkBukkitValues
++                , tag.getLongArray(ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState.TAG).or(() -> tag.getLongArray(ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState.OLD_TAG)).orElse(null) // EvangeliumServer - light edge versions
+             );
+         }
+     }
++
++    // EvangeliumServer start - skip unchanged chunk saves
++    // true when read() keeps everything as stored: nothing to upgrade, blend, retrogen, relight, post-process or rebuild
++    public boolean loadsUnchanged() {
++        if (this.chunkStatus.getChunkType() != ChunkType.LEVELCHUNK || !this.lightCorrect || !this.upgradeData.isEmpty()
++            || this.blendingData != null || this.belowZeroRetrogen != null || !this.entities.isEmpty()) {
++            return false;
++        }
++        for (ShortList list : this.postProcessingSections) {
++            if (list != null && !list.isEmpty()) {
++                return false;
++            }
++        }
++        for (Heightmap.Types types : this.chunkStatus.heightmapsAfter()) {
++            if (!this.heightmaps.containsKey(types)) {
++                return false;
++            }
++        }
++        return true;
++    }
++    // EvangeliumServer end - skip unchanged chunk saves
+ 
+     // Paper start - starlight
+     private ProtoChunk loadStarlightLightData(final ServerLevel world, final ProtoChunk ret) {
+@@ -394,6 +_,11 @@
+             }
+         }
+ 
++        // EvangeliumServer start - light edge versions: only valid together with the light stored beside them
++        if (this.lightCorrect && this.lightEdges != null && net.minecraft.world.level.chunk.LevelChunk.lightEdgeVersions()) {
++            chunkAccess.evangeliumserver$lightEdges().load(this.lightEdges);
++        }
++        // EvangeliumServer end - light edge versions
+         // CraftBukkit start - load chunk persistent data from nbt - SPIGOT-6814: Already load PDC here to account for 1.17 to 1.18 chunk upgrading.
+         if (this.persistentDataContainer instanceof CompoundTag compoundTag) {
+             chunkAccess.persistentDataContainer.putAll(compoundTag);
+@@ -558,6 +_,7 @@
+                 list1,
+                 compoundTag
+                 , persistentDataContainer // CraftBukkit - persistentDataContainer
++                , net.minecraft.world.level.chunk.LevelChunk.lightEdgeVersions() && chunk.isLightCorrect() ? chunk.evangeliumserver$lightEdges().save() : null // EvangeliumServer - light edge versions
+             );
+         }
+     }
+@@ -584,8 +_,15 @@
+             CompoundTag compoundTag1 = new CompoundTag(); final CompoundTag sectionNBT = compoundTag1; // Paper - starlight - OBFHELPER
+             LevelChunkSection levelChunkSection = sectionData.chunkSection;
+             if (levelChunkSection != null) {
+-                compoundTag1.store("block_states", codec, levelChunkSection.getStates());
++                compoundTag1.put("block_states", io.evangelium.server.util.FastPaletteCodec.writeBlockStates(levelChunkSection.getStates(), this.containerFactory.blockStatesStrategy())); // EvangeliumServer - write block states without the codec
++                // EvangeliumServer start - write biomes without the codec
++                CompoundTag fastBiomes = io.evangelium.server.util.FastPaletteCodec.fastBiomes() ? io.evangelium.server.util.FastPaletteCodec.writeBiomes(levelChunkSection.getBiomes(), this.containerFactory.biomeStrategy()) : null;
++                if (fastBiomes != null) {
++                    compoundTag1.put("biomes", fastBiomes);
++                } else {
+                 compoundTag1.store("biomes", codec1, levelChunkSection.getBiomes());
++                }
++                // EvangeliumServer end - write biomes without the codec
+             }
+ 
+             if (sectionData.blockLight != null) {
+@@ -639,6 +_,9 @@
+         compoundTag.put("Heightmaps", compoundTag2);
+         compoundTag.put("structures", this.structureData);
+         // CraftBukkit start - store chunk persistent data in nbt
++        if (this.lightEdges != null) { // EvangeliumServer - light edge versions
++            compoundTag.putLongArray(ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState.TAG, this.lightEdges); // EvangeliumServer - light edge versions
++        } // EvangeliumServer - light edge versions
+         if (this.persistentDataContainer != null) { // SPIGOT-6814: Always save PDC to account for 1.17 to 1.18 chunk upgrading.
+             compoundTag.put("ChunkBukkitValues", this.persistentDataContainer);
+         }
+@@ -655,9 +_,46 @@
+     }
+ 
+     private static void saveTicks(CompoundTag tag, ChunkAccess.PackedTicks ticks) {
++        // Evangelium start - packed ticks: write PackedTickList straight to NBT (same tags), anything else through the codec
++        if (io.evangelium.server.ticks.PackedTicks.IO) {
++            writeTicks(tag, "block_ticks", BLOCK_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.BLOCK, ticks.blocks());
++            writeTicks(tag, "fluid_ticks", FLUID_TICKS_CODEC, net.minecraft.core.registries.BuiltInRegistries.FLUID, ticks.fluids());
++            return;
++        }
++        // Evangelium end
+         tag.store("block_ticks", BLOCK_TICKS_CODEC, ticks.blocks());
+         tag.store("fluid_ticks", FLUID_TICKS_CODEC, ticks.fluids());
+     }
++
++    // Evangelium start - packed ticks
++    private static <T> List<SavedTick<T>> readTicks(CompoundTag tag, String key, Codec<List<SavedTick<T>>> codec, net.minecraft.core.Registry<T> registry, ChunkPos chunkPos) {
++        List<SavedTick<T>> fast = io.evangelium.server.ticks.PackedTickIO.read(tag, key, registry, chunkPos);
++        if (fast == null || io.evangelium.server.ticks.PackedTicks.VERIFY) {
++            List<SavedTick<T>> slow = SavedTick.filterTickListForChunk(tag.read(key, codec).orElse(List.of()), chunkPos);
++            if (fast == null) {
++                return slow;
++            }
++            io.evangelium.server.ticks.PackedTicks.check();
++            if (!io.evangelium.server.ticks.PackedTicks.sameSaved(fast, slow)) {
++                io.evangelium.server.ticks.PackedTicks.mismatch("read " + key + " " + chunkPos + " fast=" + fast + " codec=" + slow);
++            }
++        }
++        return fast;
++    }
++
++    private static <T> void writeTicks(CompoundTag tag, String key, Codec<List<SavedTick<T>>> codec, net.minecraft.core.Registry<T> registry, List<SavedTick<T>> ticks) {
++        if (!io.evangelium.server.ticks.PackedTickIO.write(tag, key, registry, ticks)) {
++            tag.store(key, codec, ticks);
++        } else if (io.evangelium.server.ticks.PackedTicks.VERIFY) {
++            CompoundTag slow = new CompoundTag();
++            slow.store(key, codec, new java.util.ArrayList<>(ticks));
++            io.evangelium.server.ticks.PackedTicks.check();
++            if (!java.util.Objects.equals(slow.get(key), tag.get(key))) {
++                io.evangelium.server.ticks.PackedTicks.mismatch("write " + key + " fast=" + tag.get(key) + " codec=" + slow.get(key));
++            }
++        }
++    }
++    // Evangelium end
+ 
+     public static ChunkStatus getChunkStatusFromTag(@Nullable CompoundTag tag) {
+         return tag != null ? tag.read("Status", ChunkStatus.CODEC).orElse(ChunkStatus.EMPTY) : ChunkStatus.EMPTY;

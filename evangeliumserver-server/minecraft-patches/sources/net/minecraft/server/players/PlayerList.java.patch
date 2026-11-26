@@ -1,0 +1,150 @@
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -19,8 +_,11 @@
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
+ import java.util.function.Function;
+ import java.util.function.Predicate;
++
++import io.evangelium.server.EvangeliumServer;
+ import net.minecraft.ChatFormatting;
+ import net.minecraft.commands.CommandSourceStack;
+ import net.minecraft.core.BlockPos;
+@@ -85,6 +_,7 @@
+ import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
+ import net.minecraft.world.item.crafting.RecipeManager;
++import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.Blocks;
+ import net.minecraft.world.level.block.state.BlockState;
+@@ -115,7 +_,7 @@
+     private static final SimpleDateFormat BAN_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd 'at' HH:mm:ss z", Locale.ROOT);
+     private final MinecraftServer server;
+     public final List<ServerPlayer> players = new java.util.concurrent.CopyOnWriteArrayList(); // CraftBukkit - ArrayList -> CopyOnWriteArrayList: Iterator safety
+-    private final Map<UUID, ServerPlayer> playersByUUID = Maps.newHashMap();
++    private final Map<UUID, ServerPlayer> playersByUUID = new java.util.concurrent.ConcurrentHashMap<>(); // EvangeliumServer - players join on several region threads at once
+     private final UserBanList bans;
+     private final IpBanList ipBans;
+     private final ServerOpList ops;
+@@ -133,7 +_,7 @@
+ 
+     // CraftBukkit start
+     private org.bukkit.craftbukkit.CraftServer cserver;
+-    private final Map<String,ServerPlayer> playersByName = new java.util.HashMap<>();
++    private final Map<String,ServerPlayer> playersByName = new java.util.concurrent.ConcurrentHashMap<>(); // EvangeliumServer - a plain map lost one of two players joining at once
+     public @Nullable String collideRuleTeamName; // Paper - Configurable player collision
+ 
+     public PlayerList(
+@@ -238,7 +_,9 @@
+         player.containerMenu.transferTo(player.containerMenu, bukkitPlayer);
+ 
+         org.bukkit.event.player.PlayerJoinEvent playerJoinEvent = new org.bukkit.event.player.PlayerJoinEvent(bukkitPlayer, io.papermc.paper.adventure.PaperAdventure.asAdventure(mutableComponent)); // Paper - Adventure
++        final long joinEventTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
+         this.cserver.getPluginManager().callEvent(playerJoinEvent);
++        io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_EVENT, joinEventTimer); // Evangelium - join timings
+ 
+         if (!player.connection.isAcceptingMessages()) {
+             return;
+@@ -490,7 +_,9 @@
+         for (ThrownEnderpearl thrownEnderpearl : player.getEnderPearls()) {
+             // Paper start - Allow using old ender pearl behavior
+             if (!thrownEnderpearl.level().paperConfig().misc.legacyEnderPearlBehavior) {
++                EvangeliumServer.ensureSync(thrownEnderpearl, () -> { // EvangeliumServer - run on ender pearl's thread
+                 thrownEnderpearl.setRemoved(Entity.RemovalReason.UNLOADED_WITH_PLAYER, org.bukkit.event.entity.EntityRemoveEvent.Cause.PLAYER_QUIT); // CraftBukkit - add Bukkit remove cause
++                }); // EvangeliumServer - run on ender pearl's thread
+             }
+             // Paper end - Allow using old ender pearl behavior
+         }
+@@ -515,8 +_,7 @@
+         // CraftBukkit start
+         // this.broadcastAll(new ClientboundPlayerInfoRemovePacket(List.of(player.getUUID())));
+         ClientboundPlayerInfoRemovePacket packet = new ClientboundPlayerInfoRemovePacket(List.of(player.getUUID()));
+-        for (int i = 0; i < this.players.size(); i++) {
+-            ServerPlayer otherPlayer = this.players.get(i);
++        for (ServerPlayer otherPlayer : this.players) { // EvangeliumServer - Fix concurrent modification
+ 
+             if (otherPlayer.getBukkitEntity().canSee(player.getBukkitEntity())) {
+                 otherPlayer.connection.send(packet);
+@@ -595,12 +_,13 @@
+     }
+ 
+     // Paper start - respawn event
+-    public ServerPlayer respawn(ServerPlayer player, boolean keepInventory, Entity.RemovalReason reason, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) {
+-        ServerPlayer.RespawnResult result = player.findRespawnPositionAndUseSpawnBlock0(!keepInventory, TeleportTransition.DO_NOTHING, respawnReason);
++    public CompletableFuture<ServerPlayer> respawnAsync(ServerPlayer player, boolean keepInventory, Entity.RemovalReason reason, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) { // EvangeliumServer - respawn async
++        return player.findRespawnPositionAndUseSpawnBlock0Async(!keepInventory, TeleportTransition.DO_NOTHING, respawnReason).thenCompose(result -> { // EvangeliumServer - respawn async
+         if (result == null) { // disconnected player during the respawn event
+-            return player;
++            return CompletableFuture.completedFuture(player);
+         }
+         TeleportTransition teleportTransition = result.transition();
++        return CompletableFuture.supplyAsync(() -> { // EvangeliumServer - respawn async
+         Level fromLevel = player.level();
+         // Paper end - respawn event
+         this.players.remove(player);
+@@ -707,6 +_,8 @@
+         // Paper end
+ 
+         return serverPlayer;
++        }, r -> io.evangelium.server.threading.TeleportPreload.ensureSyncTeleport(player, teleportTransition.newLevel(), teleportTransition.position(), new ChunkPos(BlockPos.containing(teleportTransition.position())), r)); // EvangeliumServer - respawn async // Evangelium - destination chunks loaded asynchronously first
++        }); // EvangeliumServer - respawn async
+     }
+ 
+     public void sendActivePlayerEffects(ServerPlayer player) {
+@@ -961,6 +_,7 @@
+     }
+ 
+     public void broadcast(@Nullable Player except, double x, double y, double z, double radius, ResourceKey<Level> dimension, Packet<?> packet) {
++        if (except != null) new io.evangelium.server.event.BroadcastPacketEvent(this.getServer().getLevel(dimension).getWorld(), packet, except.getBukkitEntity()).callEvent(); // EvangeliumServer - BroadcastPacketEvent
+         for (int i = 0; i < this.players.size(); i++) {
+             ServerPlayer serverPlayer = this.players.get(i);
+             // CraftBukkit start - Test if player receiving packet can see the source of the packet
+@@ -1205,12 +_,17 @@
+         }
+     }
+     public ServerStatsCounter getPlayerStats(GameProfile gameProfile) {
++            final long statsTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
++            ServerStatsCounter preloaded = io.evangelium.server.player.JoinPreload.statsFor(this.server, gameProfile); // Evangelium - join preload
++            if (preloaded != null) { io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_STATS, statsTimer); return preloaded; } // Evangelium - join preload
+             Path path = this.locateStatsFile(gameProfile);
+-            return new ServerStatsCounter(this.server, path);
++            ServerStatsCounter counter = new ServerStatsCounter(this.server, path);
++            io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_STATS, statsTimer); // Evangelium - join timings
++            return counter;
+     }
+     // CraftBukkit end
+ 
+-    private Path locateStatsFile(GameProfile profile) {
++    public Path locateStatsFile(GameProfile profile) { // Evangelium - public for the join preload
+         Path worldPath = this.server.getWorldPath(LevelResource.PLAYER_STATS_DIR);
+         Path path = worldPath.resolve(profile.id() + ".json");
+         if (Files.exists(path)) {
+@@ -1238,7 +_,15 @@
+         PlayerAdvancements playerAdvancements = player.getAdvancements(); // CraftBukkit
+         if (playerAdvancements == null) {
+             Path path = this.server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR).resolve(uuid + ".json");
+-            playerAdvancements = new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player);
++            PlayerAdvancements.Preparsed preparsed = io.evangelium.server.player.JoinPreload.advancementsFor(uuid, path); // Evangelium - join preload
++            // Evangelium start - join preload
++            if (preparsed != null && preparsed.detached != null) {
++                PlayerAdvancements detached = preparsed.detached;
++                preparsed.detached = null;
++                playerAdvancements = detached.attach(player, this.server.getAdvancements()) ? detached : new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player);
++            } else
++            // Evangelium end - join preload
++            playerAdvancements = preparsed != null ? new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player, preparsed) : new PlayerAdvancements(this.server.getFixerUpper(), this, this.server.getAdvancements(), path, player); // Evangelium - join preload
+             // this.advancements.put(uuid, playerAdvancements); // CraftBukkit
+         }
+ 
+@@ -1269,7 +_,7 @@
+     }
+ 
+     public @Nullable ServerPlayer getPlayer(UUID playerUUID) {
+-        return this.playersByUUID.get(playerUUID);
++        return playerUUID == null ? null : this.playersByUUID.get(playerUUID); // EvangeliumServer - the concurrent map throws on null
+     }
+ 
+     public @Nullable ServerPlayer getPlayer(String name) {

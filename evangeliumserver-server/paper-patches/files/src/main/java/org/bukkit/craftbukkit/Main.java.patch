@@ -1,0 +1,31 @@
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -22,6 +_,13 @@
+     // Paper end - Reset loggers after shutdown
+ 
+     public static void main(String[] args) {
++        // Evangelium start - settings were named -Devangeliumserver.* before the rename: an owner's old flag still counts (the new name wins)
++        for (String key : System.getProperties().stringPropertyNames()) {
++            if (key.startsWith("shreddedpaper.")) {   // rename-keep
++                System.getProperties().putIfAbsent("evangeliumserver." + key.substring("shreddedpaper.".length()), System.getProperty(key));   // rename-keep
++            }
++        }
++        // Evangelium end
+         if (System.getProperty("jdk.nio.maxCachedBufferSize") == null) System.setProperty("jdk.nio.maxCachedBufferSize", "262144"); // Paper - cap per-thread NIO cache size; https://www.evanjones.ca/java-bytebuffer-leak.html
+         OptionParser parser = new OptionParser() {
+             {
+@@ -146,6 +_,14 @@
+                     .defaultsTo(new File("purpur.yml"))
+                     .describedAs("Yml file");
+                 // Purpur end - Purpur config files
++
++                // EvangeliumServer start
++                acceptsAll(asList("evangelium", "evangelium-settings", "evangeliumserver", "evangeliumserver-settings"), "File for the Evangelium server settings")
++                        .withRequiredArg()
++                        .ofType(File.class)
++                        .defaultsTo(new File("evangelium.yml"))
++                        .describedAs("Yml file");
++                // EvangeliumServer end
+ 
+                 this.accepts("server-name", "Name of the server")
+                         .withRequiredArg()

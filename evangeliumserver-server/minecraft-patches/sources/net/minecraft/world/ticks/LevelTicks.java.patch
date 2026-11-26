@@ -1,0 +1,93 @@
+--- a/net/minecraft/world/ticks/LevelTicks.java
++++ b/net/minecraft/world/ticks/LevelTicks.java
+@@ -44,8 +_,14 @@
+         }
+     };
+ 
++    // Evangelium start - packed ticks verify: the old LevelTicks on the containers' old-structure shadows
++    private final io.evangelium.server.ticks.@org.jspecify.annotations.Nullable LegacyLevelTicks<T> shadowTicks;
++    private long lastVerifyContents = Long.MIN_VALUE / 2;
++    // Evangelium end
++
+     public LevelTicks(LongPredicate tickCheck) {
+         this.tickCheck = tickCheck;
++        this.shadowTicks = io.evangelium.server.ticks.PackedTicks.VERIFY ? new io.evangelium.server.ticks.LegacyLevelTicks<>(tickCheck) : null; // Evangelium
+     }
+ 
+     public void addContainer(ChunkPos chunkPos, LevelChunkTicks<T> chunkTicks) {
+@@ -57,6 +_,7 @@
+         }
+ 
+         chunkTicks.setOnTickAdded(this.chunkScheduleUpdater);
++        if (this.shadowTicks != null && chunkTicks.shadow() != null) this.shadowTicks.addContainer(chunkPos, chunkTicks.shadow()); // Evangelium
+     }
+ 
+     public void removeContainer(ChunkPos chunkPos) {
+@@ -66,6 +_,7 @@
+         if (levelChunkTicks != null) {
+             levelChunkTicks.setOnTickAdded(null);
+         }
++        if (this.shadowTicks != null) this.shadowTicks.removeContainer(chunkPos); // Evangelium
+     }
+ 
+     @Override
+@@ -82,7 +_,9 @@
+     public void tick(long gameTime, int maxAllowedTicks, BiConsumer<BlockPos, T> ticker) {
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("collect");
++        List<ScheduledTick<T>> expected = this.shadowTicks != null ? this.shadowTicks.collectOnly(gameTime, maxAllowedTicks) : null; // Evangelium
+         this.collectTicks(gameTime, maxAllowedTicks, profilerFiller);
++        if (expected != null) this.verifyCollected(gameTime, expected); // Evangelium
+         profilerFiller.popPush("run");
+         profilerFiller.incrementCounter("ticksToRun", this.toRunThisTick.size());
+         this.runCollectedTicks(ticker);
+@@ -91,6 +_,28 @@
+         profilerFiller.pop();
+     }
+ 
++    // Evangelium start - packed ticks verify
++    private void verifyCollected(long gameTime, List<ScheduledTick<T>> expected) {
++        io.evangelium.server.ticks.PackedTicks.check();
++        io.evangelium.server.ticks.PackedTicks.VERIFY_FIRED.addAndGet(expected.size());
++        List<ScheduledTick<T>> actual = new ArrayList<>(this.toRunThisTick);
++        if (!io.evangelium.server.ticks.PackedTicks.sameScheduled(actual, expected)) {
++            if (io.evangelium.server.ticks.PackedTicks.sameExceptCrossChunkTies(actual, expected)) {
++                io.evangelium.server.ticks.PackedTicks.VERIFY_TIES.incrementAndGet(); // thread-timing tie, see PackedTicks
++            } else {
++                io.evangelium.server.ticks.PackedTicks.mismatch("firing order at " + gameTime + " new=" + actual + " old=" + expected);
++            }
++        }
++        io.evangelium.server.ticks.PackedTicks.maybeLog(gameTime);
++        if (gameTime - this.lastVerifyContents >= 100L) {
++            this.lastVerifyContents = gameTime;
++            for (LevelChunkTicks<T> container : this.allContainers.values()) {
++                container.verifyContents();
++            }
++        }
++    }
++    // Evangelium end
++
+     private void collectTicks(long gameTime, int maxAllowedTicks, ProfilerFiller profiler) {
+         this.sortContainersToTick(gameTime);
+         profiler.incrementCounter("containersToTick", this.containersToTick.size());
+@@ -148,7 +_,9 @@
+     }
+ 
+     private void updateContainerScheduling(ScheduledTick<T> tick) {
++        synchronized (this.nextTickForContainer) { // Evangelium - region-wide map, written by intra-region helpers of different chunks
+         this.nextTickForContainer.put(ChunkPos.asLong(tick.pos()), tick.triggerTick());
++        } // Evangelium
+     }
+ 
+     private void drainFromCurrentContainer(Queue<LevelChunkTicks<T>> containersToTick, LevelChunkTicks<T> levelChunkTicks, long gameTime, int maxAllowedTicks) {
+@@ -285,4 +_,10 @@
+     interface PosAndContainerConsumer<T> {
+         void accept(long pos, LevelChunkTicks<T> container);
+     }
++
++    // EvangeliumServer start
++    public boolean isEmpty() {
++        return this.allContainers.isEmpty();
++    }
++    // EvangeliumServer end
+ }

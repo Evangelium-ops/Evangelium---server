@@ -1,6 +1,6 @@
-import io.multipaper.shreddedpaper.ticks.LegacyChunkTicks;
-import io.multipaper.shreddedpaper.ticks.PackedTickIO;
-import io.multipaper.shreddedpaper.ticks.PackedTicks;
+import io.evangelium.server.ticks.LegacyChunkTicks;
+import io.evangelium.server.ticks.PackedTickIO;
+import io.evangelium.server.ticks.PackedTicks;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.File;

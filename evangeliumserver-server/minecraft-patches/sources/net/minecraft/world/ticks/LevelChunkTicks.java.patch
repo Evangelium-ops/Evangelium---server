@@ -1,0 +1,711 @@
+--- a/net/minecraft/world/ticks/LevelChunkTicks.java
++++ b/net/minecraft/world/ticks/LevelChunkTicks.java
+@@ -1,22 +_,70 @@
+ package net.minecraft.world.ticks;
+ 
+-import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
++import io.evangelium.server.ticks.LegacyChunkTicks;
++import io.evangelium.server.ticks.PackedTickList;
++import io.evangelium.server.ticks.PackedTicks;
++import it.unimi.dsi.fastutil.longs.LongIterator;
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
++import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
+ import java.util.ArrayList;
+-import java.util.Iterator;
++import java.util.Arrays;
+ import java.util.List;
+-import java.util.PriorityQueue;
+-import java.util.Queue;
+-import java.util.Set;
+ import java.util.function.BiConsumer;
+ import java.util.function.Predicate;
++import java.util.stream.IntStream;
+ import java.util.stream.Stream;
+ import net.minecraft.core.BlockPos;
+ import org.jspecify.annotations.Nullable;
+ 
++/**
++ * Evangelium - packed scheduled ticks. Same behaviour as the old object based class (kept as {@link LegacyChunkTicks}), stored as
++ * primitive arrays:
++ * <ul>
++ * <li>saved ticks that are not unpacked yet (chunk not ticking): one word + one delay per tick (was SavedTick + BlockPos + a probe
++ * ScheduledTick in a hash set, ~110 bytes per tick);</li>
++ * <li>the live queue: a binary heap over three long arrays that runs exactly the java.util.PriorityQueue algorithm (same sift up / sift
++ * down, same comparisons), so the array order (= order written to chunk NBT, = sub-tick order after a reload) and the poll order are
++ * identical to the old queue, ties included;</li>
++ * <li>the (type, pos) uniqueness set: a LongOpenHashSet over the word without the priority, created only when a chunk is actually
++ * scheduled into, polled or asked (until then it equals the set of keys of the contents), and dropped again when the chunk has no
++ * ticks left.</li>
++ * </ul>
++ * A ScheduledTick object exists only for the head of the queue (peek/poll; the tick that fires). See {@link PackedTicks} for the word.
++ * Anything unusual (a tick of another chunk, removeIf) switches the container to the old structure with the identical state.
++ * Switch: -Devangeliumserver.packedTicks=false (old structure everywhere).
++ */
+ public class LevelChunkTicks<T> implements SerializableTickContainer<T>, TickContainerAccess<T>, ca.spottedleaf.moonrise.patches.chunk_system.ticks.ChunkSystemLevelChunkTicks { // Paper - rewrite chunk system
+-    private final Queue<ScheduledTick<T>> tickQueue = new PriorityQueue<>(ScheduledTick.DRAIN_ORDER);
+-    private @Nullable List<SavedTick<T>> pendingTicks;
+-    private final Set<ScheduledTick<?>> ticksPerPosition = new ObjectOpenCustomHashSet<>(ScheduledTick.UNIQUE_TICK_HASH);
++    private static final Object[] NO_TYPES = new Object[0];
++    private static final long[] NO_LONGS = new long[0];
++
++    // old structure: switch off, unusual input, or after removeIf
++    private @Nullable LegacyChunkTicks<T> legacy;
++    // verify mode: the old structure fed with the same operations (polled by the region's shadow LevelTicks)
++    private final @Nullable LegacyChunkTicks<T> shadow;
++
++    // type table (identity), shared by dormant + heap entries
++    private Object[] types = NO_TYPES;
++    private int typeCount;
++    private @Nullable Reference2IntOpenHashMap<Object> typeIndex;
++    private boolean hasChunk;
++    private int chunkX;
++    private int chunkZ;
++
++    // saved ticks not unpacked yet (old pendingTicks); dWords == null <=> pendingTicks == null. Never written after creation.
++    private long @Nullable [] dWords;
++    private int @Nullable [] dDelays;
++    private int dSize;
++
++    // the queue (old tickQueue): binary heap, parallel arrays
++    private long[] hTrig = NO_LONGS;
++    private long[] hSub = NO_LONGS;
++    private long[] hWord = NO_LONGS;
++    private int hSize;
++    private @Nullable ScheduledTick<T> head; // materialized entry 0, or null
++
++    // old ticksPerPosition; null means "equal to the keys of the contents"
++    private @Nullable LongOpenHashSet keys;
++
+     private @Nullable BiConsumer<LevelChunkTicks<T>, ScheduledTick<T>> onTickAdded;
+ 
+     // Paper start - rewrite chunk system
+@@ -34,108 +_,576 @@
+ 
+     @Override
+     public final boolean moonrise$isDirty(final long tick) {
+-        return this.dirty || (!this.tickQueue.isEmpty() && tick != this.lastSaved);
++        boolean result = this.legacy != null ? this.legacy.moonrise$isDirty(tick) : this.dirty || (this.hSize != 0 && tick != this.lastSaved);
++        if (this.shadow != null) {
++            PackedTicks.check();
++            boolean old = this.shadow.moonrise$isDirty(tick);
++            if (old != result) {
++                PackedTicks.mismatch("isDirty(" + tick + ") new=" + result + " old=" + old);
++            }
++        }
++        return result;
+     }
+ 
+     @Override
+     public final void moonrise$clearDirty() {
++        if (this.shadow != null) {
++            this.shadow.moonrise$clearDirty();
++        }
++        if (this.legacy != null) {
++            this.legacy.moonrise$clearDirty();
++            return;
++        }
+         this.dirty = false;
+     }
+     // Paper end - rewrite chunk system
+ 
+     public LevelChunkTicks() {
++        this.shadow = PackedTicks.VERIFY ? new LegacyChunkTicks<>() : null;
++        if (!PackedTicks.ENABLED) {
++            this.legacy = new LegacyChunkTicks<>();
++        }
+     }
+ 
+     public LevelChunkTicks(List<SavedTick<T>> pendingTicks) {
+-        this.pendingTicks = pendingTicks;
+-
+-        for (SavedTick<T> savedTick : pendingTicks) {
+-            this.ticksPerPosition.add(ScheduledTick.probe(savedTick.type(), savedTick.pos()));
+-        }
++        this.shadow = PackedTicks.VERIFY ? new LegacyChunkTicks<>(new ArrayList<>(pendingTicks)) : null;
++        if (!PackedTicks.ENABLED) {
++            this.legacy = new LegacyChunkTicks<>(pendingTicks);
++            return;
++        }
++        if (pendingTicks instanceof PackedTickList<T> packed) {
++            this.hasChunk = true;
++            this.chunkX = packed.chunkX();
++            this.chunkZ = packed.chunkZ();
++            Object[] srcTypes = packed.types();
++            int n = 0;
++            while (n < srcTypes.length && srcTypes[n] != null) {
++                n++;
++            }
++            this.types = n == 0 ? NO_TYPES : Arrays.copyOf(srcTypes, n);
++            this.typeCount = n;
++            if (n > 8) {
++                this.buildTypeIndex();
++            }
++            int size = packed.size();
++            long[] words = new long[size];
++            int[] delays = new int[size];
++            for (int i = 0; i < size; i++) {
++                words[i] = packed.word(i);
++                delays[i] = packed.delay(i);
++            }
++            this.dWords = words;
++            this.dDelays = delays;
++            this.dSize = size;
++            return;
++        }
++        int size = pendingTicks.size();
++        long[] words = new long[size];
++        int[] delays = new int[size];
++        for (int i = 0; i < size; i++) {
++            SavedTick<T> savedTick = pendingTicks.get(i);
++            long word = this.wordFor(savedTick.type(), savedTick.pos(), savedTick.priority());
++            if (word == Long.MIN_VALUE) {
++                // not representable: the old structure with exactly the old constructor
++                this.resetPacked();
++                this.legacy = new LegacyChunkTicks<>(pendingTicks);
++                return;
++            }
++            words[i] = word;
++            delays[i] = savedTick.delay();
++        }
++        this.dWords = words;
++        this.dDelays = delays;
++        this.dSize = size;
+     }
+ 
+     public void setOnTickAdded(@Nullable BiConsumer<LevelChunkTicks<T>, ScheduledTick<T>> onTickAdded) {
+         this.onTickAdded = onTickAdded;
++        if (this.legacy != null) {
++            // same contract as the packed path: only a tick that became the head is reported
++            this.legacy.setOnTickAdded(onTickAdded == null ? null : (legacyTicks, tick) -> {
++                if (tick.equals(legacyTicks.peek())) {
++                    onTickAdded.accept(this, tick);
++                }
++            });
++        }
++    }
++
++    /** Verify mode only: the old structure fed with the same operations. */
++    public @Nullable LegacyChunkTicks<T> shadow() {
++        return this.shadow;
+     }
+ 
+     public @Nullable ScheduledTick<T> peek() {
+-        return this.tickQueue.peek();
++        if (this.legacy != null) {
++            return this.legacy.peek();
++        }
++        if (this.hSize == 0) {
++            return null;
++        }
++        ScheduledTick<T> head = this.head;
++        if (head == null) {
++            this.head = head = this.materialize(0);
++        }
++        return head;
++    }
++
++    /** Trigger tick of the head, Long.MAX_VALUE when empty (no object is built). */
++    public long peekTriggerTick() {
++        if (this.legacy != null) {
++            ScheduledTick<T> tick = this.legacy.peek();
++            return tick == null ? Long.MAX_VALUE : tick.triggerTick();
++        }
++        return this.hSize == 0 ? Long.MAX_VALUE : this.hTrig[0];
+     }
+ 
+     public @Nullable ScheduledTick<T> poll() {
+-        ScheduledTick<T> scheduledTick = this.tickQueue.poll();
+-        if (scheduledTick != null) {
+-            this.ticksPerPosition.remove(scheduledTick); this.dirty = true; // Paper - rewrite chunk system
+-        }
+-
+-        return scheduledTick;
++        if (this.legacy != null) {
++            return this.legacy.poll();
++        }
++        if (this.hSize == 0) {
++            return null;
++        }
++        ScheduledTick<T> result = this.peek();
++        this.ensureKeys();
++        this.keys.remove(this.hWord[0] & PackedTicks.KEY_MASK);
++        this.dirty = true; // Paper - rewrite chunk system
++        this.heapPoll();
++        if (this.hSize == 0 && this.dWords == null) {
++            this.releaseIfEmpty();
++        }
++        return result;
+     }
+ 
+     @Override
+     public void schedule(ScheduledTick<T> tick) {
+-        if (this.ticksPerPosition.add(tick)) {
+-            this.scheduleUnchecked(tick); this.dirty = true; // Paper - rewrite chunk system
+-        }
+-    }
+-
+-    private void scheduleUnchecked(ScheduledTick<T> tick) {
+-        this.tickQueue.add(tick);
+-        if (this.onTickAdded != null) {
+-            this.onTickAdded.accept(this, tick);
++        if (this.shadow != null) {
++            this.shadow.schedule(tick);
++        }
++        if (this.legacy != null) {
++            this.legacy.schedule(tick);
++            return;
++        }
++        long word = this.wordFor(tick.type(), tick.pos(), tick.priority());
++        if (word == Long.MIN_VALUE) {
++            this.toLegacy();
++            this.legacy.schedule(tick);
++            return;
++        }
++        this.ensureKeys();
++        if (this.keys.add(word & PackedTicks.KEY_MASK)) {
++            if (this.heapOffer(tick.triggerTick(), tick.subTickOrder(), word)) {
++                this.head = tick; // the new head is this tick (same values); keep the caller's object like the old queue did
++                if (this.onTickAdded != null) {
++                    // the old code called onTickAdded for every tick; its only user (LevelTicks) acts only when the tick is the head
++                    this.onTickAdded.accept(this, tick);
++                }
++            }
++            this.dirty = true; // Paper - rewrite chunk system
+         }
+     }
+ 
+     @Override
+     public boolean hasScheduledTick(BlockPos pos, T type) {
+-        return this.ticksPerPosition.contains(ScheduledTick.probe(type, pos));
++        boolean result = this.legacy != null ? this.legacy.hasScheduledTick(pos, type) : this.hasScheduledTick0(pos, type);
++        if (this.shadow != null) {
++            PackedTicks.check();
++            boolean old = this.shadow.hasScheduledTick(pos, type);
++            if (old != result) {
++                PackedTicks.mismatch("hasScheduledTick " + pos + " " + type + " new=" + result + " old=" + old);
++            }
++        }
++        return result;
++    }
++
++    private boolean hasScheduledTick0(BlockPos pos, T type) {
++        if (!this.hasChunk || (pos.getX() >> 4) != this.chunkX || (pos.getZ() >> 4) != this.chunkZ) {
++            return false; // a packed container holds no tick of another chunk
++        }
++        int typeIndex = this.findType(type);
++        if (typeIndex < 0) {
++            return false;
++        }
++        long key = PackedTicks.word(pos.getX(), pos.getY(), pos.getZ(), 0, typeIndex);
++        if (this.keys == null) {
++            int pending = this.dWords != null ? this.dSize : 0;
++            if (this.hSize + pending > 16) {
++                this.ensureKeys();
++            } else {
++                for (int i = 0; i < this.hSize; i++) {
++                    if ((this.hWord[i] & PackedTicks.KEY_MASK) == key) {
++                        return true;
++                    }
++                }
++                for (int i = 0; i < pending; i++) {
++                    if ((this.dWords[i] & PackedTicks.KEY_MASK) == key) {
++                        return true;
++                    }
++                }
++                return false;
++            }
++        }
++        return this.keys.contains(key);
+     }
+ 
+     public void removeIf(Predicate<ScheduledTick<T>> predicate) {
+-        Iterator<ScheduledTick<T>> iterator = this.tickQueue.iterator();
+-
+-        while (iterator.hasNext()) {
+-            ScheduledTick<T> scheduledTick = iterator.next();
+-            if (predicate.test(scheduledTick)) {
+-                iterator.remove(); this.dirty = true; // Paper - rewrite chunk system
+-                this.ticksPerPosition.remove(scheduledTick);
+-            }
+-        }
++        if (this.shadow != null) {
++            this.shadow.removeIf(predicate);
++        }
++        if (this.legacy == null) {
++            this.toLegacy(); // rare (clearArea); the old code removes through the PriorityQueue iterator, so let it do exactly that
++        }
++        this.legacy.removeIf(predicate);
+     }
+ 
+     public Stream<ScheduledTick<T>> getAll() {
+-        return this.tickQueue.stream();
++        if (this.legacy != null) {
++            return this.legacy.getAll();
++        }
++        return IntStream.range(0, this.hSize).mapToObj(this::materialize);
+     }
+ 
+     @Override
+     public int count() {
+-        return this.tickQueue.size() + (this.pendingTicks != null ? this.pendingTicks.size() : 0);
++        int result = this.legacy != null ? this.legacy.count() : this.hSize + (this.dWords != null ? this.dSize : 0);
++        if (this.shadow != null) {
++            PackedTicks.check();
++            int old = this.shadow.count();
++            if (old != result) {
++                PackedTicks.mismatch("count new=" + result + " old=" + old);
++            }
++        }
++        return result;
+     }
+ 
+     @Override
+     public List<SavedTick<T>> pack(long gameTime) {
++        List<SavedTick<T>> result = this.pack0(gameTime);
++        if (this.shadow != null) {
++            PackedTicks.check();
++            List<SavedTick<T>> old = this.shadow.pack(gameTime);
++            if (!PackedTicks.sameSaved(result, old)) {
++                PackedTicks.mismatch("pack(" + gameTime + ") new=" + result + " old=" + old);
++            }
++        }
++        return result;
++    }
++
++    private List<SavedTick<T>> pack0(long gameTime) {
++        if (this.legacy != null) {
++            return this.legacy.pack(gameTime);
++        }
+         this.lastSaved = gameTime; // Paper - rewrite chunk system
+-        List<SavedTick<T>> list = new ArrayList<>(this.tickQueue.size());
+-        if (this.pendingTicks != null) {
+-            list.addAll(this.pendingTicks);
+-        }
+-
+-        for (ScheduledTick<T> scheduledTick : this.tickQueue) {
+-            list.add(scheduledTick.toSavedTick(gameTime));
+-        }
+-
+-        return list;
++        int pending = this.dWords != null ? this.dSize : 0;
++        int size = pending + this.hSize;
++        if (size == 0) {
++            return PackedTickList.empty(this.chunkX, this.chunkZ);
++        }
++        long[] words = new long[size];
++        int[] delays = new int[size];
++        if (pending != 0) {
++            System.arraycopy(this.dWords, 0, words, 0, pending);
++            System.arraycopy(this.dDelays, 0, delays, 0, pending);
++        }
++        for (int i = 0; i < this.hSize; i++) {
++            words[pending + i] = this.hWord[i];
++            delays[pending + i] = (int) (this.hTrig[i] - gameTime);
++        }
++        // the type array is shared: entries below typeCount are never written again (addType copies on grow), and the list
++        // only reads entries its words use
++        return new PackedTickList<>(this.types, words, delays, size, this.chunkX, this.chunkZ);
+     }
+ 
+     public void unpack(long gameTime) {
+-        if (this.pendingTicks != null) {
++        if (this.shadow != null) {
++            this.shadow.unpack(gameTime);
++        }
++        if (this.legacy != null) {
++            this.legacy.unpack(gameTime);
++            return;
++        }
++        if (this.dWords != null) {
+             this.lastSaved = gameTime; // Paper - rewrite chunk system
+-            int i = -this.pendingTicks.size();
+-
+-            for (SavedTick<T> savedTick : this.pendingTicks) {
+-                this.scheduleUnchecked(savedTick.unpack(gameTime, i++));
+-            }
+-        }
+-
+-        this.pendingTicks = null;
++            long[] words = this.dWords;
++            int[] delays = this.dDelays;
++            int size = this.dSize;
++            this.ensureHeapCapacity(this.hSize + size);
++            long i = -size;
++
++            for (int j = 0; j < size; j++) {
++                if (this.heapOffer(gameTime + delays[j], i++, words[j])) {
++                    this.head = null;
++                    if (this.onTickAdded != null) {
++                        this.onTickAdded.accept(this, this.peek());
++                    }
++                }
++            }
++        }
++
++        this.dWords = null;
++        this.dDelays = null;
++        this.dSize = 0;
++        if (this.hSize == 0) {
++            this.releaseIfEmpty();
++        }
++    }
++
++    // ------------------------------------------------------------------------------------------------------------ packed helpers
++
++    /** The word of a tick, or Long.MIN_VALUE when it cannot be stored packed (other chunk, too many types, null type). */
++    private long wordFor(@Nullable T type, BlockPos pos, TickPriority priority) {
++        if (type == null || priority == null) {
++            return Long.MIN_VALUE;
++        }
++        int cx = pos.getX() >> 4;
++        int cz = pos.getZ() >> 4;
++        if (!this.hasChunk) {
++            this.hasChunk = true;
++            this.chunkX = cx;
++            this.chunkZ = cz;
++        } else if (cx != this.chunkX || cz != this.chunkZ) {
++            return Long.MIN_VALUE;
++        }
++        int typeIndex = this.findType(type);
++        if (typeIndex < 0) {
++            if (this.typeCount >= PackedTicks.MAX_TYPES) {
++                return Long.MIN_VALUE;
++            }
++            typeIndex = this.addType(type);
++        }
++        return PackedTicks.word(pos.getX(), pos.getY(), pos.getZ(), priority.ordinal(), typeIndex);
++    }
++
++    private int findType(Object type) {
++        if (this.typeIndex != null) {
++            return this.typeIndex.getInt(type);
++        }
++        Object[] types = this.types;
++        for (int i = 0, n = this.typeCount; i < n; i++) {
++            if (types[i] == type) {
++                return i;
++            }
++        }
++        return -1;
++    }
++
++    private int addType(Object type) {
++        int index = this.typeCount;
++        if (index == this.types.length) {
++            // copy on grow: lists packed earlier keep the old array
++            this.types = Arrays.copyOf(this.types, Math.max(4, index * 2));
++        }
++        this.types[index] = type;
++        this.typeCount = index + 1;
++        if (this.typeIndex != null) {
++            this.typeIndex.put(type, index);
++        } else if (this.typeCount > 8) {
++            this.buildTypeIndex();
++        }
++        return index;
++    }
++
++    private void buildTypeIndex() {
++        Reference2IntOpenHashMap<Object> map = new Reference2IntOpenHashMap<>(this.typeCount * 2);
++        map.defaultReturnValue(-1);
++        for (int i = 0; i < this.typeCount; i++) {
++            map.put(this.types[i], i);
++        }
++        this.typeIndex = map;
++    }
++
++    @SuppressWarnings("unchecked")
++    private ScheduledTick<T> materialize(int index) {
++        long word = this.hWord[index];
++        return new ScheduledTick<>((T) this.types[PackedTicks.typeIndex(word)], PackedTicks.pos(word, this.chunkX, this.chunkZ),
++            this.hTrig[index], PackedTicks.priority(word), this.hSub[index]);
++    }
++
++    @SuppressWarnings("unchecked")
++    private SavedTick<T> materializeSaved(int index) {
++        long word = this.dWords[index];
++        return new SavedTick<>((T) this.types[PackedTicks.typeIndex(word)], PackedTicks.pos(word, this.chunkX, this.chunkZ),
++            this.dDelays[index], PackedTicks.priority(word));
++    }
++
++    private void ensureKeys() {
++        if (this.keys != null) {
++            return;
++        }
++        int pending = this.dWords != null ? this.dSize : 0;
++        LongOpenHashSet keys = new LongOpenHashSet(Math.max(4, this.hSize + pending));
++        for (int i = 0; i < this.hSize; i++) {
++            keys.add(this.hWord[i] & PackedTicks.KEY_MASK);
++        }
++        for (int i = 0; i < pending; i++) {
++            keys.add(this.dWords[i] & PackedTicks.KEY_MASK);
++        }
++        this.keys = keys;
++    }
++
++    /** No ticks left at all: drop the key set and grown arrays (with no entries the old set was empty too). */
++    private void releaseIfEmpty() {
++        this.keys = null;
++        this.head = null;
++        if (this.hWord.length > 16) {
++            this.hTrig = NO_LONGS;
++            this.hSub = NO_LONGS;
++            this.hWord = NO_LONGS;
++        }
++    }
++
++    private void resetPacked() {
++        this.types = NO_TYPES;
++        this.typeCount = 0;
++        this.typeIndex = null;
++        this.hasChunk = false;
++        this.dWords = null;
++        this.dDelays = null;
++        this.dSize = 0;
++        this.hTrig = NO_LONGS;
++        this.hSub = NO_LONGS;
++        this.hWord = NO_LONGS;
++        this.hSize = 0;
++        this.head = null;
++        this.keys = null;
++    }
++
++    /** Switch to the old structure with the identical state (queue layout, pending list, key set, dirty, lastSaved). */
++    private void toLegacy() {
++        List<SavedTick<T>> pending = null;
++        if (this.dWords != null) {
++            pending = new ArrayList<>(this.dSize);
++            for (int i = 0; i < this.dSize; i++) {
++                pending.add(this.materializeSaved(i));
++            }
++        }
++        List<ScheduledTick<T>> queue = new ArrayList<>(this.hSize);
++        for (int i = 0; i < this.hSize; i++) {
++            queue.add(i == 0 ? this.peek() : this.materialize(i));
++        }
++        List<ScheduledTick<?>> probes = new ArrayList<>();
++        this.ensureKeys();
++        LongIterator iterator = this.keys.iterator();
++        while (iterator.hasNext()) {
++            long key = iterator.nextLong();
++            probes.add(ScheduledTick.probe(this.types[PackedTicks.typeIndex(key)], PackedTicks.pos(key, this.chunkX, this.chunkZ)));
++        }
++        LegacyChunkTicks<T> legacy = LegacyChunkTicks.restore(pending, queue, probes, this.dirty, this.lastSaved);
++        this.resetPacked();
++        this.legacy = legacy;
++        this.setOnTickAdded(this.onTickAdded);
++    }
++
++    // -------------------------------------------------------------------------------------- heap = java.util.PriorityQueue algorithm
++
++    private void ensureHeapCapacity(int capacity) {
++        int length = this.hWord.length;
++        if (capacity > length) {
++            int newCapacity = Math.max(capacity, length < 64 ? length * 2 + 2 : length + (length >> 1));
++            this.hTrig = Arrays.copyOf(this.hTrig, newCapacity);
++            this.hSub = Arrays.copyOf(this.hSub, newCapacity);
++            this.hWord = Arrays.copyOf(this.hWord, newCapacity);
++        }
++    }
++
++    /** ScheduledTick.DRAIN_ORDER on packed entries: trigger tick, then priority, then sub-tick order. */
++    private static int compare(long trigA, long wordA, long subA, long trigB, long wordB, long subB) {
++        int i = Long.compare(trigA, trigB);
++        if (i != 0) {
++            return i;
++        }
++        i = Integer.compare(PackedTicks.priorityOrdinal(wordA), PackedTicks.priorityOrdinal(wordB));
++        return i != 0 ? i : Long.compare(subA, subB);
++    }
++
++    /** PriorityQueue.offer + siftUpUsingComparator. Returns true when the new entry is the head. */
++    private boolean heapOffer(long trig, long sub, long word) {
++        int k = this.hSize;
++        this.ensureHeapCapacity(k + 1);
++        long[] t = this.hTrig;
++        long[] s = this.hSub;
++        long[] w = this.hWord;
++        while (k > 0) {
++            int parent = (k - 1) >>> 1;
++            if (compare(trig, word, sub, t[parent], w[parent], s[parent]) >= 0) {
++                break;
++            }
++            t[k] = t[parent];
++            s[k] = s[parent];
++            w[k] = w[parent];
++            k = parent;
++        }
++        t[k] = trig;
++        s[k] = sub;
++        w[k] = word;
++        this.hSize++;
++        return k == 0;
++    }
++
++    /** PriorityQueue.poll + siftDownUsingComparator (the caller took the head object first). */
++    private void heapPoll() {
++        this.head = null;
++        int n = --this.hSize;
++        if (n > 0) {
++            long[] t = this.hTrig;
++            long[] s = this.hSub;
++            long[] w = this.hWord;
++            long xt = t[n];
++            long xs = s[n];
++            long xw = w[n];
++            int k = 0;
++            int half = n >>> 1;
++            while (k < half) {
++                int child = (k << 1) + 1;
++                int right = child + 1;
++                if (right < n && compare(t[child], w[child], s[child], t[right], w[right], s[right]) > 0) {
++                    child = right;
++                }
++                if (compare(xt, xw, xs, t[child], w[child], s[child]) <= 0) {
++                    break;
++                }
++                t[k] = t[child];
++                s[k] = s[child];
++                w[k] = w[child];
++                k = child;
++            }
++            t[k] = xt;
++            s[k] = xs;
++            w[k] = xw;
++        }
++    }
++
++    // ------------------------------------------------------------------------------------------------------------------- verify
++
++    /** Verify mode: the queue (array order), the pending list and the key count must equal the shadow's. */
++    public void verifyContents() {
++        if (this.shadow == null) {
++            return;
++        }
++        PackedTicks.check();
++        List<ScheduledTick<T>> mine = this.legacy != null ? this.legacy.queueInArrayOrder() : this.getAll().toList();
++        List<ScheduledTick<T>> old = this.shadow.queueInArrayOrder();
++        if (!PackedTicks.sameScheduled(mine, old)) {
++            PackedTicks.mismatch("queue new=" + mine + " old=" + old);
++        }
++        List<SavedTick<T>> oldPending = this.shadow.pendingTicks();
++        List<SavedTick<T>> myPending;
++        if (this.legacy != null) {
++            myPending = this.legacy.pendingTicks();
++        } else if (this.dWords == null) {
++            myPending = null;
++        } else {
++            myPending = new ArrayList<>(this.dSize);
++            for (int i = 0; i < this.dSize; i++) {
++                myPending.add(this.materializeSaved(i));
++            }
++        }
++        if ((myPending == null) != (oldPending == null) || (myPending != null && !PackedTicks.sameSaved(myPending, oldPending))) {
++            PackedTicks.mismatch("pending new=" + myPending + " old=" + oldPending);
++        }
++        int myKeys = this.legacy != null ? this.legacy.keyCount() : (this.keys != null ? this.keys.size() : -1);
++        if (myKeys >= 0 && myKeys != this.shadow.keyCount()) {
++            PackedTicks.mismatch("key count new=" + myKeys + " old=" + this.shadow.keyCount());
++        }
+     }
+ }

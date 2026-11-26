@@ -1,0 +1,53 @@
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -88,8 +_,41 @@
+         // Paper end - Moved after stat fetching for player state file
+     }
+ 
++    // Evangelium start - join preload: the stats file read and DataFixed off the tick threads
++    public ServerStatsCounter(MinecraftServer server, Path file, Map<Stat<?>, Integer> preparsed) {
++        this.file = file;
++        this.stats.putAll(preparsed);
++        for (Map.Entry<net.minecraft.resources.Identifier, Integer> entry : org.spigotmc.SpigotConfig.forcedStats.entrySet()) {
++            Stat<net.minecraft.resources.Identifier> wrapper = Stats.CUSTOM.get(java.util.Objects.requireNonNull(BuiltInRegistries.CUSTOM_STAT.getValue(entry.getKey())));
++            this.stats.put(wrapper, entry.getValue().intValue());
++        }
++    }
++
++    /** Reads and parses a stats file like the constructor (empty map if there is none); throws on a read or parse error (the caller then falls back to the constructor, which logs it). */
++    public static Map<Stat<?>, Integer> preparse(MinecraftServer server, Path file) throws IOException {
++        if (!Files.isRegularFile(file)) {
++            return Map.of();
++        }
++        try (Reader bufferedReader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
++            JsonElement jsonElement = StrictJsonParser.parse(bufferedReader);
++            Dynamic<JsonElement> dynamic = new Dynamic<>(JsonOps.INSTANCE, jsonElement);
++            dynamic = DataFixTypes.STATS.updateToCurrentVersion(server.getFixerUpper(), dynamic, NbtUtils.getDataVersion(dynamic, 1343));
++            return STATS_CODEC.parse(dynamic.get("stats").orElseEmptyMap())
++                .resultOrPartial(string -> LOGGER.error("Failed to parse statistics for {}: {}", file, string))
++                .orElse(Map.of());
++        }
++    }
++
++    private String saveKey() {
++        String name = this.file.getFileName().toString();
++        return name.endsWith(".json") ? name.substring(0, name.length() - 5) : name;
++    }
++    // Evangelium end - join preload
++
+     public void save() {
+         if (org.spigotmc.SpigotConfig.disableStatSaving) return; // Spigot
++        final String saveKey = this.saveKey(); // Evangelium - join preload
++        io.evangelium.server.player.JoinPreload.beginSave(saveKey); // Evangelium - join preload
+         try {
+             FileUtil.createDirectoriesSafe(this.file.getParent());
+ 
+@@ -98,7 +_,7 @@
+             }
+         } catch (JsonIOException | IOException var6) {
+             LOGGER.error("Couldn't save stats to {}", this.file, var6);
+-        }
++        } finally { io.evangelium.server.player.JoinPreload.endSave(saveKey); } // Evangelium - join preload
+     }
+ 
+     @Override

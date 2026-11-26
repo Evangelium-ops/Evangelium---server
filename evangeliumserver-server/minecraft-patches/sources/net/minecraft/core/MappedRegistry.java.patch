@@ -1,0 +1,16 @@
+--- a/net/minecraft/core/MappedRegistry.java
++++ b/net/minecraft/core/MappedRegistry.java
+@@ -374,11 +_,13 @@
+             }
+         });
+         map.forEach(Holder.Reference::bindTags);
++        io.evangelium.server.player.RegistrySyncCache.invalidate(); // Evangelium - tags changed: rebuild the cached configuration packets
+     }
+ 
+     public void bindAllTagsToEmpty() {
+         this.validateWrite();
+         this.frozenTags.values().forEach(named -> named.bind(List.of()));
++        io.evangelium.server.player.RegistrySyncCache.invalidate(); // Evangelium - tags changed: rebuild the cached configuration packets
+     }
+ 
+     @Override

@@ -1,0 +1,103 @@
+--- a/net/minecraft/server/level/ChunkHolder.java
++++ b/net/minecraft/server/level/ChunkHolder.java
+@@ -1,5 +_,11 @@
+ package net.minecraft.server.level;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
++import ca.spottedleaf.moonrise.common.util.WorldUtil;
++import com.mojang.logging.LogUtils;
++import io.evangelium.server.region.RegionPos;
++import io.evangelium.server.threading.EvangeliumServerChangesBroadcaster;
++import io.evangelium.server.util.SimpleStampedLock;
+ import it.unimi.dsi.fastutil.shorts.ShortOpenHashSet;
+ import it.unimi.dsi.fastutil.shorts.ShortSet;
+ import java.util.BitSet;
+@@ -28,8 +_,12 @@
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.lighting.LevelLightEngine;
+ import org.jspecify.annotations.Nullable;
++import org.slf4j.Logger;
+ 
+ public class ChunkHolder extends GenerationChunkHolder implements ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemChunkHolder { // Paper - rewrite chunk system
++
++    private static Logger LOGGER = LogUtils.getClassLogger();
++
+     public static final ChunkResult<LevelChunk> UNLOADED_LEVEL_CHUNK = ChunkResult.error("Unloaded level chunk");
+     private static final CompletableFuture<ChunkResult<LevelChunk>> UNLOADED_LEVEL_CHUNK_FUTURE = CompletableFuture.completedFuture(UNLOADED_LEVEL_CHUNK);
+     private final LevelHeightAccessor levelHeightAccessor;
+@@ -48,7 +_,8 @@
+ 
+     private static final ServerPlayer[] EMPTY_PLAYER_ARRAY = new ServerPlayer[0];
+     private final ca.spottedleaf.moonrise.common.list.ReferenceList<ServerPlayer> playersSentChunkTo = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_PLAYER_ARRAY);
+-
++    private final SimpleStampedLock playersSentChunkToLock = new SimpleStampedLock(); // EvangeliumServer - playersSentChunkTo thread safety
++    
+     private ChunkMap getChunkMap() {
+         return (ChunkMap)this.playerProvider;
+     }
+@@ -65,16 +_,20 @@
+ 
+     @Override
+     public final void moonrise$addReceivedChunk(final ServerPlayer player) {
++        this.playersSentChunkToLock.write(() -> { // EvangeliumServer - playersSentChunkTo thread safety
+         if (!this.playersSentChunkTo.add(player)) {
+             throw new IllegalStateException("Already sent chunk " + this.pos + " in world '" + ca.spottedleaf.moonrise.common.util.WorldUtil.getWorldName(this.getChunkMap().level) + "' to player " + player);
+         }
++        }); // EvangeliumServer - playersSentChunkTo thread safety
+     }
+ 
+     @Override
+     public final void moonrise$removeReceivedChunk(final ServerPlayer player) {
++        this.playersSentChunkToLock.write(() -> { // EvangeliumServer - playersSentChunkTo thread safety
+         if (!this.playersSentChunkTo.remove(player)) {
+             throw new IllegalStateException("Already sent chunk " + this.pos + " in world '" + ca.spottedleaf.moonrise.common.util.WorldUtil.getWorldName(this.getChunkMap().level) + "' to player " + player);
+         }
++        }); // EvangeliumServer - playersSentChunkTo thread safety
+     }
+ 
+     @Override
+@@ -84,11 +_,14 @@
+ 
+     @Override
+     public final boolean moonrise$hasChunkBeenSent(final ServerPlayer to) {
++        return this.playersSentChunkToLock.optimisticRead(() -> { // EvangeliumServer - playersSentChunkTo thread safety
+         return this.playersSentChunkTo.contains(to);
++        }); // EvangeliumServer - playersSentChunkTo thread safety
+     }
+ 
+     @Override
+     public final List<ServerPlayer> moonrise$getPlayers(final boolean onlyOnWatchDistanceEdge) {
++        return this.playersSentChunkToLock.optimisticRead(() -> { // EvangeliumServer - playersSentChunkTo thread safety
+         final List<ServerPlayer> ret = new java.util.ArrayList<>();
+         final ServerPlayer[] raw = this.playersSentChunkTo.getRawDataUnchecked();
+         for (int i = 0, len = this.playersSentChunkTo.size(); i < len; ++i) {
+@@ -100,6 +_,7 @@
+         }
+ 
+         return ret;
++        }); // EvangeliumServer - playersSentChunkTo thread safetys
+     }
+ 
+     @Override
+@@ -221,6 +_,10 @@
+     }
+ 
+     public boolean blockChanged(BlockPos pos) {
++        if (!this.getChunkMap().level.getServer().forceTicks && !TickThread.isShutdownThread() && !this.getChunkMap().level.chunkScheduler.getRegionLocker().hasWriteLock(RegionPos.forBlockPos(pos))) { // EvangeliumServer
++            LOGGER.error("Block change is not write locked: world={} pos={} newstate={}", WorldUtil.getWorldName(this.getChunkMap().level), pos, this.getFullChunkNow().getBlockState(pos)); // EvangeliumServer
++            TickThread.ensureTickThread(this.getChunkMap().level, pos, "Block change is not write locked"); // EvangeliumServer
++        } // EvangeliumServer
+         LevelChunk tickingChunk = this.playersSentChunkTo.size() == 0 ? null : this.getChunkToSend(); // Paper - rewrite chunk system
+         if (tickingChunk == null) {
+             return false;
+@@ -274,6 +_,10 @@
+ 
+     public void broadcastChanges(LevelChunk chunk) {
+         if (this.hasChangesToBroadcast()) {
++            if (chunk.cachedChunkPacket != null) { // EvangeliumServer
++                chunk.cachedChunkPacket = null; // EvangeliumServer
++                if (io.evangelium.server.util.ChunkPacketCacheStats.ON) io.evangelium.server.util.ChunkPacketCacheStats.INVALIDATED.increment(); // Evangelium - cache counters
++            } // EvangeliumServer
+             Level level = chunk.getLevel();
+             if (!this.skyChangedLightSectionFilter.isEmpty() || !this.blockChangedLightSectionFilter.isEmpty()) {
+                 List<ServerPlayer> players = this.moonrise$getPlayers(true); // Paper - rewrite chunk system

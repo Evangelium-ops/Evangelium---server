@@ -1,0 +1,73 @@
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -12,6 +_,10 @@
+ import com.mojang.brigadier.exceptions.CommandSyntaxException;
+ import com.mojang.serialization.Dynamic;
+ import com.mojang.serialization.Lifecycle;
++import io.evangelium.server.commands.EvangeliumServerCommands;
++import io.evangelium.server.permissions.EvangeliumServerPermissions;
++import io.evangelium.server.region.EvangeliumServerRegionSchedulerApiImpl;
++import io.evangelium.server.threading.EvangeliumServerTickThread;
+ import io.papermc.paper.configuration.GlobalConfiguration;
+ import io.papermc.paper.configuration.PaperServerConfiguration;
+ import io.papermc.paper.configuration.ServerConfiguration;
+@@ -307,7 +_,7 @@
+     private final ServerConfiguration serverConfig = new PaperServerConfiguration();
+ 
+     // Paper start - Folia region threading API
+-    private final io.papermc.paper.threadedregions.scheduler.FallbackRegionScheduler regionizedScheduler = new io.papermc.paper.threadedregions.scheduler.FallbackRegionScheduler();
++    private final io.papermc.paper.threadedregions.scheduler.RegionScheduler regionizedScheduler = new EvangeliumServerRegionSchedulerApiImpl(); // EvangeliumServer
+     private final io.papermc.paper.threadedregions.scheduler.FoliaAsyncScheduler asyncScheduler = new io.papermc.paper.threadedregions.scheduler.FoliaAsyncScheduler();
+     private final io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler globalRegionScheduler = new io.papermc.paper.threadedregions.scheduler.FoliaGlobalRegionScheduler();
+ 
+@@ -384,7 +_,7 @@
+ 
+     @Override
+     public final boolean isGlobalTickThread() {
+-        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread();
++        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread() && !EvangeliumServerTickThread.isEvangeliumServerTickThread();
+     }
+     // Paper end - Folia reagion threading API
+ 
+@@ -617,6 +_,7 @@
+             // Spigot end
+             DefaultPermissions.registerCorePermissions();
+             CraftDefaultPermissions.registerCorePermissions();
++            EvangeliumServerPermissions.registerCorePermissions(); // EvangeliumServer
+             if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) this.loadCustomPermissions(); // Paper
+             this.syncCommands();
+         }
+@@ -1041,6 +_,7 @@
+         io.papermc.paper.command.PaperCommands.registerCommands(this.console); // Paper
+         this.spark.registerCommandBeforePlugins(this); // Paper - spark
+         org.purpurmc.purpur.PurpurConfig.registerCommands(); // Purpur - Purpur config files
++        EvangeliumServerCommands.registerCommands(this.getServer()); // EvangeliumServer
+         this.overrideAllCommandBlockCommands = this.commandsConfiguration.getStringList("command-block-overrides").contains("*");
+         this.ignoreVanillaPermissions = this.commandsConfiguration.getBoolean("ignore-vanilla-permissions");
+ 
+@@ -1193,6 +_,8 @@
+         Preconditions.checkState(this.console.getAllLevels().iterator().hasNext(), "Cannot create additional worlds on STARTUP");
+         //Preconditions.checkState(!this.console.isIteratingOverLevels, "Cannot create a world while worlds are being ticked"); // Paper - Cat - Temp disable. We'll see how this goes.
+         Preconditions.checkArgument(creator != null, "WorldCreator cannot be null");
++        if (!ca.spottedleaf.moonrise.common.util.TickThread.isTickThread()) throw new IllegalStateException("Cannot load worlds async!!"); // EvangeliumServer
++        if (EvangeliumServerTickThread.isEvangeliumServerTickThread()) throw new IllegalStateException("Must load worlds from the global scheduler!"); // EvangeliumServer
+ 
+         String name = creator.name();
+         ChunkGenerator chunkGenerator = creator.generator();
+@@ -2381,7 +_,7 @@
+ 
+     @Override
+     public boolean isPrimaryThread() {
+-        return ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Paper - rewrite chunk system
++        return ca.spottedleaf.moonrise.common.util.TickThread.isPrimaryThreadForApi(); // Paper - rewrite chunk system // Evangelium - not every thread while forceTicks is set (async prelogin event during world loads and stalled stops)
+     }
+ 
+     @Override
+@@ -2941,6 +_,7 @@
+         if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) loadCustomPermissions();
+         DefaultPermissions.registerCorePermissions();
+         CraftDefaultPermissions.registerCorePermissions();
++        EvangeliumServerPermissions.registerCorePermissions(); // EvangeliumServer
+     }
+ 
+     @Override

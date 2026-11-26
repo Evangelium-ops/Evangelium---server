@@ -1,0 +1,26 @@
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java
+@@ -339,6 +_,7 @@
+             }
+ 
+             try {
++                final boolean currentVersion = net.minecraft.nbt.NbtUtils.getDataVersion(data, -1) == net.minecraft.SharedConstants.getCurrentVersion().dataVersion().version(); // EvangeliumServer - skip unchanged chunk saves
+                 // run converters
+                 final CompoundTag converted = this.world.getChunkSource().chunkMap.upgradeChunkTag(data);
+ 
+@@ -357,6 +_,15 @@
+                     new ChunkPos(this.chunkX, this.chunkZ)
+                 );
+ 
++                if (io.evangelium.server.util.GenStats.ENABLED && chunk != null && !(chunk instanceof net.minecraft.world.level.chunk.ImposterProtoChunk)) {
++                    io.evangelium.server.util.GenStats.PROTO_RELOADS.incrementAndGet(); // Evangelium - generation counters
++                }
++                // EvangeliumServer start - skip unchanged chunk saves
++                if (chunk instanceof net.minecraft.world.level.chunk.ImposterProtoChunk imposter && currentVersion
++                    && net.minecraft.world.level.chunk.LevelChunk.skipUnchangedChunkSaves() && chunkData.loadsUnchanged()) {
++                    imposter.getWrapped().markLoadedUnchanged();
++                }
++                // EvangeliumServer end - skip unchanged chunk saves
+                 return new TaskResult<>(new ReadChunk(chunk, chunkData), null);
+             } catch (final Throwable thr2) {
+                 LOGGER.error("Failed to parse chunk data for task: " + this.toString() + ", chunk data will be lost", thr2);

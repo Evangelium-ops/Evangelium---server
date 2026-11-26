@@ -1,0 +1,77 @@
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -1,5 +_,6 @@
+ package net.minecraft.world.level.storage;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
+ import com.mojang.datafixers.DataFixer;
+ import com.mojang.logging.LogUtils;
+ import java.io.File;
+@@ -8,6 +_,9 @@
+ import java.nio.file.StandardCopyOption;
+ import java.time.ZonedDateTime;
+ import java.util.Optional;
++import java.util.concurrent.Executor;
++
++import io.evangelium.server.config.EvangeliumServerConfiguration;
+ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.nbt.NbtAccounter;
+ import net.minecraft.nbt.NbtIo;
+@@ -24,6 +_,20 @@
+     private final File playerDir;
+     protected final DataFixer fixerUpper;
+ 
++    private static final Executor IO_WORKER = Util.ioPool(); // EvangeliumServer
++    // Evangelium: the last async write per player file; saves of one player run in order and a load waits for them (a quick rejoin read the old file)
++    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Void>> PENDING_WRITES = new java.util.concurrent.ConcurrentHashMap<>();
++
++    /** Evangelium: waits for the pending async write of one player (null = all of them). */
++    public static void awaitPendingWrites(@org.jspecify.annotations.Nullable String uuid) {
++        java.util.Collection<java.util.concurrent.CompletableFuture<Void>> waits = uuid == null ? new java.util.ArrayList<>(PENDING_WRITES.values()) : java.util.Collections.singletonList(PENDING_WRITES.get(uuid));
++        for (java.util.concurrent.CompletableFuture<Void> f : waits) {
++            if (f != null) {
++                try { f.join(); } catch (Exception ignored) {} // the failure was logged by the write itself
++            }
++        }
++    }
++
+     public PlayerDataStorage(LevelStorageSource.LevelStorageAccess levelStorageAccess, DataFixer fixerUpper) {
+         this.fixerUpper = fixerUpper;
+         this.playerDir = levelStorageAccess.getLevelPath(LevelResource.PLAYER_DATA_DIR).toFile();
+@@ -35,6 +_,7 @@
+         try (ProblemReporter.ScopedCollector scopedCollector = new ProblemReporter.ScopedCollector(player.problemPath(), LOGGER)) {
+             TagValueOutput tagValueOutput = TagValueOutput.createWithContext(scopedCollector, player.registryAccess());
+             player.saveWithoutId(tagValueOutput);
++            Runnable r = () -> { try { // EvangeliumServer - write async
+             Path path = this.playerDir.toPath();
+             Path path1 = Files.createTempFile(path, player.getStringUUID() + "-", ".dat");
+             CompoundTag compoundTag = tagValueOutput.buildResult();
+@@ -42,6 +_,20 @@
+             Path path2 = path.resolve(player.getStringUUID() + ".dat");
+             Path path3 = path.resolve(player.getStringUUID() + ".dat_old");
+             Util.safeReplaceFile(path2, path1, path3);
++            } catch (Exception e) { LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), e); throw new RuntimeException(e); }}; // EvangeliumServer - write async
++            // Evangelium start - one player's writes in order, never two at once
++            String uuid = player.getStringUUID();
++            io.evangelium.server.player.JoinPreload.beginSave(uuid); // Evangelium - join preload: a preload that started before this save is stale
++            try {
++            if (EvangeliumServerConfiguration.get().optimizations.writePlayerSavesAsync && !TickThread.isShutdownThread()) {
++                java.util.concurrent.CompletableFuture<Void> write = PENDING_WRITES.compute(uuid, (k, before) -> (before == null ? java.util.concurrent.CompletableFuture.<Void>completedFuture(null) : before.exceptionally(e -> null)).thenRunAsync(r, IO_WORKER));
++                write.whenComplete((v, e) -> PENDING_WRITES.remove(uuid, write));
++            } else {
++                awaitPendingWrites(uuid);
++                r.run();
++            }
++            } finally { io.evangelium.server.player.JoinPreload.endSave(uuid); } // Evangelium - join preload
++            // Evangelium end
+         } catch (Exception var11) {
+             LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), var11); // Paper - Print exception
+         }
+@@ -62,6 +_,7 @@
+     }
+ 
+     private Optional<CompoundTag> load(NameAndId nameAndId, String suffix) {
++        awaitPendingWrites(nameAndId.id().toString()); // Evangelium - read what the last save wrote
+         File file = new File(this.playerDir, nameAndId.id() + suffix);
+         // Spigot start
+         boolean usingWrongFile = false;

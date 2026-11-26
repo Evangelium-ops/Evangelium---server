@@ -1,0 +1,24 @@
+--- a/net/minecraft/server/network/config/SynchronizeRegistriesTask.java
++++ b/net/minecraft/server/network/config/SynchronizeRegistriesTask.java
+@@ -33,6 +_,7 @@
+     }
+ 
+     private void sendRegistries(Consumer<Packet<?>> packetSender, Set<KnownPack> packs) {
++        if (io.evangelium.server.player.RegistrySyncCache.enabled()) { io.evangelium.server.player.RegistrySyncCache.send(this.registries, packs, packetSender); return; } // Evangelium - built once per known-packs set
+         DynamicOps<Tag> dynamicOps = this.registries.compositeAccess().createSerializationContext(NbtOps.INSTANCE);
+         RegistrySynchronization.packRegistries(
+             dynamicOps,
+@@ -44,11 +_,13 @@
+     }
+ 
+     public void handleResponse(List<KnownPack> packs, Consumer<Packet<?>> packetSender) {
++        final long syncTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
+         if (packs.equals(this.requestedPacks)) {
+             this.sendRegistries(packetSender, Set.copyOf(this.requestedPacks));
+         } else {
+             this.sendRegistries(packetSender, Set.of());
+         }
++        io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_REGSYNC, syncTimer); // Evangelium - join timings
+     }
+ 
+     @Override

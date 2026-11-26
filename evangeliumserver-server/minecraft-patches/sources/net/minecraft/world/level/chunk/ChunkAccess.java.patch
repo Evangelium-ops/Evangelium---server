@@ -1,0 +1,33 @@
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -327,6 +_,14 @@
+         return true;
+     }
+ 
++    // EvangeliumServer start - light edge versions
++    private final ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState lightEdgeState = new ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState();
++
++    public ca.spottedleaf.moonrise.patches.starlight.light.LightEdgeState evangeliumserver$lightEdges() {
++        return this.lightEdgeState;
++    }
++    // EvangeliumServer end - light edge versions
++
+     public void markUnsaved() {
+         this.unsaved = true;
+     }
+@@ -519,6 +_,7 @@
+             int clampedY = Mth.clamp(y, minY, maxY);
+             int sectionIndex = this.getSectionIndex(QuartPos.toBlock(clampedY));
+             this.sections[sectionIndex].setBiome(x & 3, clampedY & 3, z & 3, biome);
++            if (this instanceof LevelChunk) io.evangelium.server.spawn.SpawnSkip.BIOME_EPOCH.incrementAndGet(); // Evangelium - natural spawn skip
+         } catch (Throwable throwable) {
+             CrashReport report = CrashReport.forThrowable(throwable, "Setting biome");
+             CrashReportCategory reportCategory = report.addCategory("Biome being set");
+@@ -539,6 +_,7 @@
+             int quartPosY = QuartPos.fromSection(sectionY);
+             section.fillBiomesFromNoise(resolver, sampler, quartPosMinX, quartPosY, quartPosMinZ);
+         }
++        if (this instanceof LevelChunk) io.evangelium.server.spawn.SpawnSkip.BIOME_EPOCH.incrementAndGet(); // Evangelium - natural spawn skip
+     }
+ 
+     public boolean hasAnyStructureReferences() {

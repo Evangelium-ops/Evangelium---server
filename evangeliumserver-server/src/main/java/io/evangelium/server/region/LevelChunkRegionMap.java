@@ -1,0 +1,330 @@
+package io.evangelium.server.region;
+
+import com.mojang.logging.LogUtils;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.BlockEventData;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
+import io.evangelium.server.threading.EvangeliumServerRegionLocker;
+import io.evangelium.server.util.SimpleStampedLock;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import org.slf4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
+
+public class LevelChunkRegionMap {
+
+    private static final Logger LOGGER = LogUtils.getClassLogger();
+
+    private final ServerLevel level;
+    private final SimpleStampedLock regionsLock = new SimpleStampedLock();
+    private final Long2ObjectOpenHashMap<LevelChunkRegion> regions = new Long2ObjectOpenHashMap<>(2048, 0.5f);
+
+    public LevelChunkRegionMap(ServerLevel level) {
+        this.level = level;
+    }
+
+    public LevelChunkRegion getOrCreate(RegionPos regionPos) {
+        LevelChunkRegion levelChunkRegion = get(regionPos);
+
+        if (levelChunkRegion != null) {
+            return levelChunkRegion;
+        }
+
+        return regionsLock.write(() -> regions.computeIfAbsent(regionPos.longKey, k -> new LevelChunkRegion(level, regionPos, this)));
+    }
+
+    public LevelChunkRegion get(RegionPos regionPos) {
+        return regionsLock.optimisticRead(() -> {
+            LevelChunkRegion levelChunkRegion = regions.get(regionPos.longKey);
+            if (levelChunkRegion != null) {
+                levelChunkRegion.bumpLastAccess();
+            }
+            return levelChunkRegion;
+        });
+    }
+
+    /**
+     * Evangelium - a player ticking request (natural spawning) must land in the region object that stays in the map: a region with no
+     * chunks, idle for 20 ticks, is dropped by its tick thread, and a request added to it after it was taken out would be lost for good.
+     * remove() re-checks emptiness under the write lock, so the request either keeps the region or is moved to the new one here.
+     */
+    public void addPlayerTickingRequest(net.minecraft.world.level.ChunkPos chunkPos) {
+        final RegionPos regionPos = chunkPos.getRegionPos();
+        while (true) {
+            final LevelChunkRegion region = getOrCreate(regionPos);
+            region.addPlayerTickingRequest(chunkPos);
+            if (get(regionPos) == region) {
+                return;
+            }
+            region.removePlayerTickingRequest(chunkPos); // dropped in between: undo and use the region that is in the map now
+        }
+    }
+
+    public void remove(RegionPos regionPos) {
+        regionsLock.write(() -> {
+            LevelChunkRegion region = regions.remove(regionPos.longKey);
+            if (!region.isEmpty()) {
+                // Guess this region has been modified by another thread, re-add it
+                regions.put(regionPos.longKey, region);
+            }
+        });
+    }
+
+    public void addTickingChunk(LevelChunk levelChunk) {
+        getOrCreate(RegionPos.forChunk(levelChunk.getPos())).add(levelChunk);
+    }
+
+    public void removeTickingChunk(LevelChunk levelChunk) {
+        getOrCreate(RegionPos.forChunk(levelChunk.getPos())).remove(levelChunk);
+    }
+
+    // Evangelium start - regions that may have queued internal tasks (a superset: a region is added after a task is queued and only taken
+    // out by forEachWithTasks after it was seen empty), so a thread waiting for a chunk visits those instead of every ticking region
+    private final java.util.Set<LevelChunkRegion> regionsWithTasks = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** -Devangeliumserver.taskRegionSet=false walks every ticking region as before (A/B switch). */
+    public static final boolean TASK_REGION_SET = Boolean.parseBoolean(System.getProperty("evangeliumserver.taskRegionSet", "true"));
+
+    private int withTasksCalls; // racy on purpose: only spaces out the safety-net walks
+
+    void markHasTasks(LevelChunkRegion region) {
+        this.regionsWithTasks.add(region);
+    }
+
+    /**
+     * The regions that have queued internal tasks, in no particular order. A region is taken out of the set first and checked after, and a
+     * producer queues first and adds after, so a region with a queued task is never left out. Regions no longer in the map are dropped.
+     */
+    public void forEachWithTasks(Consumer<LevelChunkRegion> consumer) {
+        // safety net: every 64th call walks every region as before (also re-adds a region that remove() put back into the map just after
+        // this method saw it missing and dropped it)
+        if (!TASK_REGION_SET || (++this.withTasksCalls & 63) == 0) {
+            forEach(region -> {
+                if (!region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                    if (TASK_REGION_SET) this.regionsWithTasks.add(region);
+                    consumer.accept(region);
+                }
+            });
+            return;
+        }
+        if (this.regionsWithTasks.isEmpty()) {
+            return;
+        }
+        List<LevelChunkRegion> withTasks = null;
+        for (java.util.Iterator<LevelChunkRegion> it = this.regionsWithTasks.iterator(); it.hasNext(); ) {
+            LevelChunkRegion region = it.next();
+            if (region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                it.remove();
+                if (region.getInternalTaskQueue().hasNoScheduledTasks()) {
+                    continue;
+                }
+                this.regionsWithTasks.add(region); // a task came in between: keep it
+            }
+            if (withTasks == null) withTasks = new ArrayList<>();
+            withTasks.add(region);
+        }
+        if (withTasks != null) {
+            for (LevelChunkRegion region : withTasks) {
+                // no bumpLastAccess here (get() would keep idle regions alive); a region dropped from the map is forgotten, as before
+                if (regionsLock.optimisticRead(() -> regions.get(region.getRegionPos().longKey)) == region) {
+                    consumer.accept(region);
+                } else {
+                    this.regionsWithTasks.remove(region);
+                }
+            }
+        }
+    }
+    // Evangelium end
+
+    public void forEach(Consumer<LevelChunkRegion> consumer) {
+        List<LevelChunkRegion> regionsCopy = new ArrayList<>(regions.size());
+        regionsLock.read(() -> regionsCopy.addAll(regions.values()));
+        regionsCopy.forEach(consumer);
+    }
+
+    public void addTickingEntity(Entity entity) {
+        if (entity.previousTickingChunkPosRegion != null) {
+            throw new IllegalStateException("Entity has already been added to a ticking list " + entity);
+        }
+
+        entity.previousTickingChunkPosRegion = entity.chunkPosition();
+        getOrCreate(RegionPos.forChunk(entity.chunkPosition())).addTickingEntity(entity);
+    }
+
+    public void removeTickingEntity(Entity entity) {
+        if (entity.previousTickingChunkPosRegion == null) {
+            throw new IllegalStateException("Entity has not been added to a ticking list " + entity);
+        }
+
+        getOrCreate(RegionPos.forChunk(entity.previousTickingChunkPosRegion)).removeTickingEntity(entity);
+        entity.previousTickingChunkPosRegion = null;
+    }
+
+    public void moveTickingEntity(Entity entity) {
+        if (entity.previousTickingChunkPosRegion == null) {
+            // Not ticking, ignore
+            return;
+        }
+
+        ChunkPos newChunkPos = entity.chunkPosition();
+        RegionPos fromRegion = RegionPos.forChunk(entity.previousTickingChunkPosRegion);
+        RegionPos toRegion = RegionPos.forChunk(newChunkPos);
+
+        if (!fromRegion.equals(toRegion)) {
+            entity.previousTickingChunkPosRegion = newChunkPos;
+            getOrCreate(fromRegion).removeTickingEntity(entity);
+            getOrCreate(toRegion).addTickingEntity(entity);
+        }
+    }
+
+    public void addTrackedEntity(Entity entity) {
+        if (entity.previousTrackedChunkPosRegion != null) {
+            throw new IllegalStateException("Entity is already tracked " + entity);
+        }
+
+        entity.previousTrackedChunkPosRegion = entity.chunkPosition();
+        getOrCreate(RegionPos.forChunk(entity.chunkPosition())).addTrackedEntity(entity);
+
+        if (entity instanceof Mob mob) {
+            getOrCreate(RegionPos.forChunk(entity.chunkPosition())).addNavigationMob(mob);
+        }
+    }
+
+    public void removeTrackedEntity(Entity entity) {
+        if (entity.previousTrackedChunkPosRegion == null) {
+            throw new IllegalStateException("Entity is not being tracked " + entity);
+        }
+
+        if (entity instanceof Mob mob) {
+            getOrCreate(RegionPos.forChunk(entity.chunkPosition())).removeNavigationMob(mob);
+        }
+
+        getOrCreate(RegionPos.forChunk(entity.previousTrackedChunkPosRegion)).removeTrackedEntity(entity);
+        entity.previousTrackedChunkPosRegion = null;
+    }
+
+    public void moveTrackedEntity(Entity entity) {
+        if (entity.previousTrackedChunkPosRegion == null) {
+            // Not tracked, ignore
+            return;
+        }
+
+        ChunkPos newChunkPos = entity.chunkPosition();
+        RegionPos fromRegion = RegionPos.forChunk(entity.previousTrackedChunkPosRegion);
+        RegionPos toRegion = RegionPos.forChunk(newChunkPos);
+
+        if (!fromRegion.equals(toRegion)) {
+            entity.previousTrackedChunkPosRegion = newChunkPos;
+            getOrCreate(fromRegion).removeTrackedEntity(entity);
+            getOrCreate(toRegion).addTrackedEntity(entity);
+
+            if (entity instanceof Mob mob) {
+                getOrCreate(fromRegion).removeNavigationMob(mob);
+                getOrCreate(toRegion).addNavigationMob(mob);
+            }
+        }
+    }
+
+    /**
+     * Schedule a task to run on the given region's thread at the beginning of the next tick
+     */
+    public void scheduleTask(RegionPos regionPos, Runnable task) {
+        scheduleTask(regionPos, task, 0);
+    }
+
+    /**
+     * Schedule a task to run on the given region's thread after a certain number of ticks
+     */
+    public void scheduleTask(RegionPos regionPos, Runnable task, long delayInTicks) {
+        getOrCreate(regionPos).scheduleTask(task, delayInTicks);
+    }
+
+    /**
+     * Execute a task on the given region's thread at the next given opportunity.
+     * These tasks must <strong>NOT</strong> modify the chunk (blocks, entities, etc). These
+     * tasks must be read-only. Eg loading a chunk, saving data, sending packets, etc.
+     */
+    public void execute(RegionPos regionPos, Runnable task) {
+        getOrCreate(regionPos).getInternalTaskQueue().queueTask(task);
+    }
+
+    /**
+     * Executor that executes a task on the given region's thread at the next given opportunity.
+     * These tasks must <strong>NOT</strong> modify the chunk (blocks, entities, etc). These
+     * tasks must be read-only. Eg loading a chunk, saving data, sending packets, etc.
+     */
+    public Executor executorFor(RegionPos regionPos) {
+        return runnable -> execute(regionPos, runnable);
+    }
+
+    public void addPlayer(ServerPlayer player) {
+        player.previousChunkPosRegion = player.chunkPosition();
+        getOrCreate(RegionPos.forChunk(player.chunkPosition())).addPlayer(player);
+    }
+
+    public void removePlayer(ServerPlayer player) {
+        getOrCreate(RegionPos.forChunk(player.chunkPosition())).removePlayer(player);
+    }
+
+    public void movePlayer(ServerPlayer player) {
+        RegionPos fromRegion = RegionPos.forChunk(player.previousChunkPosRegion);
+        RegionPos toRegion = RegionPos.forChunk(player.chunkPosition());
+
+        if (!fromRegion.equals(toRegion)) {
+            player.previousChunkPosRegion = player.chunkPosition();
+            getOrCreate(fromRegion).removePlayer(player);
+            getOrCreate(toRegion).addPlayer(player);
+        }
+    }
+
+    public void addBlockEvent(BlockEventData blockEvent) {
+        getOrCreate(RegionPos.forBlockPos(blockEvent.pos())).addBlockEvent(blockEvent);
+    }
+
+    public void forEachRegionInBoundingBox(BoundingBox box, Consumer<LevelChunkRegion> consumer) {
+        RegionPos minPos = RegionPos.forBlockPos(box.minX(), box.minZ(), box.minZ());
+        RegionPos maxPos = RegionPos.forBlockPos(box.maxX(), box.maxZ(), box.maxZ());
+
+        for (int x = minPos.x; x <= maxPos.x; x++) {
+            for (int z = minPos.z; z <= maxPos.z; z++) {
+                LevelChunkRegion region = get(new RegionPos(x, z));
+                if (region != null) {
+                    consumer.accept(region);
+                }
+            }
+        }
+    }
+
+    public List<Mob> collectRelevantNavigatingMobs(RegionPos regionPos) {
+        if (!level.chunkScheduler.getRegionLocker().hasLock(regionPos)) {
+            // We care about the navigating mobs in at least this region, ensure it's locked
+            throw new IllegalStateException("Collecting navigating mobs outside of region's thread");
+        }
+
+        ObjectArrayList<Mob> navigatingMobs = new ObjectArrayList<>();
+
+        for (int x = -EvangeliumServerRegionLocker.REGION_LOCK_RADIUS; x <= EvangeliumServerRegionLocker.REGION_LOCK_RADIUS; x++) {
+            for (int z = -EvangeliumServerRegionLocker.REGION_LOCK_RADIUS; z <= EvangeliumServerRegionLocker.REGION_LOCK_RADIUS; z++) {
+                RegionPos i = new RegionPos(regionPos.x + x, regionPos.z + z);
+
+                // Only collect mobs from regions that are locked - if it's not locked, it should be too far away to matter
+                if (!level.chunkScheduler.getRegionLocker().hasLock(i)) continue;
+
+                LevelChunkRegion region = get(i);
+                if (region == null) continue;
+
+                region.collectNavigatingMobs(navigatingMobs);
+            }
+        }
+
+        return navigatingMobs;
+    }
+}

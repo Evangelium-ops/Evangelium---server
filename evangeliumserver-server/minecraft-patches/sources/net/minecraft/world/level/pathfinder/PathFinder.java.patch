@@ -1,0 +1,28 @@
+--- a/net/minecraft/world/level/pathfinder/PathFinder.java
++++ b/net/minecraft/world/level/pathfinder/PathFinder.java
+@@ -171,11 +_,20 @@
+     private Path reconstructPath(Node node, BlockPos targetPos, boolean reachesTarget) {
+         List<Node> list = Lists.newArrayList();
+         Node node1 = node;
+-        list.add(0, node);
+-
+-        while (node1.cameFrom != null) {
+-            node1 = node1.cameFrom;
+-            list.add(0, node1);
++        if (io.evangelium.server.ai.AiDiagnostics.navigationOptimizationEnabled()) {
++            list.add(node);
++            while (node1.cameFrom != null) {
++                node1 = node1.cameFrom;
++                list.add(node1);
++            }
++            // Append then reverse avoids quadratic array copies on long paths.
++            java.util.Collections.reverse(list);
++        } else {
++            list.add(0, node);
++            while (node1.cameFrom != null) {
++                node1 = node1.cameFrom;
++                list.add(0, node1);
++            }
+         }
+ 
+         return new Path(list, targetPos, reachesTarget);

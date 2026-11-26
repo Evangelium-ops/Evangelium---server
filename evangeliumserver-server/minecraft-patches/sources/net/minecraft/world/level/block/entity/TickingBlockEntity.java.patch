@@ -1,0 +1,12 @@
+--- a/net/minecraft/world/level/block/entity/TickingBlockEntity.java
++++ b/net/minecraft/world/level/block/entity/TickingBlockEntity.java
+@@ -10,4 +_,9 @@
+     BlockPos getPos();
+ 
+     String getType();
++
++    // Evangelium - the block entity's type without building a string (intra-region parallel ticking picks block entities by type)
++    default net.minecraft.world.level.block.entity.BlockEntityType<?> evangeliumBlockEntityType() {
++        return null;
++    }
+ }

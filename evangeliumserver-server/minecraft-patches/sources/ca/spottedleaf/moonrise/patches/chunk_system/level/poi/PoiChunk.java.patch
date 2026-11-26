@@ -1,0 +1,10 @@
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/poi/PoiChunk.java
+@@ -54,6 +_,7 @@
+         }
+         this.loaded = true;
+         ((ChunkSystemPoiManager)this.world.getChunkSource().getPoiManager()).moonrise$loadInPoiChunk(this);
++        this.world.getPoiManager().evangelium$version++; // Evangelium
+     }
+ 
+     public boolean isLoaded() {

@@ -1,0 +1,95 @@
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+@@ -6,6 +_,8 @@
+ import com.google.common.collect.ImmutableSet;
+ import com.google.common.collect.Lists;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.EvangeliumServer;
++import io.evangelium.server.threading.SynchronousPluginExecution;
+ import io.papermc.paper.datacomponent.DataComponentType;
+ import io.papermc.paper.entity.LookAnchor;
+ import io.papermc.paper.entity.TeleportFlag;
+@@ -34,6 +_,7 @@
+ import net.minecraft.world.entity.boss.enderdragon.EnderDragonPart;
+ import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+ import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
++import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.portal.TeleportTransition;
+ import net.minecraft.world.level.storage.TagValueOutput;
+ import net.minecraft.world.level.storage.ValueInput;
+@@ -753,7 +_,7 @@
+         ImmutableSet.Builder<Player> players = ImmutableSet.builder();
+ 
+         ServerLevel world = ((CraftWorld) this.getWorld()).getHandle();
+-        ChunkMap.TrackedEntity entityTracker = world.getChunkSource().chunkMap.entityMap.get(this.getEntityId());
++        ChunkMap.TrackedEntity entityTracker = this.getHandle().moonrise$getTrackedEntity(); // world.getChunkSource().chunkMap.entityMap.get(this.getEntityId()); // EvangeliumServer - don't use map
+ 
+         if (entityTracker != null) {
+             for (ServerPlayerConnection connection : entityTracker.seenBy) {
+@@ -770,7 +_,7 @@
+         Preconditions.checkArgument(player != null, "Player cannot be null");
+ 
+         ServerLevel world = ((CraftWorld) this.getWorld()).getHandle();
+-        ChunkMap.TrackedEntity entityTracker = world.getChunkSource().chunkMap.entityMap.get(this.getEntityId());
++        ChunkMap.TrackedEntity entityTracker = this.getHandle().moonrise$getTrackedEntity(); // world.getChunkSource().chunkMap.entityMap.get(this.getEntityId()); // EvangeliumServer - don't use map
+         if (entityTracker == null) return false;
+ 
+         return entityTracker.seenBy.contains(((CraftPlayer) player).getHandle().connection);
+@@ -1085,7 +_,7 @@
+         }
+ 
+         ServerLevel world = ((CraftWorld) this.getWorld()).getHandle();
+-        ChunkMap.TrackedEntity entityTracker = world.getChunkSource().chunkMap.entityMap.get(this.getEntityId());
++        ChunkMap.TrackedEntity entityTracker = this.getHandle().moonrise$getTrackedEntity(); // world.getChunkSource().chunkMap.entityMap.get(this.getEntityId()); // EvangeliumServer - don't use map
+ 
+         if (entityTracker == null) {
+             return;
+@@ -1102,7 +_,7 @@
+         }
+ 
+         ServerLevel world = ((CraftWorld) this.getWorld()).getHandle();
+-        ChunkMap.TrackedEntity entityTracker = world.getChunkSource().chunkMap.entityMap.get(this.getEntityId());
++        ChunkMap.TrackedEntity entityTracker = this.getHandle().moonrise$getTrackedEntity(); // world.getChunkSource().chunkMap.entityMap.get(this.getEntityId()); // EvangeliumServer - don't use map
+ 
+         if (entityTracker == null) {
+             return;
+@@ -1140,10 +_,29 @@
+ 
+         ServerLevel world = ((CraftWorld)locationClone.getWorld()).getHandle();
+         CompletableFuture<Boolean> ret = new CompletableFuture<>();
++        Plugin plugin = SynchronousPluginExecution.getCurrentPlugin(); // EvangeliumServer - synchronous plugin execution
++
++        // EvangeliumServer start - run sync if possible
++        ChunkPos fromChunkPos = this.getHandle().chunkPosition();
++        ChunkPos toChunkPos = CraftLocation.toChunkPosition(locationClone);
++        if (EvangeliumServer.isSync((ServerLevel) this.getHandle().level(), fromChunkPos)
++                && EvangeliumServer.isSync(world, toChunkPos)
++                && this.getHandle().level().hasChunk(fromChunkPos.x, fromChunkPos.z)
++                && world.hasChunk(toChunkPos.x, toChunkPos.z)) {
++            try {
++                SynchronousPluginExecution.executeNoException(plugin, () -> ret.complete(CraftEntity.this.teleport0(locationClone, cause, teleportFlags) ? Boolean.TRUE : Boolean.FALSE)); // EvangeliumServer - synchronous plugin execution
++            } catch (Throwable throwable) {
++                MinecraftServer.LOGGER.error("Failed to teleport entity {}", CraftEntity.this, throwable);
++                SynchronousPluginExecution.executeNoException(plugin, () -> ret.completeExceptionally(throwable)); // EvangeliumServer - synchronous plugin execution
++            }
++            return ret;
++        }
++        // EvangeliumServer end - run sync if possible
+ 
+         world.loadChunksForMoveAsync(this.getHandle().getBoundingBoxAt(locationClone.getX(), locationClone.getY(), locationClone.getZ()),
+             this instanceof CraftPlayer ? ca.spottedleaf.concurrentutil.util.Priority.HIGHER : ca.spottedleaf.concurrentutil.util.Priority.NORMAL, (chunks) -> {
+-                MinecraftServer.getServer().scheduleOnMain(() -> {
++                io.evangelium.server.threading.TeleportPreload.hold(world, chunks); // Evangelium - keep them loaded until the deferred teleport below has run (the load tickets go when this callback returns)
++                EvangeliumServer.ensureSync(this.getHandle(), world, toChunkPos, () -> { // EvangeliumServer - run on correct thread
+                     final ServerChunkCache chunkCache = world.getChunkSource();
+                     for (final net.minecraft.world.level.chunk.ChunkAccess chunk : chunks) {
+                         chunkCache.addTicketAtLevel(TicketType.POST_TELEPORT, chunk.getPos(), ChunkLevel.FULL_CHUNK_LEVEL);
+@@ -1231,7 +_,7 @@
+     @Override
+     public Set<org.bukkit.entity.Player> getTrackedPlayers() {
+         ServerLevel world = (net.minecraft.server.level.ServerLevel)this.entity.level();
+-        ChunkMap.TrackedEntity tracker = world == null ? null : world.getChunkSource().chunkMap.entityMap.get(this.entity.getId());
++        ChunkMap.TrackedEntity tracker = this.getHandle().moonrise$getTrackedEntity(); // world == null ? null : world.getChunkSource().chunkMap.entityMap.get(this.entity.getId()); // EvangeliumServer - don't use map
+         if (tracker == null) {
+             return java.util.Collections.emptySet();
+         }

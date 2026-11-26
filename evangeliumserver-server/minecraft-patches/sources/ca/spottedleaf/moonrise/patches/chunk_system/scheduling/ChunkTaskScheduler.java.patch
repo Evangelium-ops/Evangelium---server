@@ -1,0 +1,108 @@
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -27,6 +_,10 @@
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import com.mojang.logging.LogUtils;
++import io.evangelium.server.region.LevelChunkRegion;
++import io.evangelium.server.region.RegionPos;
++import io.evangelium.server.threading.EvangeliumServerRegionLocker;
++import io.evangelium.server.threading.EvangeliumServerTickThread;
+ import net.minecraft.CrashReport;
+ import net.minecraft.CrashReportCategory;
+ import net.minecraft.ReportedException;
+@@ -107,7 +_,7 @@
+     }
+ 
+     public final ServerLevel world;
+-    public final AreaDependentQueue radiusAwareScheduler;
++    public final RadiusTaskQueue radiusAwareScheduler; // Evangelium - radius queue without head-of-line blocking
+     public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue parallelGenExecutor;
+     public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue loadExecutor;
+     public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue ioExecutor;
+@@ -273,6 +_,14 @@
+         this.shutdown = shutdown;
+     }
+ 
++    // Evangelium start - radius queue switch
++    private static final boolean RADIUS_QUEUE_OVERLAP_ONLY = io.evangelium.server.util.DevSwitch.on("radius-queue-overlap-only");
++
++    private static boolean radiusQueueOverlapOnly() {
++        return RADIUS_QUEUE_OVERLAP_ONLY;
++    }
++    // Evangelium end - radius queue switch
++
+     public ChunkTaskScheduler(final ServerLevel world) {
+         this.world = world;
+         // must be >= region shift (in paper, doesn't exist) and must be >= ticket propagator section shift
+@@ -285,7 +_,9 @@
+ 
+         this.parallelGenExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
+         this.loadExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
+-        this.radiusAwareScheduler = new AreaDependentQueue(this.parallelGenExecutor, 4); // 4 -> 16x16 grid
++        // Evangelium - radius queue: a waiting task starts when no running task overlaps it (see RadiusTaskQueue); legacy = Moonrise's queue
++        this.radiusAwareScheduler = new RadiusTaskQueue(this.parallelGenExecutor,
++            new AreaDependentQueue(this.parallelGenExecutor, 4), !radiusQueueOverlapOnly()); // 4 -> 16x16 grid
+         this.ioExecutor = MoonriseCommon.SERVER_IO_GROUP.createExecutor();
+         // we need a separate executor here so that on shutdown we can continue to process I/O tasks
+         this.compressionExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
+@@ -334,6 +_,41 @@
+     }
+ 
+     public boolean executeMainThreadTask() {
++        // EvangeliumServer start
++        boolean ret = false;
++        for (RegionPos regionPos : world.chunkScheduler.getRegionLocker().getLockedRegions()) {
++            LevelChunkRegion region = world.chunkSource.tickingRegions.get(regionPos);
++            if (region != null) {
++                ret |= region.getInternalTaskQueue().executeTask();
++            }
++        }
++        if (!ret) {
++            // Try bordering regions to our locked regions
++            for (RegionPos regionPos : world.chunkScheduler.getRegionLocker().getLockedRegions()) {
++                for (int x = -1; x <= 1; x++) {
++                    for (int z = -1; z <= 1; z++) {
++                        RegionPos borderRegionPos = new RegionPos(regionPos.x + x, regionPos.z + z);
++                        if (world.chunkScheduler.getRegionLocker().hasLock(borderRegionPos)) continue; // Don't bother trying regions we already have locked
++                        LevelChunkRegion region = world.chunkSource.tickingRegions.get(borderRegionPos);
++                        if (region != null && !region.getInternalTaskQueue().hasNoScheduledTasks()) {
++                            EvangeliumServerRegionLocker.RegionLock lock = world.chunkScheduler.getRegionLocker().internalTryTakeReadOnlyLockNow(borderRegionPos, 0);
++                            if (lock != null) {
++                                try {
++                                    ret |= region.getInternalTaskQueue().executeTask();
++                                } finally {
++                                    lock.unlock();
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        if (ret || EvangeliumServerTickThread.isEvangeliumServerTickThread()) {
++            // Don't run the mainThreadExecutor tasks below if we're a EvangeliumServerTickThread
++            return ret;
++        }
++        // EvangeliumServer end
+         TickThread.ensureTickThread("Cannot execute main thread task off-main");
+         return this.mainThreadExecutor.executeTask();
+     }
+@@ -840,7 +_,7 @@
+ 
+     public PrioritisedExecutor.PrioritisedTask createChunkTask(final int chunkX, final int chunkZ, final Runnable run,
+                                                                final Priority priority) {
+-        return this.mainThreadExecutor.createTask(run, priority);
++        return world.chunkSource.tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().createTask(run, priority); // EvangeliumServer
+     }
+ 
+     public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final int chunkX, final int chunkZ, final Runnable run) {
+@@ -849,7 +_,7 @@
+ 
+     public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final int chunkX, final int chunkZ, final Runnable run,
+                                                                  final Priority priority) {
+-        return this.mainThreadExecutor.queueTask(run, priority);
++        return world.chunkSource.tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().queueTask(run, priority); // EvangeliumServer
+     }
+ 
+     public boolean halt(final boolean sync, final long maxWaitNS) {
