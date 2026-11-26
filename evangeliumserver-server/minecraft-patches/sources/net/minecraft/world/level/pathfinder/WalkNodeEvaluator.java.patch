@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
 +++ b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
-@@ -34,11 +_,57 @@
+@@ -33,11 +_,57 @@
      private final Long2ObjectMap<PathType> pathTypesByPosCacheByMob = new Long2ObjectOpenHashMap<>();
      private final Object2BooleanMap<AABB> collisionCache = new Object2BooleanOpenHashMap<>();
      private final Node[] reusableNeighbors = new Node[Direction.Plane.HORIZONTAL.length()];
@@ -43,9 +43,10 @@
 +    // Evangelium end
  
      @Override
-     public void prepare(PathNavigationRegion level, Mob mob) {
-         super.prepare(level, mob);
-         mob.onPathfindingStart();
+-    public void prepare(final PathNavigationRegion level, final Mob entity) {
++    public void prepare(PathNavigationRegion level, Mob entity) {
+         super.prepare(level, entity);
+         entity.onPathfindingStart();
 +        this.evangeliumPathTypes.clear(); // Evangelium - a search that found no start node never reaches done()
 +        this.evangeliumFloorLevels.clear();
 +        this.evangeliumMemo = io.evangelium.server.ai.AiDiagnostics.navigationOptimizationEnabled();
@@ -53,12 +54,12 @@
 +        this.evangeliumConstants = net.minecraft.world.entity.ai.AiOptimizations.searchConstants();
 +        this.evangeliumMalusFilled = false;
 +        if (this.evangeliumConstants) {
-+            this.evangeliumUpStepValue = net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("constants") ? mob.maxUpStep() + 1.0F : mob.maxUpStep();
++            this.evangeliumUpStepValue = net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("constants") ? entity.maxUpStep() + 1.0F : entity.maxUpStep();
 +        }
      }
  
      @Override
-@@ -46,6 +_,10 @@
+@@ -45,6 +_,10 @@
          this.mob.onPathfindingDone();
          this.pathTypesByPosCacheByMob.clear();
          this.collisionCache.clear();
@@ -69,8 +70,8 @@
          super.done();
      }
  
-@@ -103,13 +_,13 @@
-     protected Node getStartNode(BlockPos pos) {
+@@ -99,13 +_,13 @@
+     protected Node getStartNode(final BlockPos pos) {
          Node node = this.getNode(pos);
          node.type = this.getCachedPathType(node.x, node.y, node.z);
 -        node.costMalus = this.mob.getPathfindingMalus(node.type);
@@ -78,28 +79,37 @@
          return node;
      }
  
-     protected boolean canStartAt(BlockPos pos) {
-         PathType cachedPathType = this.getCachedPathType(pos.getX(), pos.getY(), pos.getZ());
--        return cachedPathType != PathType.OPEN && this.mob.getPathfindingMalus(cachedPathType) >= 0.0F;
-+        return cachedPathType != PathType.OPEN && this.evangeliumMalus(this.mob, cachedPathType) >= 0.0F;
+-    protected boolean canStartAt(final BlockPos pos) {
++    protected boolean canStartAt(BlockPos pos) {
+         PathType blockPathType = this.getCachedPathType(pos.getX(), pos.getY(), pos.getZ());
+-        return blockPathType != PathType.OPEN && this.mob.getPathfindingMalus(blockPathType) >= 0.0F;
++        return blockPathType != PathType.OPEN && this.evangeliumMalus(this.mob, blockPathType) >= 0.0F;
      }
  
      @Override
-@@ -123,8 +_,8 @@
-         int i1 = 0;
-         PathType cachedPathType = this.getCachedPathType(node.x, node.y + 1, node.z);
-         PathType cachedPathType1 = this.getCachedPathType(node.x, node.y, node.z);
--        if (this.mob.getPathfindingMalus(cachedPathType) >= 0.0F && cachedPathType1 != PathType.STICKY_HONEY) {
--            i1 = Mth.floor(Math.max(1.0F, this.mob.maxUpStep()));
-+        if (this.evangeliumMalus(this.mob, cachedPathType) >= 0.0F && cachedPathType1 != PathType.STICKY_HONEY) {
-+            i1 = Mth.floor(Math.max(1.0F, this.evangeliumUpStep()));
-         }
- 
-         double floorLevel = this.getFloorLevel(new BlockPos(node.x, node.y, node.z));
-@@ -202,6 +_,22 @@
+@@ -114,13 +_,13 @@
      }
  
-     protected double getFloorLevel(BlockPos pos) {
+     @Override
+-    public int getNeighbors(final Node[] neighbors, final Node pos) {
++    public int getNeighbors(Node[] neighbors, Node pos) {
+         int p = 0;
+         int jumpSize = 0;
+         PathType blockPathTypeAbove = this.getCachedPathType(pos.x, pos.y + 1, pos.z);
+         PathType blockPathTypeCurrent = this.getCachedPathType(pos.x, pos.y, pos.z);
+-        if (this.mob.getPathfindingMalus(blockPathTypeAbove) >= 0.0F && blockPathTypeCurrent != PathType.STICKY_HONEY) {
+-            jumpSize = Mth.floor(Math.max(1.0F, this.mob.maxUpStep()));
++        if (this.evangeliumMalus(this.mob, blockPathTypeAbove) >= 0.0F && blockPathTypeCurrent != PathType.STICKY_HONEY) {
++            jumpSize = Mth.floor(Math.max(1.0F, this.evangeliumUpStep()));
+         }
+ 
+         double posHeight = this.getFloorLevel(new BlockPos(pos.x, pos.y, pos.z));
+@@ -203,7 +_,23 @@
+         return true;
+     }
+ 
+-    protected double getFloorLevel(final BlockPos pos) {
++    protected double getFloorLevel(BlockPos pos) {
 +        // Evangelium start - remember per search
 +        if (this.evangeliumMemo) {
 +            long key = pos.asLong();
@@ -116,50 +126,52 @@
 +
 +    private double evangeliumFloorLevel(BlockPos pos) {
 +        // Evangelium end
-         BlockGetter blockGetter = this.currentContext.level();
-         return (this.canFloat() || this.isAmphibious()) && blockGetter.getFluidState(pos).is(FluidTags.WATER)
+         BlockGetter level = this.currentContext.level();
+         return (this.canFloat() || this.isAmphibious()) && level.getFluidState(pos).is(FluidTags.ENTITY_FLOATABLE)
              ? pos.getY() + 0.5
-@@ -226,7 +_,7 @@
-             return null;
-         } else {
-             PathType cachedPathType = this.getCachedPathType(x, y, z);
--            float pathfindingMalus = this.mob.getPathfindingMalus(cachedPathType);
-+            float pathfindingMalus = this.evangeliumMalus(this.mob, cachedPathType);
-             if (pathfindingMalus >= 0.0F) {
-                 node = this.getNodeAndUpdateCostToMax(x, y, z, cachedPathType, pathfindingMalus);
-             }
-@@ -259,7 +_,7 @@
+@@ -237,7 +_,7 @@
+         }
+ 
+         PathType pathType = this.getCachedPathType(x, y, z);
+-        float pathCost = this.mob.getPathfindingMalus(pathType);
++        float pathCost = this.evangeliumMalus(this.mob, pathType);
+         if (pathCost >= 0.0F) {
+             best = this.getNodeAndUpdateCostToMax(x, y, z, pathType, pathCost);
+         }
+@@ -269,7 +_,7 @@
      }
  
      private double getMobJumpHeight() {
--        return Math.max(1.125, (double)this.mob.maxUpStep());
+-        return Math.max(1.125, this.mob.maxUpStep());
 +        return Math.max(1.125, (double)this.evangeliumUpStep());
      }
  
-     private Node getNodeAndUpdateCostToMax(int x, int y, int z, PathType pathType, float malus) {
-@@ -319,7 +_,7 @@
-                 return node;
+     private Node getNodeAndUpdateCostToMax(final int x, final int y, final int z, final PathType pathType, final float cost) {
+@@ -340,7 +_,7 @@
+                 return best;
              }
  
--            node = this.getNodeAndUpdateCostToMax(x, y, z, cachedPathType, this.mob.getPathfindingMalus(cachedPathType));
-+            node = this.getNodeAndUpdateCostToMax(x, y, z, cachedPathType, this.evangeliumMalus(this.mob, cachedPathType));
+-            best = this.getNodeAndUpdateCostToMax(x, y, z, pathTypeLocal, this.mob.getPathfindingMalus(pathTypeLocal));
++            best = this.getNodeAndUpdateCostToMax(x, y, z, pathTypeLocal, this.evangeliumMalus(this.mob, pathTypeLocal));
              y--;
          }
  
-@@ -333,7 +_,7 @@
+@@ -354,7 +_,7 @@
              }
  
-             PathType cachedPathType = this.getCachedPathType(x, i, z);
--            float pathfindingMalus = this.mob.getPathfindingMalus(cachedPathType);
-+            float pathfindingMalus = this.evangeliumMalus(this.mob, cachedPathType);
-             if (cachedPathType != PathType.OPEN) {
-                 if (pathfindingMalus >= 0.0F) {
-                     return this.getNodeAndUpdateCostToMax(x, i, z, cachedPathType, pathfindingMalus);
-@@ -351,7 +_,15 @@
+             PathType pathType = this.getCachedPathType(x, currentY, z);
+-            float pathCost = this.mob.getPathfindingMalus(pathType);
++            float pathCost = this.evangeliumMalus(this.mob, pathType);
+             if (pathType != PathType.OPEN) {
+                 if (pathCost >= 0.0F) {
+                     return this.getNodeAndUpdateCostToMax(x, currentY, z, pathType, pathCost);
+@@ -371,8 +_,16 @@
+         return this.collisionCache.computeIfAbsent(aabb, bb -> !this.currentContext.level().noCollision(this.mob, aabb));
      }
  
-     protected PathType getCachedPathType(int x, int y, int z) {
--        return this.pathTypesByPosCacheByMob.computeIfAbsent(BlockPos.asLong(x, y, z), l -> this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob));
+-    protected PathType getCachedPathType(final int x, final int y, final int z) {
+-        return this.pathTypesByPosCacheByMob.computeIfAbsent(BlockPos.asLong(x, y, z), k -> this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob));
++    protected PathType getCachedPathType(int x, int y, int z) {
 +        // Evangelium start - get, then put on a miss: no capturing lambda per call (this runs for every neighbour of every node)
 +        long key = BlockPos.asLong(x, y, z);
 +        PathType cached = this.pathTypesByPosCacheByMob.get(key);
@@ -172,32 +184,36 @@
      }
  
      @Override
-@@ -365,18 +_,18 @@
-             PathType pathType = PathType.BLOCKED;
+@@ -391,10 +_,10 @@
+         }
  
-             for (PathType pathType1 : pathTypeWithinMobBb) {
--                if (mob.getPathfindingMalus(pathType1) < 0.0F) {
-+                if (this.evangeliumMalus(mob, pathType1) < 0.0F) {
-                     return pathType1;
-                 }
+         PathType highestMalusPathTypeWithinBB = PathType.BLOCKED;
+-        float highestMalusWithinBB = mob.getPathfindingMalus(highestMalusPathTypeWithinBB);
++        float highestMalusWithinBB = this.evangeliumMalus(mob, highestMalusPathTypeWithinBB);
  
--                if (mob.getPathfindingMalus(pathType1) >= mob.getPathfindingMalus(pathType)) {
-+                if (this.evangeliumMalus(mob, pathType1) >= this.evangeliumMalus(mob, pathType)) {
-                     pathType = pathType1;
-                 }
+         for (PathType pathType : blockTypes) {
+-            float malusForPathType = mob.getPathfindingMalus(pathType);
++            float malusForPathType = this.evangeliumMalus(mob, pathType);
+             if (malusForPathType < 0.0F) {
+                 return pathType;
              }
- 
-             return this.entityWidth <= 1
-                     && pathType != PathType.OPEN
--                    && mob.getPathfindingMalus(pathType) == 0.0F
-+                    && this.evangeliumMalus(mob, pathType) == 0.0F
-                     && this.getPathType(context, x, y, z) == PathType.OPEN
-                 ? PathType.OPEN
-                 : pathType;
-@@ -419,6 +_,17 @@
+@@ -408,8 +_,8 @@
+         PathType currentNodePathType = this.getPathType(context, x, y, z);
+         boolean isLargeMob = this.entityWidth > 1;
+         if (isLargeMob) {
+-            boolean isCurrentNodeCheaper = mob.getPathfindingMalus(currentNodePathType) < highestMalusWithinBB;
+-            boolean capMalusDueToCheapNode = isCurrentNodeCheaper && mob.getPathfindingMalus(PathType.BIG_MOBS_CLOSE_TO_DANGER) < highestMalusWithinBB;
++            boolean isCurrentNodeCheaper = this.evangeliumMalus(mob, currentNodePathType) < highestMalusWithinBB;
++            boolean capMalusDueToCheapNode = isCurrentNodeCheaper && this.evangeliumMalus(mob, PathType.BIG_MOBS_CLOSE_TO_DANGER) < highestMalusWithinBB;
+             return capMalusDueToCheapNode ? PathType.BIG_MOBS_CLOSE_TO_DANGER : highestMalusPathTypeWithinBB;
+         } else {
+             return currentNodePathType == PathType.OPEN && highestMalusPathTypeWithinBB != PathType.OPEN && highestMalusWithinBB == 0.0F
+@@ -453,7 +_,18 @@
+     }
  
      @Override
-     public PathType getPathType(PathfindingContext context, int x, int y, int z) {
+-    public PathType getPathType(final PathfindingContext context, final int x, final int y, final int z) {
++    public PathType getPathType(PathfindingContext context, int x, int y, int z) {
 +        // Evangelium start - remember per search (the static type reads the block and its 26 neighbours)
 +        if (this.evangeliumMemo && context == this.currentContext) {
 +            long key = BlockPos.asLong(x, y, z);

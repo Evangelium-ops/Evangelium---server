@@ -19,7 +19,7 @@
 + * (type, pos) exactly like the old SavedTick list + hash set (kept below for -Devangeliumserver.packedTicks=false and unusual input).
 + * pack()/scheduledTicks() return an immutable PackedTickList snapshot.
 + */
- public class ProtoChunkTicks<T> implements SerializableTickContainer<T>, TickContainerAccess<T> {
+ public class ProtoChunkTicks<T> implements TickContainerAccess<T>, SerializableTickContainer<T> {
 -    private final List<SavedTick<T>> ticks = Lists.newArrayList();
 -    private final Set<SavedTick<?>> ticksPerPosition = new ObjectOpenCustomHashSet<>(SavedTick.UNIQUE_TICK_HASH);
 +    private static final Object[] NO_TYPES = new Object[0];
@@ -47,23 +47,25 @@
 +    }
  
      @Override
-     public void schedule(ScheduledTick<T> tick) {
-@@ -17,33 +_,193 @@
+     public void schedule(final ScheduledTick<T> tick) {
+@@ -16,34 +_,194 @@
+         this.schedule(newTick);
      }
  
-     private void schedule(SavedTick<T> tick) {
--        if (this.ticksPerPosition.add(tick)) {
--            this.ticks.add(tick);
+-    private void schedule(final SavedTick<T> newTick) {
+-        if (this.ticksPerPosition.add(newTick)) {
+-            this.ticks.add(newTick);
++    private void schedule(SavedTick<T> newTick) {
 +        if (this.ticks != null) {
-+            if (this.ticksPerPosition.add(tick)) {
-+                this.ticks.add(tick);
++            if (this.ticksPerPosition.add(newTick)) {
++                this.ticks.add(newTick);
 +            }
 +            return;
 +        }
-+        long word = this.wordFor(tick.type(), tick.pos(), tick.priority());
++        long word = this.wordFor(newTick.type(), newTick.pos(), newTick.priority());
 +        if (word == Long.MIN_VALUE) {
 +            this.toLegacy();
-+            this.schedule(tick);
++            this.schedule(newTick);
 +            return;
 +        }
 +        if (this.keys == null) {
@@ -76,14 +78,15 @@
 +                this.delays = Arrays.copyOf(this.delays, newCapacity);
 +            }
 +            this.words[this.size] = word;
-+            this.delays[this.size] = tick.delay();
++            this.delays[this.size] = newTick.delay();
 +            this.size++;
          }
      }
  
      @Override
-     public boolean hasScheduledTick(BlockPos pos, T type) {
+-    public boolean hasScheduledTick(final BlockPos pos, final T type) {
 -        return this.ticksPerPosition.contains(SavedTick.probe(type, pos));
++    public boolean hasScheduledTick(BlockPos pos, T type) {
 +        if (this.ticks != null) {
 +            return this.ticksPerPosition.contains(SavedTick.probe(type, pos));
 +        }
@@ -116,8 +119,9 @@
      }
  
      @Override
-     public List<SavedTick<T>> pack(long gameTime) {
+-    public List<SavedTick<T>> pack(final long currentTick) {
 -        return this.ticks;
++    public List<SavedTick<T>> pack(long currentTick) {
 +        if (this.ticks != null) {
 +            return this.ticks;
 +        }
@@ -126,6 +130,9 @@
  
      public List<SavedTick<T>> scheduledTicks() {
 -        return List.copyOf(this.ticks);
+-    }
+-
+-    public static <T> ProtoChunkTicks<T> load(final List<SavedTick<T>> ticks) {
 +        if (this.ticks != null) {
 +            return List.copyOf(this.ticks);
 +        }
@@ -135,21 +142,21 @@
 +    private List<SavedTick<T>> snapshot() {
 +        return new PackedTickList<>(Arrays.copyOf(this.types, this.typeCount), Arrays.copyOf(this.words, this.size),
 +            Arrays.copyOf(this.delays, this.size), this.size, this.chunkX, this.chunkZ);
-     }
- 
-     public static <T> ProtoChunkTicks<T> load(List<SavedTick<T>> ticks) {
-         ProtoChunkTicks<T> protoChunkTicks = new ProtoChunkTicks<>();
--        ticks.forEach(protoChunkTicks::schedule);
-+        if (ticks instanceof PackedTickList<T> packed && protoChunkTicks.ticks == null) {
-+            protoChunkTicks.loadPacked(packed);
++    }
++
++    public static <T> ProtoChunkTicks<T> load(List<SavedTick<T>> ticks) {
+         ProtoChunkTicks<T> result = new ProtoChunkTicks<>();
+-        ticks.forEach(result::schedule);
++        if (ticks instanceof PackedTickList<T> packed && result.ticks == null) {
++            result.loadPacked(packed);
 +        } else {
-+            ticks.forEach(protoChunkTicks::schedule);
++            ticks.forEach(result::schedule);
 +        }
-+        if (protoChunkTicks.ticks == null) {
-+            protoChunkTicks.keys = null; // rebuilt on demand (equals the keys of the contents)
-+            protoChunkTicks.trim();
++        if (result.ticks == null) {
++            result.keys = null; // rebuilt on demand (equals the keys of the contents)
++            result.trim();
 +        }
-         return protoChunkTicks;
+         return result;
 +    }
 +
 +    private void loadPacked(PackedTickList<T> packed) {

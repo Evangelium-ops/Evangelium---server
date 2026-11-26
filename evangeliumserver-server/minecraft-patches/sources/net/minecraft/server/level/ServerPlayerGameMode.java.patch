@@ -1,21 +1,35 @@
 --- a/net/minecraft/server/level/ServerPlayerGameMode.java
 +++ b/net/minecraft/server/level/ServerPlayerGameMode.java
-@@ -1,5 +_,6 @@
+@@ -1,8 +_,12 @@
  package net.minecraft.server.level;
  
 +import ca.spottedleaf.moonrise.common.util.TickThread;
  import com.mojang.logging.LogUtils;
  import java.util.List;
  import java.util.Objects;
-@@ -25,6 +_,7 @@
- import net.minecraft.world.level.block.GameMasterBlock;
++import java.util.concurrent.CompletableFuture;
++
++import io.evangelium.server.EvangeliumServer;
+ import net.minecraft.ChatFormatting;
+ import net.minecraft.SharedConstants;
+ import net.minecraft.advancements.triggers.CriteriaTriggers;
+@@ -21,6 +_,7 @@
+ import net.minecraft.world.item.ItemStack;
+ import net.minecraft.world.item.context.UseOnContext;
+ import net.minecraft.world.item.enchantment.EnchantmentHelper;
++import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.GameType;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.Block;
+@@ -29,6 +_,7 @@
+ import net.minecraft.world.level.block.Portal;
  import net.minecraft.world.level.block.entity.BlockEntity;
  import net.minecraft.world.level.block.state.BlockState;
 +import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.portal.TeleportTransition;
  import net.minecraft.world.phys.BlockHitResult;
  import net.minecraft.world.phys.Vec3;
- import net.minecraft.world.phys.shapes.VoxelShape;
-@@ -129,7 +_,7 @@
+@@ -135,7 +_,7 @@
          // this.gameTicks = net.minecraft.server.MinecraftServer.currentTick; // CraftBukkit
          this.gameTicks = (int) this.level.getLagCompensationTick(); // Paper - lag compensate eating
          if (this.hasDelayedDestroy) {
@@ -24,7 +38,7 @@
              if (blockState == null || blockState.isAir()) { // Paper - Don't allow digging into unloaded chunks
                  this.hasDelayedDestroy = false;
              } else {
-@@ -141,7 +_,7 @@
+@@ -147,7 +_,7 @@
              }
          } else if (this.isDestroyingBlock) {
              // Paper start - Don't allow digging into unloaded chunks; don't want to do same logic as above, return instead
@@ -33,37 +47,61 @@
              if (blockState == null) {
                  this.isDestroyingBlock = false;
                  return;
-@@ -384,7 +_,7 @@
-             } else {
-                 // CraftBukkit start
-                 org.bukkit.block.BlockState state = bblock.getState();
--                this.level.captureDrops = new java.util.ArrayList<>();
-+                this.level.captureDropsThreadLocal.set(new java.util.ArrayList<>()); // EvangeliumServer - use thread local
-                 // CraftBukkit end
-                 BlockState blockState1 = block.playerWillDestroy(this.level, pos, blockState, this.player);
-                 boolean flag = this.level.removeBlock(pos, false);
-@@ -414,8 +_,8 @@
-                     // return true; // CraftBukkit
-                 }
-                 // CraftBukkit start
--                java.util.List<net.minecraft.world.entity.item.ItemEntity> itemsToDrop = this.level.captureDrops; // Paper - capture all item additions to the world
--                this.level.captureDrops = null; // Paper - capture all item additions to the world; Remove this earlier so that we can actually drop stuff
-+                java.util.List<net.minecraft.world.entity.item.ItemEntity> itemsToDrop = this.level.captureDropsThreadLocal.get(); // Paper - capture all item additions to the world // EvangeliumServer - use thread local
-+                this.level.captureDropsThreadLocal.remove(); // Paper - capture all item additions to the world; Remove this earlier so that we can actually drop stuff // EvangeliumServer - use thread local
-                 if (event.isDropItems()) {
-                     org.bukkit.craftbukkit.event.CraftEventFactory.handleBlockDropItemEvent(bblock, state, this.player, itemsToDrop); // Paper - capture all item additions to the world
-                 }
-@@ -431,6 +_,13 @@
-                     }
-                 }
-                 // Paper end - Trigger bee_nest_destroyed trigger in the correct place
-+
-+                // EvangeliumServer start - broadcast block changes immediately if on the wrong thread
-+                LevelChunk levelChunk = this.level.getChunkIfLoaded(pos);
-+                if (levelChunk != null) {
-+                    levelChunk.moonrise$getChunkHolder().vanillaChunkHolder.broadcastChanges(levelChunk);
-+                }
-+                // EvangeliumServer end - broadcast block changes immediately if on the wrong thread
+@@ -423,7 +_,7 @@
  
-                 return true;
-                 // CraftBukkit end
+         // CraftBukkit start
+         org.bukkit.block.BlockState bState = bblock.getState();
+-        this.level.captureDrops = new java.util.ArrayList<>();
++        this.level.captureDropsThreadLocal.set(new java.util.ArrayList<>()); // EvangeliumServer - use thread local
+         // CraftBukkit end
+         BlockState adjustedState = block.playerWillDestroy(this.level, pos, state, this.player);
+         boolean changed = this.level.removeBlock(pos, false);
+@@ -449,8 +_,8 @@
+         } // CraftBukkit
+ 
+         // CraftBukkit start
+-        List<net.minecraft.world.entity.item.ItemEntity> itemsToDrop = this.level.captureDrops; // Paper - capture all item additions to the world
+-        this.level.captureDrops = null; // Paper - capture all item additions to the world; Remove this earlier so that we can actually drop stuff
++        java.util.List<net.minecraft.world.entity.item.ItemEntity> itemsToDrop = this.level.captureDropsThreadLocal.get(); // Paper - capture all item additions to the world // EvangeliumServer - use thread local
++        this.level.captureDropsThreadLocal.remove(); // Paper - capture all item additions to the world; Remove this earlier so that we can actually drop stuff // EvangeliumServer - use thread local
+         if (event.isDropItems()) {
+             org.bukkit.craftbukkit.event.CraftEventFactory.handleBlockDropItemEvent(bblock, bState, this.player, itemsToDrop); // Paper - capture all item additions to the world
+         }
+@@ -468,6 +_,13 @@
+         // Paper end - Trigger bee_nest_destroyed trigger in the correct place
+         // CraftBukkit end
+ 
++        // EvangeliumServer start - broadcast block changes immediately if on the wrong thread
++        LevelChunk levelChunk = this.level.getChunkIfLoaded(pos);
++        if (levelChunk != null) {
++            levelChunk.moonrise$getChunkHolder().vanillaChunkHolder.broadcastChanges(levelChunk);
++        }
++        // EvangeliumServer end - broadcast block changes immediately if on the wrong thread
++
+         return true;
+     }
+ 
+@@ -580,17 +_,22 @@
+             }
+ 
+             if (state.getBlock() instanceof Portal portal) {
++                if (player.beingPortalled != null && !player.beingPortalled.isDone()) return InteractionResult.CONSUME; // Currently being teleported by a portal // EvangeliumServer - async teleportation
+                 ServerLevel serverLevel = player.level();
+-                TeleportTransition teleportTransition = portal.getPortalDestination(serverLevel, player, pos);
++                player.beingPortalled = portal.getPortalDestinationAsync(serverLevel, player, pos).thenCompose(teleportTransition -> { // EvangeliumServer - async teleportation
+                 if (teleportTransition != null) {
++                    return CompletableFuture.runAsync(() -> { // EvangeliumServer - async teleportation
+                     if (player.getCamera() != player) {
+                         player.setCamera(player);
+                     }
+ 
+                     player.teleportToPortalDestination(serverLevel, teleportTransition);
++                    }, r -> EvangeliumServer.ensureSync(player, teleportTransition.newLevel(), ChunkPos.containing(BlockPos.containing(teleportTransition.position())), r)); // EvangeliumServer - async teleportation
+                 } else {
+                     player.sendOverlayMessage(Component.translatable("spectator.cannot_teleport").withStyle(ChatFormatting.RED));
++                    return CompletableFuture.completedFuture(null); // EvangeliumServer - async teleportation
+                 }
++                }).thenRun(() -> player.beingPortalled = null); // EvangeliumServer - async teleportation
+ 
+                 return InteractionResult.CONSUME;
+             } else {

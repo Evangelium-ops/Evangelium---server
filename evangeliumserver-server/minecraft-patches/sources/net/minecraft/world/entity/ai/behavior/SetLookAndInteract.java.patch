@@ -2,16 +2,16 @@
 +++ b/net/minecraft/world/entity/ai/behavior/SetLookAndInteract.java
 @@ -19,8 +_,12 @@
                  .apply(
-                     instance,
-                     (lookTarget, interactionTarget, nearestVisibleLivingEntities) -> (level, entity, gameTime) -> {
--                        Optional<LivingEntity> optional = instance.<NearestVisibleLivingEntities>get(nearestVisibleLivingEntities)
--                            .findClosest(nearEntity -> nearEntity.distanceToSqr(entity) <= i && entityType.equals(nearEntity.getType()));
+                     i,
+                     (lookTarget, interactionTarget, nearestEntities) -> (level, body, timestamp) -> {
+-                        Optional<LivingEntity> closest = i.<NearestVisibleLivingEntities>get(nearestEntities)
+-                            .findClosest(e -> e.distanceToSqr(body) <= interactionRangeSqr && e.is(type));
 +                        // Evangelium start - in a crowd of villagers looking for a player: no walk through the crowd, several times a tick
-+                        NearestVisibleLivingEntities visible = instance.<NearestVisibleLivingEntities>get(nearestVisibleLivingEntities);
-+                        Optional<LivingEntity> optional = io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()
-+                            ? visible.findClosestOfType(entityType, nearEntity -> nearEntity.distanceToSqr(entity) <= i)
-+                            : visible.findClosest(nearEntity -> nearEntity.distanceToSqr(entity) <= i && entityType.equals(nearEntity.getType()));
++                        NearestVisibleLivingEntities visible = i.<NearestVisibleLivingEntities>get(nearestEntities);
++                        Optional<LivingEntity> closest = io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()
++                            ? visible.findClosestOfType(type, e -> e.distanceToSqr(body) <= interactionRangeSqr)
++                            : visible.findClosest(e -> e.distanceToSqr(body) <= interactionRangeSqr && e.is(type));
 +                        // Evangelium end
-                         if (optional.isEmpty()) {
+                         if (closest.isEmpty()) {
                              return false;
-                         } else {
+                         }

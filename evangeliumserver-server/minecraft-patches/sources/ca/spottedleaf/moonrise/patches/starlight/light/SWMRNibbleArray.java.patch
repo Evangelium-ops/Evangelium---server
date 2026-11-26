@@ -15,7 +15,7 @@
      private int stateUpdating;
      private volatile int stateVisible;
  
-@@ -331,10 +_,19 @@
+@@ -335,10 +_,19 @@
              return false;
          }
  
@@ -35,7 +35,7 @@
                  if (this.storageVisible == null) {
                      this.storageVisible = this.storageUpdating.clone();
                  } else {
-@@ -352,7 +_,7 @@
+@@ -356,7 +_,7 @@
              this.stateVisible = this.stateUpdating;
          }
  

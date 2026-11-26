@@ -1,21 +1,21 @@
 --- a/net/minecraft/world/entity/ai/goal/Goal.java
 +++ b/net/minecraft/world/entity/ai/goal/Goal.java
-@@ -73,11 +_,16 @@
+@@ -62,11 +_,16 @@
      // Paper end - Mob Goal API
  
-     protected int adjustedTickDelay(int adjustment) {
--        return this.requiresUpdateEveryTick() ? adjustment : reducedTickDelay(adjustment);
+     protected int adjustedTickDelay(final int ticks) {
+-        return this.requiresUpdateEveryTick() ? ticks : reducedTickDelay(ticks);
 +        // EvangeliumServer - a far mob's goals tick every N ticks (FarAi): timers and chances follow, so it acts on vanilla's real-time schedule
 +        if (this.requiresUpdateEveryTick()) {
 +            int spacing = io.evangelium.server.ai.FarAi.spacing();
-+            return spacing > 1 ? Mth.positiveCeilDiv(adjustment, spacing) : adjustment;
++            return spacing > 1 ? Mth.positiveCeilDiv(ticks, spacing) : ticks;
 +        }
-+        return reducedTickDelay(adjustment);
++        return reducedTickDelay(ticks);
      }
  
-     protected static int reducedTickDelay(int reduction) {
--        return Mth.positiveCeilDiv(reduction, 2);
-+        return Mth.positiveCeilDiv(reduction, Math.max(2, io.evangelium.server.ai.FarAi.spacing())); // EvangeliumServer - FarAi spacing
+     protected static int reducedTickDelay(final int ticks) {
+-        return Mth.positiveCeilDiv(ticks, 2);
++        return Mth.positiveCeilDiv(ticks, Math.max(2, io.evangelium.server.ai.FarAi.spacing())); // EvangeliumServer - FarAi spacing
      }
  
-     protected static ServerLevel getServerLevel(Entity entity) {
+     protected static ServerLevel getServerLevel(final Entity entity) {

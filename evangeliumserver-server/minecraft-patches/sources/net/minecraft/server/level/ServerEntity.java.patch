@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ServerEntity.java
 +++ b/net/minecraft/server/level/ServerEntity.java
-@@ -49,6 +_,8 @@
+@@ -55,6 +_,8 @@
  
  public class ServerEntity {
      private static final Logger LOGGER = LogUtils.getLogger();
@@ -9,23 +9,23 @@
      private static final int TOLERANCE_LEVEL_ROTATION = 1;
      private static final double TOLERANCE_LEVEL_POSITION = 7.6293945E-6F;
      public static final int FORCED_POS_UPDATE_PERIOD = 60;
-@@ -122,6 +_,7 @@
-                 MapId mapId = itemFrame.cachedMapId; // Paper - Perf: Cache map ids on item frames
-                 MapItemSavedData savedData = MapItem.getSavedData(mapId, this.level);
-                 if (savedData != null) {
-+                    synchronized (savedData) { // EvangeliumServer - thread-safe
+@@ -133,6 +_,7 @@
+                 MapId id = frame.cachedMapId; // Paper - Perf: Cache map ids on item frames
+                 MapItemSavedData data = MapItem.getSavedData(id, this.level);
+                 if (data != null) {
++                    synchronized (data) { // EvangeliumServer - thread-safe
                      for (final net.minecraft.server.network.ServerPlayerConnection connection : this.trackedPlayers) { // Paper
-                         final ServerPlayer serverPlayer = connection.getPlayer(); // Paper
-                         savedData.tickCarriedBy(serverPlayer, item);
-@@ -130,6 +_,7 @@
-                             serverPlayer.connection.send(updatePacket);
+                         final ServerPlayer player = connection.getPlayer(); // Paper
+                         data.tickCarriedBy(player, itemStack, frame);
+@@ -141,6 +_,7 @@
+                             player.connection.send(packet);
                          }
                      }
 +                    } // EvangeliumServer - thread-safe
                  }
              }
  
-@@ -210,7 +_,7 @@
+@@ -205,7 +_,7 @@
                                          )
                                      )
                                  );
@@ -34,36 +34,36 @@
                              this.synchronizer.sendToTrackingPlayers(new ClientboundSetEntityMotionPacket(this.entity.getId(), this.lastSentMovement));
                          }
                      }
-@@ -352,7 +_,7 @@
-             if (!list.isEmpty()) {
-                 consumer.accept(new ClientboundSetEquipmentPacket(this.entity.getId(), list, true)); // Paper - data sanitization
+@@ -393,7 +_,7 @@
+             if (!slots.isEmpty()) {
+                 broadcast.accept(new ClientboundSetEquipmentPacket(this.entity.getId(), slots, true)); // Paper - data sanitization
              }
 -            ((LivingEntity) this.entity).detectEquipmentUpdates(); // CraftBukkit - SPIGOT-3789: sync again immediately after sending
 +            // ((LivingEntity) this.entity).detectEquipmentUpdates(); // CraftBukkit - SPIGOT-3789: sync again immediately after sending // EvangeliumServer - why? - equipment changes should not be run when sending pairing changes
          }
  
          if (!this.entity.getPassengers().isEmpty()) {
-@@ -404,11 +_,37 @@
-                     serverPlayer.getBukkitEntity().injectScaledMaxHealth(attributesToSync, false);
+@@ -445,11 +_,37 @@
+                     serverPlayer.getBukkitEntity().injectScaledMaxHealth(attributes, false);
                  }
                  // CraftBukkit end
 +                // Evangelium start - speeds, reach and mining attributes only matter to the player's own client; watchers get the rest
 +                if (EVANGELIUM_SKIP_WATCHED_PLAYER_OWN_ATTRIBUTES && this.entity instanceof ServerPlayer self) {
-+                    self.connection.send(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributesToSync));
++                    self.connection.send(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributes));
 +                    List<AttributeInstance> shown = null;
-+                    for (AttributeInstance instance : attributesToSync) {
++                    for (AttributeInstance instance : attributes) {
 +                        if (!isOwnClientAttribute(instance)) {
-+                            if (shown == null) shown = new java.util.ArrayList<>(attributesToSync.size());
++                            if (shown == null) shown = new java.util.ArrayList<>(attributes.size());
 +                            shown.add(instance);
 +                        }
 +                    }
 +                    if (shown != null) this.synchronizer.sendToTrackingPlayers(new ClientboundUpdateAttributesPacket(this.entity.getId(), shown));
 +                } else
 +                // Evangelium end
-                 this.synchronizer.sendToTrackingPlayersAndSelf(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributesToSync));
+                 this.synchronizer.sendToTrackingPlayersAndSelf(new ClientboundUpdateAttributesPacket(this.entity.getId(), attributes));
              }
  
-             attributesToSync.clear();
+             attributes.clear();
          }
 +    }
 +

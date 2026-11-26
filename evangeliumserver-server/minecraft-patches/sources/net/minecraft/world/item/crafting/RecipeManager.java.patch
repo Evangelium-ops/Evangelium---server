@@ -1,8 +1,8 @@
 --- a/net/minecraft/world/item/crafting/RecipeManager.java
 +++ b/net/minecraft/world/item/crafting/RecipeManager.java
-@@ -100,6 +_,9 @@
-         if (this.featureflagset != null) {
-             this.finalizeRecipeLoading(this.featureflagset);
+@@ -73,6 +_,9 @@
+         if (this.enabledFlags != null) {
+             this.finalizeRecipeLoading(this.enabledFlags);
  
 +            // Evangelium - not while the server stops: plugins remove their recipes one by one in onDisable, and each removal reloaded the
 +            // advancements of every player online (seconds of a /restart with many players); they are all being disconnected anyway

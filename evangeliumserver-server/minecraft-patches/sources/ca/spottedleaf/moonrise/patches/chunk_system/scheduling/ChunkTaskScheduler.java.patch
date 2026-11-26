@@ -20,7 +20,7 @@
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue parallelGenExecutor;
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue loadExecutor;
      public final BalancedPrioritisedThreadPool.OrderedStreamGroup.Queue ioExecutor;
-@@ -273,6 +_,14 @@
+@@ -264,6 +_,14 @@
          this.shutdown = shutdown;
      }
  
@@ -35,7 +35,7 @@
      public ChunkTaskScheduler(final ServerLevel world) {
          this.world = world;
          // must be >= region shift (in paper, doesn't exist) and must be >= ticket propagator section shift
-@@ -285,7 +_,9 @@
+@@ -276,7 +_,9 @@
  
          this.parallelGenExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
          this.loadExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
@@ -46,14 +46,14 @@
          this.ioExecutor = MoonriseCommon.SERVER_IO_GROUP.createExecutor();
          // we need a separate executor here so that on shutdown we can continue to process I/O tasks
          this.compressionExecutor = MoonriseCommon.SERVER_GROUP.createExecutor();
-@@ -334,6 +_,41 @@
+@@ -325,6 +_,41 @@
      }
  
      public boolean executeMainThreadTask() {
 +        // EvangeliumServer start
 +        boolean ret = false;
 +        for (RegionPos regionPos : world.chunkScheduler.getRegionLocker().getLockedRegions()) {
-+            LevelChunkRegion region = world.chunkSource.tickingRegions.get(regionPos);
++            LevelChunkRegion region = world.getChunkSource().tickingRegions.get(regionPos);
 +            if (region != null) {
 +                ret |= region.getInternalTaskQueue().executeTask();
 +            }
@@ -65,7 +65,7 @@
 +                    for (int z = -1; z <= 1; z++) {
 +                        RegionPos borderRegionPos = new RegionPos(regionPos.x + x, regionPos.z + z);
 +                        if (world.chunkScheduler.getRegionLocker().hasLock(borderRegionPos)) continue; // Don't bother trying regions we already have locked
-+                        LevelChunkRegion region = world.chunkSource.tickingRegions.get(borderRegionPos);
++                        LevelChunkRegion region = world.getChunkSource().tickingRegions.get(borderRegionPos);
 +                        if (region != null && !region.getInternalTaskQueue().hasNoScheduledTasks()) {
 +                            EvangeliumServerRegionLocker.RegionLock lock = world.chunkScheduler.getRegionLocker().internalTryTakeReadOnlyLockNow(borderRegionPos, 0);
 +                            if (lock != null) {
@@ -88,21 +88,21 @@
          TickThread.ensureTickThread("Cannot execute main thread task off-main");
          return this.mainThreadExecutor.executeTask();
      }
-@@ -840,7 +_,7 @@
+@@ -831,7 +_,7 @@
  
      public PrioritisedExecutor.PrioritisedTask createChunkTask(final int chunkX, final int chunkZ, final Runnable run,
                                                                 final Priority priority) {
 -        return this.mainThreadExecutor.createTask(run, priority);
-+        return world.chunkSource.tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().createTask(run, priority); // EvangeliumServer
++        return world.getChunkSource().tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().createTask(run, priority); // EvangeliumServer
      }
  
      public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final int chunkX, final int chunkZ, final Runnable run) {
-@@ -849,7 +_,7 @@
+@@ -840,7 +_,7 @@
  
      public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final int chunkX, final int chunkZ, final Runnable run,
                                                                   final Priority priority) {
 -        return this.mainThreadExecutor.queueTask(run, priority);
-+        return world.chunkSource.tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().queueTask(run, priority); // EvangeliumServer
++        return world.getChunkSource().tickingRegions.getOrCreate(RegionPos.forChunk(new ChunkPos(chunkX, chunkZ))).getInternalTaskQueue().queueTask(run, priority); // EvangeliumServer
      }
  
      public boolean halt(final boolean sync, final long maxWaitNS) {

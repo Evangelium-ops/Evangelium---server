@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/ai/memory/NearestVisibleLivingEntities.java
 +++ b/net/minecraft/world/entity/ai/memory/NearestVisibleLivingEntities.java
-@@ -14,6 +_,7 @@
+@@ -15,18 +_,71 @@
      private static final NearestVisibleLivingEntities EMPTY = new NearestVisibleLivingEntities();
      private final List<LivingEntity> nearbyEntities;
      private final Predicate<LivingEntity> lineOfSightTest;
@@ -8,16 +8,20 @@
  
      private NearestVisibleLivingEntities() {
          this.nearbyEntities = List.of();
-@@ -22,10 +_,62 @@
+         this.lineOfSightTest = ignored -> false;
+     }
  
-     public NearestVisibleLivingEntities(ServerLevel level, LivingEntity entity, List<LivingEntity> nearbyEntities) {
-         this.nearbyEntities = nearbyEntities;
--        Object2BooleanOpenHashMap<LivingEntity> map = new Object2BooleanOpenHashMap<>(nearbyEntities.size());
+-    public NearestVisibleLivingEntities(final ServerLevel level, final LivingEntity body, final List<LivingEntity> livingEntities) {
+-        this.nearbyEntities = livingEntities;
+-        Object2BooleanOpenHashMap<LivingEntity> cache = new Object2BooleanOpenHashMap<>(livingEntities.size());
+-        Predicate<LivingEntity> targetTest = targetEntity -> Sensor.isEntityTargetable(level, body, targetEntity);
+-        this.lineOfSightTest = otherEntity -> cache.computeIfAbsent(otherEntity, targetTest);
+-    }
++    public NearestVisibleLivingEntities(ServerLevel level, LivingEntity entity, List<LivingEntity> nearbyEntities) {
++        this.nearbyEntities = nearbyEntities;
 +        boolean lazyVisibilityCache = io.evangelium.server.ai.AiDiagnostics.spatialOptimizationEnabled();
 +        this.visibilityCache = lazyVisibilityCache ? null : new Object2BooleanOpenHashMap<>(nearbyEntities.size());
-         Predicate<LivingEntity> predicate = target -> Sensor.isEntityTargetable(level, entity, target);
--        this.lineOfSightTest = target -> map.computeIfAbsent(target, predicate);
--    }
++        Predicate<LivingEntity> predicate = target -> Sensor.isEntityTargetable(level, entity, target);
 +        this.lineOfSightTest = target -> {
 +            // Defer backing arrays until a caller actually requests visibility.
 +            if (this.visibilityCache == null) {
@@ -29,7 +33,7 @@
 +        if (io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()) {
 +            List<LivingEntity> players = List.of();
 +            for (LivingEntity livingEntity : nearbyEntities) {
-+                if (livingEntity.getType() == net.minecraft.world.entity.EntityType.PLAYER) {
++                if (livingEntity.getType() == net.minecraft.world.entity.EntityTypes.PLAYER) {
 +                    if (players.isEmpty()) players = new java.util.ArrayList<>(2);
 +                    players.add(livingEntity);
 +                }
@@ -47,7 +51,7 @@
 +    // same answer as findClosest(e -> type.equals(e.getType()) && predicate.test(e)): the same entities tested in the same order; for a
 +    // player in a crowd of villagers it walks only the players
 +    public Optional<LivingEntity> findClosestOfType(net.minecraft.world.entity.EntityType<?> type, Predicate<LivingEntity> predicate) {
-+        List<LivingEntity> list = type == net.minecraft.world.entity.EntityType.PLAYER && this.players != null ? this.players : this.nearbyEntities;
++        List<LivingEntity> list = type == net.minecraft.world.entity.EntityTypes.PLAYER && this.players != null ? this.players : this.nearbyEntities;
 +        for (LivingEntity livingEntity : list) {
 +            if (type.equals(livingEntity.getType()) && predicate.test(livingEntity) && this.lineOfSightTest.test(livingEntity)) {
 +                return Optional.of(livingEntity);

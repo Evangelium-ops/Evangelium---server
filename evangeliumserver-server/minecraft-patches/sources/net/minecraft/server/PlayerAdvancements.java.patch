@@ -1,17 +1,10 @@
 --- a/net/minecraft/server/PlayerAdvancements.java
 +++ b/net/minecraft/server/PlayerAdvancements.java
-@@ -18,6 +_,7 @@
- import java.util.HashMap;
- import java.util.HashSet;
- import java.util.LinkedHashMap;
-+import java.util.List;
- import java.util.Map;
- import java.util.Set;
- import java.util.Map.Entry;
-@@ -71,6 +_,149 @@
+@@ -74,7 +_,150 @@
          this.load(manager);
      }
  
+-    public void setPlayer(final ServerPlayer player) {
 +    // Evangelium start - join preload: the advancements file read and DataFixed off the tick threads
 +    /** A parsed advancements file (data == null: there is no file). */
 +    public static final class Preparsed {
@@ -35,7 +28,7 @@
 +        for (AdvancementHolder holder : manager.getAllAdvancements()) {
 +            for (Criterion<?> criterion : holder.value().criteria().values()) {
 +                CriterionTrigger<?> trigger = criterion.trigger();
-+                if (!(trigger instanceof net.minecraft.advancements.criterion.SimpleCriterionTrigger<?>) && !(trigger instanceof net.minecraft.advancements.criterion.ImpossibleTrigger)) {
++                if (!(trigger instanceof net.minecraft.advancements.triggers.SimpleCriterionTrigger<?>) && !(trigger instanceof net.minecraft.advancements.triggers.ImpossibleTrigger)) {
 +                    throw new IllegalStateException("custom criterion trigger " + trigger.getClass().getName());
 +                }
 +            }
@@ -62,14 +55,14 @@
 +    // triggers, a plugin award on join); otherwise the state is put back and flushDirty does the usual full first flush.
 +    private @Nullable Set<AdvancementNode> firstRoots;
 +    private @Nullable Set<AdvancementHolder> firstChanged;
-+    private @Nullable List<AdvancementHolder> firstAdded;
++    private @Nullable List<ClientboundUpdateAdvancementsPacket.PositionedAdvancement> firstAdded; // 26.3: the packet takes positioned nodes
 +    private @Nullable Set<Identifier> firstRemoved;
 +    private @Nullable Map<Identifier, AdvancementProgress> firstProgress;
 +
 +    private void precomputeFirstFlush() {
 +        this.firstRoots = new HashSet<>(this.rootsToUpdate);
 +        this.firstChanged = new HashSet<>(this.progressChanged);
-+        Set<AdvancementHolder> set = new HashSet<>();
++        Set<AdvancementNode> set = new HashSet<>();
 +        Set<Identifier> set1 = new HashSet<>();
 +        for (AdvancementNode advancementNode : this.rootsToUpdate) {
 +            this.updateTreeVisibility(advancementNode, set, set1);
@@ -82,7 +75,7 @@
 +            }
 +        }
 +        this.progressChanged.clear();
-+        this.firstAdded = sortedById(set);
++        this.firstAdded = sortedById(set).stream().map(ClientboundUpdateAdvancementsPacket.PositionedAdvancement::fromNode).toList();
 +        this.firstRemoved = set1;
 +        this.firstProgress = map;
 +    }
@@ -92,7 +85,7 @@
 +        if (this.firstAdded == null) {
 +            return false;
 +        }
-+        List<AdvancementHolder> added = this.firstAdded;
++        List<ClientboundUpdateAdvancementsPacket.PositionedAdvancement> added = this.firstAdded;
 +        Set<Identifier> removed = this.firstRemoved;
 +        Map<Identifier, AdvancementProgress> map = this.firstProgress;
 +        Set<AdvancementNode> roots = this.firstRoots;
@@ -155,26 +148,31 @@
 +    }
 +    // Evangelium end - join preload
 +
-     public void setPlayer(ServerPlayer player) {
++    public void setPlayer(ServerPlayer player) {
          this.player = player;
      }
-@@ -82,6 +_,7 @@
+ 
+@@ -82,7 +_,8 @@
+         this.activeTriggers.clear();
      }
  
-     public void reload(ServerAdvancementManager manager) {
+-    public void reload(final ServerAdvancementManager manager) {
++    public void reload(ServerAdvancementManager manager) {
 +        this.firstAdded = null; this.firstRemoved = null; this.firstProgress = null; this.firstRoots = null; this.firstChanged = null; // Evangelium - join preload
-         this.stopListening();
+         this.clearTriggers();
          this.progress.clear();
          this.visible.clear();
-@@ -110,6 +_,7 @@
+@@ -110,7 +_,8 @@
+         }
      }
  
-     private void load(ServerAdvancementManager manager) {
+-    private void load(final ServerAdvancementManager manager) {
++    private void load(ServerAdvancementManager manager) {
 +        long advTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
          if (Files.isRegularFile(this.playerSavePath)) {
-             try (Reader bufferedReader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
-                 JsonElement jsonElement = StrictJsonParser.parse(bufferedReader);
-@@ -122,14 +_,18 @@
+             try (Reader reader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
+                 JsonElement json = StrictJsonParser.parse(reader);
+@@ -123,14 +_,18 @@
              }
          }
  
@@ -187,45 +185,45 @@
  
      public void save() {
          if (org.spigotmc.SpigotConfig.disableAdvancementSaving) return; // Spigot
-         JsonElement jsonElement = this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow();
+         JsonElement json = this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow();
 -
 +        final String saveKey = this.player.getStringUUID(); // Evangelium - join preload
 +        io.evangelium.server.player.JoinPreload.beginSave(saveKey); // Evangelium - join preload
          try {
              FileUtil.createDirectoriesSafe(this.playerSavePath.getParent());
  
-@@ -138,7 +_,7 @@
+@@ -139,7 +_,7 @@
              }
-         } catch (JsonIOException | IOException var7) {
-             LOGGER.error("Couldn't save player advancements to {}", this.playerSavePath, var7);
+         } catch (IOException | JsonIOException e) {
+             LOGGER.error("Couldn't save player advancements to {}", this.playerSavePath, e);
 -        }
 +        } finally { io.evangelium.server.player.JoinPreload.endSave(saveKey); } // Evangelium - join preload
      }
  
-     private void applyFrom(ServerAdvancementManager advancementManager, PlayerAdvancements.Data data) {
-@@ -264,10 +_,39 @@
-         criterion.trigger().removePlayerListener(this, new CriterionTrigger.Listener<>(criterion.triggerInstance(), advancement, criterionKey));
+     private void applyFrom(final ServerAdvancementManager manager, final PlayerAdvancements.Data data) {
+@@ -256,10 +_,39 @@
+         }
      }
  
 +    // Evangelium start - Paper's order (a TreeSet by id().toString()), but each id string is built once and the list sorted once
 +    // (the TreeSet built two strings per comparison: ~30 000 strings for a player with every advancement)
 +    private static final boolean PRECOMPUTED_FIRST_PACKET = Boolean.parseBoolean(System.getProperty("evangeliumserver.joinPreloadFirstAdvancementPacket", "true"));
 +
-+    private static List<AdvancementHolder> sortedById(Set<AdvancementHolder> set) {
++    private static List<AdvancementNode> sortedById(final Set<AdvancementNode> set) {
 +        int n = set.size();
 +        String[] keys = new String[n];
-+        AdvancementHolder[] holders = set.toArray(new AdvancementHolder[0]);
++        AdvancementNode[] nodes = set.toArray(new AdvancementNode[0]);
 +        Integer[] order = new Integer[n];
 +        for (int i = 0; i < n; i++) {
-+            keys[i] = holders[i].id().toString();
++            keys[i] = nodes[i].holder().id().toString();
 +            order[i] = i;
 +        }
 +        java.util.Arrays.sort(order, (x, y) -> keys[x].compareTo(keys[y]));
-+        List<AdvancementHolder> sorted = new java.util.ArrayList<>(n);
++        List<AdvancementNode> sorted = new java.util.ArrayList<>(n);
 +        String last = null;
 +        for (Integer i : order) {
-+            if (!keys[i].equals(last)) { // the TreeSet kept one holder per id string
-+                sorted.add(holders[i]);
++            if (!keys[i].equals(last)) { // the TreeSet kept one node per id string
++                sorted.add(nodes[i]);
 +                last = keys[i];
 +            }
 +        }
@@ -233,28 +231,31 @@
 +    }
 +    // Evangelium end
 +
-     public void flushDirty(ServerPlayer player, boolean showAdvancements) {
+     public void flushDirty(final ServerPlayer player, final boolean showAdvancements) {
 +        final long firstPacketTimer = this.isFirstPacket ? io.evangelium.server.util.TickTimings.start() : 0L; // Evangelium - join timings
 +        try { // Evangelium - join timings
 +        if (this.isFirstPacket && PRECOMPUTED_FIRST_PACKET && this.flushPrecomputedFirst(player, showAdvancements)) return; // Evangelium - join preload: first packet worked out on the loader thread
          if (this.isFirstPacket || !this.rootsToUpdate.isEmpty() || !this.progressChanged.isEmpty()) {
-             Map<Identifier, AdvancementProgress> map = new HashMap<>();
--            Set<AdvancementHolder> set = new java.util.TreeSet<>(java.util.Comparator.comparing(adv -> adv.id().toString())); // Paper - Changed from HashSet to TreeSet ordered alphabetically.
-+            Set<AdvancementHolder> set = new HashSet<>(); // Paper - Changed from HashSet to TreeSet ordered alphabetically. // Evangelium - collected unordered, sorted once below (same order)
-             Set<Identifier> set1 = new HashSet<>();
+             Map<Identifier, AdvancementProgress> progress = new HashMap<>();
+-            Set<AdvancementNode> added = new java.util.TreeSet<>(java.util.Comparator.comparing(node -> node.holder().id().toString())); // Paper - Changed from HashSet to TreeSet ordered alphabetically.
++            Set<AdvancementNode> added = new HashSet<>(); // Paper - Changed from HashSet to TreeSet ordered alphabetically. // Evangelium - collected unordered, sorted once below (same order)
+             Set<Identifier> removed = new HashSet<>();
  
-             for (AdvancementNode advancementNode : this.rootsToUpdate) {
-@@ -284,11 +_,12 @@
+             for (AdvancementNode root : this.rootsToUpdate) {
+@@ -276,7 +_,7 @@
  
              this.progressChanged.clear();
-             if (!map.isEmpty() || !set.isEmpty() || !set1.isEmpty()) {
--                player.connection.send(new ClientboundUpdateAdvancementsPacket(this.isFirstPacket, set, set1, map, showAdvancements));
-+                player.connection.send(new ClientboundUpdateAdvancementsPacket(this.isFirstPacket, sortedById(set), set1, map, showAdvancements)); // Evangelium - sorted by id string like Paper's TreeSet
-             }
+             if (!progress.isEmpty() || !added.isEmpty() || !removed.isEmpty()) {
+-                List<ClientboundUpdateAdvancementsPacket.PositionedAdvancement> convertedAdded = added.stream()
++                List<ClientboundUpdateAdvancementsPacket.PositionedAdvancement> convertedAdded = sortedById(added).stream() // Evangelium - sorted by id string like Paper's TreeSet
+                     .map(ClientboundUpdateAdvancementsPacket.PositionedAdvancement::fromNode)
+                     .toList();
+                 player.connection.send(new ClientboundUpdateAdvancementsPacket(this.isFirstPacket, convertedAdded, removed, progress, showAdvancements));
+@@ -284,6 +_,7 @@
          }
  
          this.isFirstPacket = false;
 +        } finally { io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_ADV_PACKET, firstPacketTimer); } // Evangelium - join timings
      }
  
-     public void setSelectedTab(@Nullable AdvancementHolder advancement) {
+     public void setSelectedTab(final @Nullable AdvancementHolder holder) {

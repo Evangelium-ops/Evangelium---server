@@ -1,22 +1,26 @@
 --- a/net/minecraft/server/network/config/SynchronizeRegistriesTask.java
 +++ b/net/minecraft/server/network/config/SynchronizeRegistriesTask.java
-@@ -33,6 +_,7 @@
+@@ -32,7 +_,8 @@
+         connection.accept(new ClientboundSelectKnownPacks(this.requestedPacks));
      }
  
-     private void sendRegistries(Consumer<Packet<?>> packetSender, Set<KnownPack> packs) {
-+        if (io.evangelium.server.player.RegistrySyncCache.enabled()) { io.evangelium.server.player.RegistrySyncCache.send(this.registries, packs, packetSender); return; } // Evangelium - built once per known-packs set
-         DynamicOps<Tag> dynamicOps = this.registries.compositeAccess().createSerializationContext(NbtOps.INSTANCE);
+-    private void sendRegistries(final Consumer<Packet<?>> connection, final Set<KnownPack> negotiatedPacks) {
++    private void sendRegistries(Consumer<Packet<?>> connection, Set<KnownPack> negotiatedPacks) {
++        if (io.evangelium.server.player.RegistrySyncCache.enabled()) { io.evangelium.server.player.RegistrySyncCache.send(this.registries, negotiatedPacks, connection); return; } // Evangelium - built once per known-packs set
+         DynamicOps<Tag> ops = this.registries.compositeAccess().createSerializationContext(NbtOps.INSTANCE);
          RegistrySynchronization.packRegistries(
-             dynamicOps,
-@@ -44,11 +_,13 @@
+             ops,
+@@ -43,12 +_,14 @@
+         connection.accept(new ClientboundUpdateTagsPacket(TagNetworkSerialization.serializeTagsToNetwork(this.registries)));
      }
  
-     public void handleResponse(List<KnownPack> packs, Consumer<Packet<?>> packetSender) {
+-    public void handleResponse(final List<KnownPack> acceptedPacks, final Consumer<Packet<?>> connection) {
++    public void handleResponse(List<KnownPack> acceptedPacks, Consumer<Packet<?>> connection) {
 +        final long syncTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
-         if (packs.equals(this.requestedPacks)) {
-             this.sendRegistries(packetSender, Set.copyOf(this.requestedPacks));
+         if (acceptedPacks.equals(this.requestedPacks)) {
+             this.sendRegistries(connection, Set.copyOf(this.requestedPacks));
          } else {
-             this.sendRegistries(packetSender, Set.of());
+             this.sendRegistries(connection, Set.of());
          }
 +        io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_REGSYNC, syncTimer); // Evangelium - join timings
      }

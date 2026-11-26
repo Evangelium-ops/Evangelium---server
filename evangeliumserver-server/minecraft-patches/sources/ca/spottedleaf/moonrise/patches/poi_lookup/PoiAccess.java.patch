@@ -1,9 +1,9 @@
---- a/io/papermc/paper/util/PoiAccess.java
-+++ b/io/papermc/paper/util/PoiAccess.java
-@@ -183,6 +_,57 @@
+--- a/ca/spottedleaf/moonrise/patches/poi_lookup/PoiAccess.java
++++ b/ca/spottedleaf/moonrise/patches/poi_lookup/PoiAccess.java
+@@ -89,6 +_,57 @@
+         return (centerDiffX * centerDiffX) + (centerDiffY * centerDiffY) + (centerDiffZ * centerDiffZ);
+     }
  
-     // only includes x/z axis
-     // finds the closest poi data by distance. if multiple match the same distance, then they all are returned.
 +    // Evangelium start - when no POI in the search box passes the type, occupancy and distance tests, the section walk can find
 +    // nothing (and never calls the position predicate), so skip it. Reads each loaded POI chunk once instead of a BFS over
 +    // every section in range; jobless villagers retry this every 1-2 s per behaviour.
@@ -34,7 +34,7 @@
 +                    if (section.isEmpty()) {
 +                        continue;
 +                    }
-+                    for (final Map.Entry<Holder<PoiType>, Set<PoiRecord>> entry : section.get().getData().entrySet()) {
++                    for (final Map.Entry<Holder<PoiType>, Set<PoiRecord>> entry : section.get().byType.entrySet()) {
 +                        if (!villagePlaceType.test(entry.getKey())) {
 +                            continue;
 +                        }
@@ -58,8 +58,8 @@
      public static void findClosestPoiDataRecords(final PoiManager poiStorage,
                                                   final Predicate<Holder<PoiType>> villagePlaceType,
                                                   // position predicate must not modify chunk POI
-@@ -219,13 +_,18 @@
-         final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
+@@ -111,13 +_,18 @@
+         final int upperY = WorldUtil.getMaxSection(poiStorage.levelHeightAccessor);
          final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
  
 +        EVANGELIUM_NO_CANDIDATE.get()[0] = false; // Evangelium
@@ -78,8 +78,8 @@
          seen.add(centerKey);
          queue.enqueue(centerKey);
  
-@@ -462,13 +_,16 @@
-         final int upperY = WorldUtil.getMaxSection(poiStorage.moonrise$getWorld());
+@@ -354,13 +_,16 @@
+         final int upperY = WorldUtil.getMaxSection(poiStorage.levelHeightAccessor);
          final int upperZ = Mth.floor(sourcePosition.getZ() + range) >> 4;
  
 +        EVANGELIUM_NO_CANDIDATE.get()[0] = false; // Evangelium

@@ -1,28 +1,32 @@
 --- a/net/minecraft/world/level/pathfinder/PathFinder.java
 +++ b/net/minecraft/world/level/pathfinder/PathFinder.java
-@@ -171,11 +_,20 @@
-     private Path reconstructPath(Node node, BlockPos targetPos, boolean reachesTarget) {
-         List<Node> list = Lists.newArrayList();
-         Node node1 = node;
--        list.add(0, node);
+@@ -177,14 +_,23 @@
+         return bestH;
+     }
+ 
+-    private Path reconstructPath(final Node closest, final BlockPos target, final boolean reached) {
++    private Path reconstructPath(Node closest, BlockPos target, boolean reached) {
+         List<Node> nodes = Lists.newArrayList();
+         Node node = closest;
+-        nodes.add(0, node);
 -
--        while (node1.cameFrom != null) {
--            node1 = node1.cameFrom;
--            list.add(0, node1);
+-        while (node.cameFrom != null) {
+-            node = node.cameFrom;
+-            nodes.add(0, node);
 +        if (io.evangelium.server.ai.AiDiagnostics.navigationOptimizationEnabled()) {
-+            list.add(node);
-+            while (node1.cameFrom != null) {
-+                node1 = node1.cameFrom;
-+                list.add(node1);
++            nodes.add(closest);
++            while (node.cameFrom != null) {
++                node = node.cameFrom;
++                nodes.add(node);
 +            }
 +            // Append then reverse avoids quadratic array copies on long paths.
-+            java.util.Collections.reverse(list);
++            java.util.Collections.reverse(nodes);
 +        } else {
-+            list.add(0, node);
-+            while (node1.cameFrom != null) {
-+                node1 = node1.cameFrom;
-+                list.add(0, node1);
++            nodes.add(0, closest);
++            while (node.cameFrom != null) {
++                node = node.cameFrom;
++                nodes.add(0, node);
 +            }
          }
  
-         return new Path(list, targetPos, reachesTarget);
+         return new Path(nodes, target, reached);

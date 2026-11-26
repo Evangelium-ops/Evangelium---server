@@ -45,7 +45,7 @@ public final class SpawnRequestCheck {
                 ReferenceList<ServerPlayer> list = nearby.getPlayersByChunk(ChunkPos.getX(key), ChunkPos.getZ(key), NearbyPlayers.NearbyMapType.SPAWN_RANGE);
                 int expected = list == null ? 0 : list.size();
                 if (expected != e.getIntValue()) {
-                    diffs.add(level.dimension() + " " + new ChunkPos(key) + " count=" + e.getIntValue() + " players=" + expected);
+                    diffs.add(level.dimension() + " " + ChunkPos.unpack(key) + " count=" + e.getIntValue() + " players=" + expected);
                 }
             }
         });
@@ -54,13 +54,13 @@ public final class SpawnRequestCheck {
             ChunkPos c = player.chunkPosition();
             for (int dx = -r; dx <= r; dx++) {
                 for (int dz = -r; dz <= r; dz++) {
-                    long key = ChunkPos.asLong(c.x + dx, c.z + dz);
+                    long key = ChunkPos.pack(c.x + dx, c.z + dz);
                     if (seen.contains(key)) {
                         continue;
                     }
                     ReferenceList<ServerPlayer> list = nearby.getPlayersByChunk(c.x + dx, c.z + dz, NearbyPlayers.NearbyMapType.SPAWN_RANGE);
                     if (list != null && list.size() > 0) {
-                        diffs.add(level.dimension() + " " + new ChunkPos(key) + " count=0 players=" + list.size());
+                        diffs.add(level.dimension() + " " + ChunkPos.unpack(key) + " count=0 players=" + list.size());
                     }
                 }
             }

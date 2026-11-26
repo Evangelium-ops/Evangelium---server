@@ -151,5 +151,5 @@
 +    // EvangeliumServer end - write each packet once
 +
      @Override
-     protected void encode(ChannelHandlerContext ctx, ByteBuf encoder, ByteBuf decoder) {
-         int i = encoder.readableBytes();
+     protected void encode(final ChannelHandlerContext ctx, final ByteBuf msg, final ByteBuf out) {
+         int bodyLength = msg.readableBytes();

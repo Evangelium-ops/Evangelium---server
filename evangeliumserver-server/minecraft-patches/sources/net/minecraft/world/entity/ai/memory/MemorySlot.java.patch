@@ -1,0 +1,35 @@
+--- a/net/minecraft/world/entity/ai/memory/MemorySlot.java
++++ b/net/minecraft/world/entity/ai/memory/MemorySlot.java
+@@ -7,6 +_,7 @@
+     private static final long NEVER_EXPIRE = Long.MAX_VALUE;
+     private @Nullable T value;
+     private long timeToLive;
++    private java.util.@Nullable Optional<T> evangelium$optional; // Evangelium - getMemory's Optional, made once per value (reset in set and clear)
+ 
+     private MemorySlot(final @Nullable T value, final long timeToLive) {
+         this.value = value;
+@@ -30,6 +_,7 @@
+     public void set(final T value, final long timeToLive) {
+         this.value = value;
+         this.timeToLive = timeToLive;
++        this.evangelium$optional = null; // Evangelium
+     }
+ 
+     public void set(final T value) {
+@@ -39,6 +_,16 @@
+     public void clear() {
+         this.value = null;
+         this.timeToLive = Long.MAX_VALUE;
++        this.evangelium$optional = null; // Evangelium
++    }
++
++    /** Evangelium - the value as an Optional, the same object until the value changes: brains read memories many times per tick */
++    public java.util.Optional<T> evangelium$optional() {
++        java.util.Optional<T> optional = this.evangelium$optional;
++        if (optional == null) {
++            this.evangelium$optional = optional = java.util.Optional.ofNullable(this.value);
++        }
++        return optional;
+     }
+ 
+     public boolean hasValue() {

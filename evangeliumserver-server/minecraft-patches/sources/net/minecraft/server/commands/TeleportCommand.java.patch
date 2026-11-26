@@ -17,31 +17,30 @@
  import net.minecraft.world.level.Level;
  import net.minecraft.world.phys.Vec2;
  import net.minecraft.world.phys.Vec3;
-@@ -263,7 +_,18 @@
-             float f1 = relatives.contains(Relative.X_ROT) ? xRot - target.getXRot() : xRot;
-             float f2 = Mth.wrapDegrees(f);
-             float f3 = Mth.wrapDegrees(f1);
--            if (target.teleportTo(level, d, d1, d2, relatives, f2, f3, true, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND)) { // Paper - teleport cause
-+            io.evangelium.server.threading.TeleportPreload.ensureSyncTeleport(target, level, new net.minecraft.world.phys.Vec3(x, y, z), new ChunkPos(new BlockPos((int) x, (int) y, (int) z)), () -> { // EvangeliumServer - run on correct thread // Evangelium - destination chunks loaded asynchronously first
-+            // Evangelium start - the teleport can run later than the command (destination chunks first): relative parts (~) are
-+            // offsets from where the target is NOW, so take them now from the absolute target the command resolved, as vanilla's
-+            // immediate teleport ends at x/y/z/yRot/xRot exactly (identical values when nothing was deferred)
-+            final boolean evangeliumNow = io.evangelium.server.threading.TeleportPreload.ENABLED;
-+            final double e = evangeliumNow && relatives.contains(Relative.X) ? x - target.getX() : d;
-+            final double e1 = evangeliumNow && relatives.contains(Relative.Y) ? y - target.getY() : d1;
-+            final double e2 = evangeliumNow && relatives.contains(Relative.Z) ? z - target.getZ() : d2;
-+            final float e3 = evangeliumNow && relatives.contains(Relative.Y_ROT) ? Mth.wrapDegrees(yRot - target.getYRot()) : f2;
-+            final float e4 = evangeliumNow && relatives.contains(Relative.X_ROT) ? Mth.wrapDegrees(xRot - target.getXRot()) : f3;
-+            // Evangelium end
-+            if (target.teleportTo(level, e, e1, e2, relatives, e3, e4, true, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND)) { // Paper - teleport cause // Evangelium - values taken when it runs
-                 if (lookAt != null) {
-                     lookAt.perform(source, target);
-                 }
-@@ -277,6 +_,7 @@
-                     pathfinderMob.getNavigation().stop();
-                 }
+@@ -243,7 +_,18 @@
+         float relativeOrAbsoluteXRot = relatives.contains(Relative.X_ROT) ? xRot - victim.getXRot() : xRot;
+         float newYRot = Mth.wrapDegrees(relativeOrAbsoluteYRot);
+         float newXRot = Mth.wrapDegrees(relativeOrAbsoluteXRot);
+-        if (victim.teleportTo(level, relativeOrAbsoluteX, relativeOrAbsoluteY, relativeOrAbsoluteZ, relatives, newYRot, newXRot, true, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND)) { // Paper - teleport cause
++        io.evangelium.server.threading.TeleportPreload.ensureSyncTeleport(victim, level, new net.minecraft.world.phys.Vec3(x, y, z), ChunkPos.containing(BlockPos.containing(x, y, z)), () -> { // EvangeliumServer - run on correct thread // Evangelium - destination chunks loaded asynchronously first
++        // Evangelium start - the teleport can run later than the command (destination chunks first): relative parts (~) are
++        // offsets from where the target is NOW, so take them now from the absolute target the command resolved, as vanilla's
++        // immediate teleport ends at x/y/z/yRot/xRot exactly (identical values when nothing was deferred)
++        final boolean evangeliumNow = io.evangelium.server.threading.TeleportPreload.ENABLED;
++        final double e = evangeliumNow && relatives.contains(Relative.X) ? x - victim.getX() : relativeOrAbsoluteX;
++        final double e1 = evangeliumNow && relatives.contains(Relative.Y) ? y - victim.getY() : relativeOrAbsoluteY;
++        final double e2 = evangeliumNow && relatives.contains(Relative.Z) ? z - victim.getZ() : relativeOrAbsoluteZ;
++        final float e3 = evangeliumNow && relatives.contains(Relative.Y_ROT) ? Mth.wrapDegrees(yRot - victim.getYRot()) : newYRot;
++        final float e4 = evangeliumNow && relatives.contains(Relative.X_ROT) ? Mth.wrapDegrees(xRot - victim.getXRot()) : newXRot;
++        // Evangelium end
++        if (victim.teleportTo(level, e, e1, e2, relatives, e3, e4, true, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND)) { // Paper - teleport cause // Evangelium - values taken when it runs
+             if (lookAt != null) {
+                 lookAt.perform(source, victim);
              }
-+            }); // EvangeliumServer - run on correct thread
+@@ -257,5 +_,6 @@
+                 mob.getNavigation().stop();
+             }
          }
++        }); // EvangeliumServer - run on correct thread
      }
  }

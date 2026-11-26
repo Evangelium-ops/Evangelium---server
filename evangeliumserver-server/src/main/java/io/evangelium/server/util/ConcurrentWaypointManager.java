@@ -36,6 +36,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class ConcurrentWaypointManager extends ServerWaypointManager {
 
+    public ConcurrentWaypointManager(final net.minecraft.server.level.ServerLevel level) { // 26.3: ServerWaypointManager takes its level
+        super(level);
+    }
+
     public static final boolean ENABLED = !"legacy".equalsIgnoreCase(System.getProperty("evangeliumserver.waypointManager"));
     public static final int FAR_INTERVAL = Math.max(0, Integer.getInteger("evangeliumserver.waypointFarInterval", 0));
     private static final double FAR_DISTANCE = Double.parseDouble(System.getProperty("evangeliumserver.waypointFarDistance", "128"));

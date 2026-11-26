@@ -1,29 +1,32 @@
 --- a/net/minecraft/server/gui/MinecraftServerGui.java
 +++ b/net/minecraft/server/gui/MinecraftServerGui.java
-@@ -51,7 +_,7 @@
+@@ -53,7 +_,7 @@
          } catch (Exception var3) {
          }
  
--        final JFrame jFrame = new JFrame("Purpur Minecraft server"); // Purpur - Improve GUI
-+        final JFrame jFrame = new JFrame("Evangelium Minecraft server"); // Purpur - Improve GUI // EvangeliumServer
-         final MinecraftServerGui minecraftServerGui = new MinecraftServerGui(server);
-         jFrame.setDefaultCloseOperation(2);
-         jFrame.add(minecraftServerGui);
-@@ -59,7 +_,7 @@
-         jFrame.setLocationRelativeTo(null);
-         jFrame.setVisible(true);
+-        final JFrame frame = new JFrame("Purpur Minecraft server"); // Purpur - Improve GUI
++        final JFrame frame = new JFrame("Evangelium Minecraft server"); // Purpur - Improve GUI // EvangeliumServer
+         final MinecraftServerGui gui = new MinecraftServerGui(server);
+         frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+         frame.add(gui);
+@@ -61,7 +_,7 @@
+         frame.setLocationRelativeTo(null);
+         frame.setVisible(true);
          // Paper start - Improve ServerGUI
--        jFrame.setName("Purpur Minecraft server"); // Purpur - Improve GUI
-+        jFrame.setName("Evangelium Minecraft server"); // Purpur - Improve GUI // EvangeliumServer
+-        frame.setName("Purpur Minecraft server"); // Purpur - Improve GUI
++        frame.setName("Evangelium Minecraft server"); // Purpur - Improve GUI // EvangeliumServer
          try {
-             jFrame.setIconImage(javax.imageio.ImageIO.read(java.util.Objects.requireNonNull(MinecraftServerGui.class.getClassLoader().getResourceAsStream("logo.png"))));
+             frame.setIconImage(javax.imageio.ImageIO.read(java.util.Objects.requireNonNull(MinecraftServerGui.class.getClassLoader().getResourceAsStream("logo.png"))));
          } catch (java.io.IOException ignore) {
-@@ -69,7 +_,7 @@
+@@ -69,9 +_,9 @@
+         // Paper end - Improve ServerGUI
+         frame.addWindowListener(new WindowAdapter() {
              @Override
-             public void windowClosing(WindowEvent event) {
-                 if (!minecraftServerGui.isClosing.getAndSet(true)) {
--                    jFrame.setTitle("Purpur Minecraft server - shutting down!"); // Purpur - Improve GUI
-+                    jFrame.setTitle("Evangelium Minecraft server - shutting down!"); // Purpur - Improve GUI // EvangeliumServer
+-            public void windowClosing(final WindowEvent event) {
++            public void windowClosing(WindowEvent event) {
+                 if (!gui.isClosing.getAndSet(true)) {
+-                    frame.setTitle("Purpur Minecraft server - shutting down!"); // Purpur - Improve GUI
++                    frame.setTitle("Evangelium Minecraft server - shutting down!"); // Purpur - Improve GUI // EvangeliumServer
                      server.halt(true);
-                     minecraftServerGui.runFinalizers();
+                     gui.runFinalizers();
                  }

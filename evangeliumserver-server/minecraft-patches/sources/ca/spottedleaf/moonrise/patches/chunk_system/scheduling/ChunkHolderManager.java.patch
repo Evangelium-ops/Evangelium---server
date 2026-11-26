@@ -1,6 +1,6 @@
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-@@ -24,6 +_,11 @@
+@@ -25,6 +_,11 @@
  import com.google.gson.JsonArray;
  import com.google.gson.JsonObject;
  import com.mojang.logging.LogUtils;
@@ -12,7 +12,7 @@
  import it.unimi.dsi.fastutil.longs.Long2ByteLinkedOpenHashMap;
  import it.unimi.dsi.fastutil.longs.Long2ByteMap;
  import it.unimi.dsi.fastutil.longs.Long2IntMap;
-@@ -60,6 +_,7 @@
+@@ -61,6 +_,7 @@
  import java.util.concurrent.atomic.AtomicReference;
  import java.util.concurrent.locks.LockSupport;
  import java.util.function.Predicate;
@@ -20,7 +20,7 @@
  
  public final class ChunkHolderManager {
  
-@@ -71,13 +_,35 @@
+@@ -72,13 +_,35 @@
      public static final int MAX_TICKET_LEVEL = ChunkLevel.MAX_LEVEL; // inclusive
  
      public static final TicketType UNLOAD_COOLDOWN = ChunkSystemTicketType.create("chunk_system:unload_cooldown", null, 5L * 20L);
@@ -50,14 +50,14 @@
      private static final long NO_TIMEOUT_MARKER = Long.MIN_VALUE;
      public final ReentrantAreaLock ticketLockArea;
  
-     private final ConcurrentLong2ReferenceChainedHashTable<TicketSet> tickets = new ConcurrentLong2ReferenceChainedHashTable<>();
-     private final ConcurrentLong2ReferenceChainedHashTable<Long2IntOpenHashMap> sectionToChunkToExpireCount = new ConcurrentLong2ReferenceChainedHashTable<>();
+     private final ConcurrentChainedLong2ReferenceHashTable<TicketSet> tickets = ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(ConcurrentChainedLong2ReferenceHashTable.defaultCapacity(), 0.25f);
+     private final ConcurrentChainedLong2ReferenceHashTable<Long2IntOpenHashMap> sectionToChunkToExpireCount = new ConcurrentChainedLong2ReferenceHashTable<>();
 -    final ChunkUnloadQueue unloadQueue;
 +    // final ChunkUnloadQueue unloadQueue; // EvangeliumServer - use our own unload queue
  
-     private final ConcurrentLong2ReferenceChainedHashTable<NewChunkHolder> chunkHolders = ConcurrentLong2ReferenceChainedHashTable.createWithCapacity(16384, 0.25f);
+     private final ConcurrentChainedLong2ReferenceHashTable<NewChunkHolder> chunkHolders = ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(ConcurrentChainedLong2ReferenceHashTable.defaultCapacity(), 0.25f);
      private final ServerLevel world;
-@@ -85,6 +_,7 @@
+@@ -86,6 +_,7 @@
      private long currentTick;
  
      private final ArrayDeque<NewChunkHolder> pendingFullLoadUpdate = new ArrayDeque<>();
@@ -65,7 +65,7 @@
      private final MultiThreadedQueue<NewChunkHolder> offThreadPendingFullLoadUpdate = new MultiThreadedQueue<>();
      private final ObjectRBTreeSet<NewChunkHolder> autoSaveQueue = new ObjectRBTreeSet<>((final NewChunkHolder c1, final NewChunkHolder c2) -> {
          if (c1 == c2) {
-@@ -114,7 +_,7 @@
+@@ -115,7 +_,7 @@
          this.world = world;
          this.taskScheduler = taskScheduler;
          this.ticketLockArea = new ReentrantAreaLock(taskScheduler.getChunkSystemLockShift());
@@ -74,7 +74,7 @@
      }
  
      public boolean processTicketUpdates(final int chunkX, final int chunkZ) {
-@@ -230,9 +_,9 @@
+@@ -231,9 +_,9 @@
      }
  
      void ensureInAutosave(final NewChunkHolder holder) {
@@ -86,7 +86,7 @@
          }
      }
  
-@@ -241,30 +_,37 @@
+@@ -242,30 +_,37 @@
          final long currentTick = this.currentTick;
          final long maxSaveTime = currentTick - Math.max(1L, PlatformHooks.get().configAutoSaveInterval(this.world));
          final int maxToSave = PlatformHooks.get().configMaxAutoSavePerTick(this.world);
@@ -130,7 +130,7 @@
      }
  
      public void saveAllChunks(final boolean flush, final boolean shutdown, final boolean logProgress,
-@@ -305,7 +_,26 @@
+@@ -306,7 +_,26 @@
          for (int i = 0, len = holders.size(); i < len; ++i) {
              final NewChunkHolder holder = holders.get(i);
              try {
@@ -149,7 +149,7 @@
 +                        }
 +                        if (!future.isDone()) {
 +                            // Poll task while we wait for region to become unlocked
-+                            world.chunkSource.mainThreadProcessor.pollTask();
++                            world.getChunkSource().mainThreadProcessor.pollTask();
 +                        }
 +                    }
 +                } while (!future.isDone());
@@ -158,7 +158,7 @@
                  if (saveStat != null) {
                      if (saveStat.savedChunk()) {
                          ++savedChunk;
-@@ -803,13 +_,13 @@
+@@ -819,13 +_,13 @@
          if (removeDelay == NO_TIMEOUT_MARKER) {
              return false;
          }
@@ -174,7 +174,7 @@
  
          final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
  
-@@ -1129,6 +_,16 @@
+@@ -1168,6 +_,16 @@
          if (changedFullStatus.isEmpty()) {
              return;
          }
@@ -191,12 +191,13 @@
          if (!TickThread.isTickThread()) {
              // These will be handled on the next ServerChunkCache$MainThreadExecutor#pollTask, as it runs the distance manager update
              // which will invoke processTicketUpdates
-@@ -1143,97 +_,116 @@
+@@ -1182,98 +_,117 @@
  
      private void removeChunkHolder(final NewChunkHolder holder) {
          holder.onUnload();
 -        this.autoSaveQueue.remove(holder);
 +        this.autoSaveQueueLock.write(() -> this.autoSaveQueue.remove(holder)); // EvangeliumServer - multithread-safe auto save queue
+         ((ChunkSystemServerChunkCache)this.world.getChunkSource()).moonrise$chunkHolderUnload(holder);
          PlatformHooks.get().onChunkHolderDelete(this.world, holder.vanillaChunkHolder);
          this.chunkHolders.remove(CoordinateUtils.getChunkKey(holder.chunkX, holder.chunkZ));
      }
@@ -374,7 +375,7 @@
  
                      // run stage 1
                      for (int i = 0, len = stage1.size(); i < len; ++i) {
-@@ -1243,6 +_,24 @@
+@@ -1283,6 +_,24 @@
                              LOGGER.error("Chunkholder " + chunkHolder + " is not safe to unload but is inside the unload queue?");
                              continue;
                          }
@@ -399,7 +400,7 @@
                          final NewChunkHolder.UnloadState state = chunkHolder.unloadStage1();
                          if (state == null) {
                              // can unload immediately
-@@ -1298,10 +_,12 @@
+@@ -1338,10 +_,12 @@
  
              processedCount += stage1.size();
  
@@ -416,7 +417,7 @@
      }
  
      public enum TicketOperationType {
-@@ -1518,7 +_,7 @@
+@@ -1583,7 +_,7 @@
      public JsonObject getDebugJson() {
          final JsonObject ret = new JsonObject();
  

@@ -1,15 +1,15 @@
 --- a/net/minecraft/server/level/ChunkMap.java
 +++ b/net/minecraft/server/level/ChunkMap.java
-@@ -8,6 +_,8 @@
+@@ -7,6 +_,8 @@
+ import com.google.common.collect.ImmutableList.Builder;
  import com.mojang.datafixers.DataFixer;
  import com.mojang.logging.LogUtils;
- import com.mojang.serialization.MapCodec;
 +import io.evangelium.server.config.EvangeliumServerConfiguration;
 +import io.evangelium.server.util.Int2ObjectMapWrapper;
  import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
  import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
  import it.unimi.dsi.fastutil.longs.Long2ByteMap;
-@@ -20,6 +_,7 @@
+@@ -19,6 +_,7 @@
  import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
  import it.unimi.dsi.fastutil.longs.LongSet;
  import it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry;
@@ -17,7 +17,7 @@
  import java.io.IOException;
  import java.io.Writer;
  import java.nio.file.Path;
-@@ -32,11 +_,14 @@
+@@ -31,11 +_,14 @@
  import java.util.Optional;
  import java.util.Queue;
  import java.util.Set;
@@ -40,17 +40,17 @@
  import org.jspecify.annotations.Nullable;
  import org.slf4j.Logger;
  
-@@ -139,7 +_,8 @@
-     public final ChunkMap.DistanceManager distanceManager;
-     private final String storageName;
+@@ -138,7 +_,8 @@
+     private final ChunkStatusUpdateListener chunkStatusListener;
+     private final ChunkMap.DistanceManager distanceManager;
      private final PlayerMap playerMap = new PlayerMap();
 -    public final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectOpenHashMap<>();
-+    public final ConcurrentHashMap<Integer, ChunkMap.TrackedEntity> entityConcurrentMap = new ConcurrentHashMap<>(); // EvangeliumServer - Wrapper of ConcurrentHashMap to maintain plugin support
-+    public final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectMapWrapper(this.entityConcurrentMap); // EvangeliumServer - Wrapper of ConcurrentHashMap to maintain plugin support
++    public final ConcurrentHashMap<Integer, ChunkMap.TrackedEntity> entityConcurrentMap = new ConcurrentHashMap<>(); // EvangeliumServer - Thread safe
++    public final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectMapWrapper(this.entityConcurrentMap); // EvangeliumServer - Wrapper of ConcurrentHashMap to maintain plugin support (Citizens)
      private final Long2ByteMap chunkTypeCache = new Long2ByteOpenHashMap();
      // Paper - rewrite chunk system
      public int serverViewDistance;
-@@ -262,9 +_,35 @@
+@@ -252,9 +_,35 @@
  
          final ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
          for (int i = 0, len = inRange.size(); i < len; i++) {
@@ -88,7 +88,7 @@
  
      // Paper start - per player mob count backoff
      public void updateFailurePlayerMobTypeMap(int chunkX, int chunkZ, net.minecraft.world.entity.MobCategory mobCategory) {
-@@ -279,7 +_,9 @@
+@@ -269,7 +_,9 @@
          }
          final ServerPlayer[] backingSet = inRange.getRawDataUnchecked();
          for (int i = 0, len = inRange.size(); i < len; i++) {
@@ -98,16 +98,16 @@
          }
      }
      // Paper end - per player mob count backoff
-@@ -431,7 +_,7 @@
+@@ -415,7 +_,7 @@
      }
  
-     private void processUnloads(BooleanSupplier hasMoreTime) {
+     private void processUnloads(final BooleanSupplier haveTime) {
 -        ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system
 +        // ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system // EvangeliumServer - we unload chunks on the chunk thread
          ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.autoSave(); // Paper - rewrite chunk system
      }
  
-@@ -708,7 +_,7 @@
+@@ -702,7 +_,7 @@
      }
  
      // Paper start - optimise chunk tick iteration
@@ -116,7 +116,7 @@
          final ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkData chunkData = ((ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemLevelChunk)levelChunk).moonrise$getChunkHolder().holderData;
          final ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk nearbyPlayers = chunkData.nearbyPlayers;
          if (nearbyPlayers == null) {
-@@ -728,6 +_,7 @@
+@@ -722,6 +_,7 @@
  
          Objects.checkFromIndexSize(0, len, raw.length);
          for (int i = 0; i < len; ++i) {
@@ -124,7 +124,7 @@
              // Paper start - PlayerNaturallySpawnCreaturesEvent
              com.destroystokyo.paper.event.entity.PlayerNaturallySpawnCreaturesEvent event = raw[i].playerNaturallySpawnedEvent;
              if (event == null || event.isCancelled()) {
-@@ -738,31 +_,34 @@
+@@ -732,31 +_,34 @@
                  // Paper end - PlayerNaturallySpawnCreaturesEvent
                  return true;
              }
@@ -135,7 +135,7 @@
      }
      // Paper end - optimise chunk tick iteration
  
--    void collectSpawningChunks(List<LevelChunk> output) {
+-    public void collectSpawningChunks(final List<LevelChunk> output) {
 -        // Paper start - optimise chunk tick iteration
 -        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.level.chunk.LevelChunk> tickingChunks = ((ca.spottedleaf.moonrise.patches.chunk_tick_iteration.ChunkTickServerLevel)this.level).moonrise$getPlayerTickingChunks();
 -
@@ -155,7 +155,7 @@
 -        // Paper end - optimise chunk tick iteration
 -    }
 +    // EvangeliumServer start - unused
-+//    void collectSpawningChunks(List<LevelChunk> output) {
++//    void collectSpawningChunks(final List<LevelChunk> output) {
 +//        // Paper start - optimise chunk tick iteration
 +//        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.level.chunk.LevelChunk> tickingChunks = ((ca.spottedleaf.moonrise.patches.chunk_tick_iteration.ChunkTickServerLevel)this.level).moonrise$getPlayerTickingChunks();
 +//
@@ -176,19 +176,19 @@
 +//    }
 +    // EvangeliumServer end - unused
  
-     void forEachBlockTickingChunk(Consumer<LevelChunk> action) {
+     public void forEachBlockTickingChunk(final Consumer<LevelChunk> tickingChunkConsumer) {
          this.distanceManager.forEachEntityTickingChunk(chunkPos -> {
-@@ -820,7 +_,9 @@
+@@ -814,7 +_,9 @@
  
          Objects.checkFromIndexSize(0, len, raw.length);
          for (int i = 0; i < len; ++i) {
 +            try { // EvangeliumServer - concurrent modification
-             final ServerPlayer serverPlayer = raw[i];
-+            if (serverPlayer == null) continue; // EvangeliumServer - concurrent modification
+             final ServerPlayer player = raw[i];
++            if (player == null) continue; // EvangeliumServer - concurrent modification
              // Paper start - PlayerNaturallySpawnCreaturesEvent
              com.destroystokyo.paper.event.entity.PlayerNaturallySpawnCreaturesEvent event;
-             blockRange = 16384.0D;
-@@ -833,6 +_,7 @@
+             blockRange = 16384.0;
+@@ -827,6 +_,7 @@
                  // Paper end - PlayerNaturallySpawnCreaturesEvent
                  return true;
              }
@@ -196,17 +196,17 @@
          }
  
          return false;
-@@ -855,7 +_,9 @@
+@@ -849,7 +_,9 @@
  
          Objects.checkFromIndexSize(0, len, raw.length);
          for (int i = 0; i < len; ++i) {
 +            try { // EvangeliumServer - concurrent modification
              final ServerPlayer player = raw[i];
 +            if (player == null) continue; // EvangeliumServer - concurrent modification
-             if (this.playerIsCloseEnoughForSpawning(player, chunkPos, 16384.0D)) { // Spigot
+             if (this.playerIsCloseEnoughForSpawning(player, pos, 16384.0D)) { // Spigot
                  if (ret == null) {
                      ret = new ArrayList<>(len - i);
-@@ -864,6 +_,7 @@
+@@ -858,6 +_,7 @@
                      ret.add(player);
                  }
              }
@@ -214,138 +214,188 @@
          }
  
          return ret == null ? new ArrayList<>() : ret;
-@@ -985,9 +_,9 @@
-     public void addEntity(Entity entity) {
+@@ -983,9 +_,9 @@
+     protected void addEntity(final Entity entity) {
          org.spigotmc.AsyncCatcher.catchOp("entity track"); // Spigot
          // Paper start - ignore and warn about illegal addEntity calls instead of crashing server
 -        if (!entity.valid || entity.level() != this.level || this.entityMap.containsKey(entity.getId())) {
 +        if (!entity.valid || entity.level() != this.level || this.entityConcurrentMap.containsKey(entity.getId())) { // EvangeliumServer - use entityConcurrentMap
-             LOGGER.error("Illegal ChunkMap::addEntity for world " + this.level.getWorld().getName()
+             LOGGER.error("Illegal ChunkMap::addEntity for world " + io.papermc.paper.util.MCUtil.getLevelName(this.level)
 -                + ": " + entity  + (this.entityMap.containsKey(entity.getId()) ? " ALREADY CONTAINED (This would have crashed your server)" : ""), new Throwable());
 +                + ": " + entity  + (this.entityConcurrentMap.containsKey(entity.getId()) ? " ALREADY CONTAINED (This would have crashed your server)" : ""), new Throwable()); // EvangeliumServer - use entityConcurrentMap
              return;
          }
          // Paper end - ignore and warn about illegal addEntity calls instead of crashing server
-@@ -998,11 +_,12 @@
-             i = org.spigotmc.TrackingRange.getEntityTrackingRange(entity, i); // Spigot
-             if (i != 0) {
-                 int updateInterval = type.updateInterval();
+@@ -995,26 +_,28 @@
+             int range = type.clientTrackingRange() * 16;
+             range = org.spigotmc.TrackingRange.getEntityTrackingRange(entity, range); // Spigot
+             if (range != 0) {
 -                if (this.entityMap.containsKey(entity.getId())) {
 +                if (this.entityConcurrentMap.containsKey(entity.getId())) { // EvangeliumServer - use entityConcurrentMap
                      throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Entity is already tracked!"));
-                 } else {
-                     ChunkMap.TrackedEntity trackedEntity = new ChunkMap.TrackedEntity(entity, i, updateInterval, type.trackDeltas());
--                    this.entityMap.put(entity.getId(), trackedEntity);
-+                    this.entityConcurrentMap.put(entity.getId(), trackedEntity); // EvangeliumServer - use entityConcurrentMap
-+                    this.level.getChunkSource().tickingRegions.addTrackedEntity(entity); // EvangeliumServer
-                     // Paper start - optimise entity tracker
-                     if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity() != null) {
-                         throw new IllegalStateException("Entity is already tracked");
-@@ -1012,8 +_,9 @@
-                     trackedEntity.updatePlayers(this.level.players());
-                     if (entity instanceof ServerPlayer serverPlayer) {
-                         this.updatePlayerStatus(serverPlayer, true);
-+                        if (true) return; // EvangeliumServer - handled elsewhere
+                 }
  
--                        for (ChunkMap.TrackedEntity trackedEntity1 : this.entityMap.values()) {
-+                        for (ChunkMap.TrackedEntity trackedEntity1 : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
-                             if (trackedEntity1.entity != serverPlayer) {
-                                 trackedEntity1.updatePlayer(serverPlayer);
-                             }
-@@ -1029,13 +_,14 @@
-         if (entity instanceof ServerPlayer serverPlayer) {
-             this.updatePlayerStatus(serverPlayer, false);
+                 UpdateInterval updateInterval = type.hasUpdateInterval() ? UpdateInterval.periodic(type.updateInterval()) : UpdateInterval.NEVER;
+                 ChunkMap.TrackedEntity trackedEntity = new ChunkMap.TrackedEntity(entity, range, updateInterval, type.trackDeltas());
+-                this.entityMap.put(entity.getId(), trackedEntity);
++                this.entityConcurrentMap.put(entity.getId(), trackedEntity); // EvangeliumServer - use entityConcurrentMap
++                this.level.getChunkSource().tickingRegions.addTrackedEntity(entity); // EvangeliumServer
+                 // Paper start - optimise entity tracker
+                 if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity() != null) {
+                     throw new IllegalStateException("Entity is already tracked");
+                 }
+                 ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(trackedEntity);
+                 // note: the tick loop is OK when adding entities
+-                this.trackerEntities.add(entity);
++                // this.trackerEntities.add(entity); // EvangeliumServer - remove trackerEntities, handled ourselves
+                 // Paper end - optimise entity tracker
+                 trackedEntity.updatePlayers(this.level.players());
+                 if (entity instanceof ServerPlayer player) {
+                     this.updatePlayerStatus(player, true);
++                    if (true) return; // EvangeliumServer - handled elsewhere
+ 
+-                    for (ChunkMap.TrackedEntity e : this.entityMap.values()) {
++                    for (ChunkMap.TrackedEntity e : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
+                         if (e.entity != player) {
+                             e.updatePlayer(player);
+                         }
+@@ -1029,19 +_,20 @@
+         if (entity instanceof ServerPlayer player) {
+             this.updatePlayerStatus(player, false);
  
 -            for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
 +            for (ChunkMap.TrackedEntity trackedEntity : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
-                 trackedEntity.removePlayer(serverPlayer);
+                 trackedEntity.removePlayer(player);
              }
          }
  
--        ChunkMap.TrackedEntity trackedEntity1 = this.entityMap.remove(entity.getId());
-+        ChunkMap.TrackedEntity trackedEntity1 = this.entityConcurrentMap.remove(entity.getId()); // EvangeliumServer - use entityConcurrentMap
-         if (trackedEntity1 != null) {
+-        ChunkMap.TrackedEntity trackedEntity = this.entityMap.remove(entity.getId());
++        ChunkMap.TrackedEntity trackedEntity = this.entityConcurrentMap.remove(entity.getId()); // EvangeliumServer - use entityConcurrentMap
+         if (trackedEntity != null) {
 +            this.level.getChunkSource().tickingRegions.removeTrackedEntity(entity); // EvangeliumServer - only remove if it actually existed
-             trackedEntity1.broadcastRemoved();
+             trackedEntity.broadcastRemoved();
          }
-         ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(null); // Paper - optimise entity tracker
-@@ -1043,22 +_,25 @@
+         // Paper start - optimise entity tracker
+         ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$setTrackedEntity(null);
+-        this.checkIteratingTrackerEntities();
+-        this.trackerEntities.remove(entity);
++        // this.checkIteratingTrackerEntities(); // EvangeliumServer - remove trackerEntities, handled ourselves
++        // this.trackerEntities.remove(entity); // EvangeliumServer - remove trackerEntities, handled ourselves
+         // Paper end - optimise entity tracker
+     }
  
+@@ -1081,38 +_,43 @@
+     // Paper end - rewrite chunk system
      // Paper start - optimise entity tracker
-     private void newTrackerTick() {
-+        if (true) return; // EvangeliumServer - handle ourselves
-         final ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup entityLookup = (ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup)((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getEntityLookup();;
- 
--        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = entityLookup.trackerEntities;
--        final Entity[] trackerEntitiesRaw = trackerEntities.getRawDataUnchecked();
--        for (int i = 0, len = trackerEntities.size(); i < len; ++i) {
--            final Entity entity = trackerEntitiesRaw[i];
--            final ChunkMap.TrackedEntity tracker = ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity();
--            if (tracker == null) {
--                continue;
--            }
--            ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkData().nearbyPlayers);
--            if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$hasPlayers()
--                || ((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkStatus().isOrAfter(FullChunkStatus.ENTITY_TICKING)) {
--                tracker.serverEntity.sendChanges();
--            }
+     private static final Entity[] EMPTY_ENTITY_ARRAY = new Entity[0];
+-    private ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_ENTITY_ARRAY);
+-    private boolean iteratingTrackerEntities = false;
+-
+-    private void checkIteratingTrackerEntities() {
+-        if (!this.iteratingTrackerEntities) {
+-            return;
 -        }
+-
+-        this.trackerEntities = this.trackerEntities.copy();
+-        this.iteratingTrackerEntities = false;
+-    }
++    // EvangeliumServer start - remove trackerEntities, handled ourselves
++//    private ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = new ca.spottedleaf.moonrise.common.list.ReferenceList<>(EMPTY_ENTITY_ARRAY);
++//    private boolean iteratingTrackerEntities = false;
++//
++//    private void checkIteratingTrackerEntities() {
++//        if (!this.iteratingTrackerEntities) {
++//            return;
++//        }
++//
++//        this.trackerEntities = this.trackerEntities.copy();
++//        this.iteratingTrackerEntities = false;
++//    }
++    // EvangeliumServer end - remove trackerEntities, handled ourselves
+ 
+     private void newTrackerTick() {
+-        this.iteratingTrackerEntities = true;
+-        try {
+-            final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = this.trackerEntities;
+-            final Entity[] trackerEntitiesRaw = trackerEntities.getRawDataUnchecked();
+-            for (int i = 0, len = trackerEntities.size(); i < len; ++i) {
+-                final Entity entity = trackerEntitiesRaw[i];
+-                final ChunkMap.TrackedEntity tracker = ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity();
+-                if (tracker == null) {
+-                    continue;
+-                }
+-                ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkData().nearbyPlayers);
+-                if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$hasPlayers()
+-                    || ((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkStatus().isOrAfter(FullChunkStatus.ENTITY_TICKING)) {
+-                    tracker.serverEntity.sendChanges();
+-                }
+-            }
+-        } finally {
+-            this.iteratingTrackerEntities = false;
+-        }
++        if (true) return; // EvangeliumServer - handle ourselves
 +        // EvangeliumServer start - remove trackerEntities, handled ourselves
-+//        final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = entityLookup.trackerEntities;
-+//        final Entity[] trackerEntitiesRaw = trackerEntities.getRawDataUnchecked();
-+//        for (int i = 0, len = trackerEntities.size(); i < len; ++i) {
-+//            final Entity entity = trackerEntitiesRaw[i];
-+//            final ChunkMap.TrackedEntity tracker = ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity();
-+//            if (tracker == null) {
-+//                continue;
++//        this.iteratingTrackerEntities = true;
++//        try {
++//            final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> trackerEntities = this.trackerEntities;
++//            final Entity[] trackerEntitiesRaw = trackerEntities.getRawDataUnchecked();
++//            for (int i = 0, len = trackerEntities.size(); i < len; ++i) {
++//                final Entity entity = trackerEntitiesRaw[i];
++//                final ChunkMap.TrackedEntity tracker = ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerEntity)entity).moonrise$getTrackedEntity();
++//                if (tracker == null) {
++//                    continue;
++//                }
++//                ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkData().nearbyPlayers);
++//                if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$hasPlayers()
++//                    || ((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkStatus().isOrAfter(FullChunkStatus.ENTITY_TICKING)) {
++//                    tracker.serverEntity.sendChanges();
++//                }
 +//            }
-+//            ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkData().nearbyPlayers);
-+//            if (((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$hasPlayers()
-+//                || ((ca.spottedleaf.moonrise.patches.chunk_system.entity.ChunkSystemEntity)entity).moonrise$getChunkStatus().isOrAfter(FullChunkStatus.ENTITY_TICKING)) {
-+//                tracker.serverEntity.sendChanges();
-+//            }
++//        } finally {
++//            this.iteratingTrackerEntities = false;
 +//        }
 +        // EvangeliumServer end - remove trackerEntities, handled ourselves
      }
      // Paper end - optimise entity tracker
  
-@@ -1074,7 +_,7 @@
-         List<ServerPlayer> list = Lists.newArrayList();
-         List<ServerPlayer> list1 = this.level.players();
+@@ -1128,7 +_,7 @@
+         List<ServerPlayer> movedPlayers = Lists.newArrayList();
+         List<ServerPlayer> players = this.level.players();
  
 -        for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
 +        for (ChunkMap.TrackedEntity trackedEntity : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
-             SectionPos sectionPos = trackedEntity.lastSectionPos;
-             SectionPos sectionPos1 = SectionPos.of(trackedEntity.entity);
-             boolean flag = !Objects.equals(sectionPos, sectionPos1);
-@@ -1094,40 +_,40 @@
+             SectionPos oldPos = trackedEntity.lastSectionPos;
+             SectionPos newPos = SectionPos.of(trackedEntity.entity);
+             boolean sectionPosChanged = !Objects.equals(oldPos, newPos);
+@@ -1147,14 +_,14 @@
          }
  
-         if (!list.isEmpty()) {
+         if (!movedPlayers.isEmpty()) {
 -            for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
 +            for (ChunkMap.TrackedEntity trackedEntity : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
-                 trackedEntity.updatePlayers(list);
+                 trackedEntity.updatePlayers(movedPlayers);
              }
          }
      }
  
-     public void sendToTrackingPlayers(Entity entity, Packet<? super ClientGamePacketListener> packet) {
+     public void sendToTrackingPlayers(final Entity entity, final Packet<? super ClientGamePacketListener> packet) {
 -        ChunkMap.TrackedEntity trackedEntity = this.entityMap.get(entity.getId());
 +        ChunkMap.TrackedEntity trackedEntity = entity.moonrise$getTrackedEntity(); // this.entityMap.get(entity.getId()); // EvangeliumServer - don't use map
          if (trackedEntity != null) {
              trackedEntity.sendToTrackingPlayers(packet);
          }
-     }
- 
-     public void sendToTrackingPlayersFiltered(Entity entity, Packet<? super ClientGamePacketListener> packet, Predicate<ServerPlayer> filter) {
+@@ -1163,26 +_,26 @@
+     public void sendToTrackingPlayersFiltered(
+         final Entity entity, final Packet<? super ClientGamePacketListener> packet, final Predicate<ServerPlayer> targetPredicate
+     ) {
 -        ChunkMap.TrackedEntity trackedEntity = this.entityMap.get(entity.getId());
 +        ChunkMap.TrackedEntity trackedEntity = entity.moonrise$getTrackedEntity(); // this.entityMap.get(entity.getId()); // EvangeliumServer - don't use map
          if (trackedEntity != null) {
-             trackedEntity.sendToTrackingPlayersFiltered(packet, filter);
+             trackedEntity.sendToTrackingPlayersFiltered(packet, targetPredicate);
          }
      }
  
-     protected void sendToTrackingPlayersAndSelf(Entity entity, Packet<? super ClientGamePacketListener> packet) {
+     protected void sendToTrackingPlayersAndSelf(final Entity entity, final Packet<? super ClientGamePacketListener> packet) {
 -        ChunkMap.TrackedEntity trackedEntity = this.entityMap.get(entity.getId());
 +        ChunkMap.TrackedEntity trackedEntity = entity.moonrise$getTrackedEntity(); // this.entityMap.get(entity.getId()); // EvangeliumServer - don't use map
          if (trackedEntity != null) {
@@ -353,27 +403,27 @@
          }
      }
  
-     public boolean isTrackedByAnyPlayer(Entity entity) {
+     public boolean isTrackedByAnyPlayer(final Entity entity) {
 -        ChunkMap.TrackedEntity trackedEntity = this.entityMap.get(entity.getId());
 +        ChunkMap.TrackedEntity trackedEntity = entity.moonrise$getTrackedEntity(); // this.entityMap.get(entity.getId()); // EvangeliumServer - don't use map
          return trackedEntity != null && !trackedEntity.seenBy.isEmpty();
      }
  
-     public void forEachEntityTrackedBy(ServerPlayer player, Consumer<Entity> action) {
--        for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
-+        for (ChunkMap.TrackedEntity trackedEntity : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
-             if (trackedEntity.seenBy.contains(player.connection)) {
-                 action.accept(trackedEntity.entity);
+     public void forEachEntityTrackedBy(final ServerPlayer player, final Consumer<Entity> consumer) {
+-        for (ChunkMap.TrackedEntity entity : this.entityMap.values()) {
++        for (ChunkMap.TrackedEntity entity : this.entityConcurrentMap.values()) { // EvangeliumServer - use entityConcurrentMap
+             if (entity.seenBy.contains(player.connection)) {
+                 consumer.accept(entity.entity);
              }
-@@ -1213,6 +_,7 @@
+@@ -1264,6 +_,7 @@
          private final int range;
-         SectionPos lastSectionPos;
+         private SectionPos lastSectionPos;
          public final Set<ServerPlayerConnection> seenBy = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>(); // Paper - Perf: optimise map impl
 +        public final ReentrantLock seenByLock = new ReentrantLock(); // EvangeliumServer - seenBy thread safety
  
          // Paper start - optimise entity tracker
          private long lastChunkUpdate = -1L;
-@@ -1238,21 +_,33 @@
+@@ -1289,21 +_,33 @@
              this.lastChunkUpdate = currChunkUpdate;
              this.lastTrackedChunk = chunk;
  
@@ -397,21 +447,22 @@
  
              if (lastChunkUpdate != currChunkUpdate || lastTrackedChunk != chunk) {
                  // need to purge any players possible not in the chunk list
-+                this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
++                this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
                  for (final ServerPlayerConnection conn : new java.util.ArrayList<>(this.seenBy)) {
                      final ServerPlayer player = conn.getPlayer();
                      if (!players.contains(player)) {
                          this.removePlayer(player);
                      }
                  }
-+                } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++                } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
              }
          }
  
-@@ -1304,6 +_,94 @@
+@@ -1354,6 +_,94 @@
+             this.range = range;
              this.lastSectionPos = SectionPos.of(entity);
          }
- 
++        
 +        // EvangeliumServer start - maximum trackers per entity
 +        private record DistancedServerPlayer(ServerPlayer serverPlayer, double distanceSqr, boolean hasBypassPerm) implements Comparable<DistancedServerPlayer> {
 +            DistancedServerPlayer(ServerPlayer serverPlayer, Entity entity) {
@@ -499,71 +550,70 @@
 +            }
 +        }
 +        // EvangeliumServer end - maximum trackers per entity
-+
-         @Override
-         public boolean equals(Object other) {
-             return other instanceof ChunkMap.TrackedEntity && ((ChunkMap.TrackedEntity)other).entity.getId() == this.entity.getId();
-@@ -1316,9 +_,13 @@
  
          @Override
-         public void sendToTrackingPlayers(Packet<? super ClientGamePacketListener> packet) {
-+            this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
-             for (ServerPlayerConnection serverPlayerConnection : this.seenBy) {
-                 serverPlayerConnection.send(packet);
+         public boolean equals(final Object obj) {
+@@ -1367,9 +_,13 @@
+ 
+         @Override
+         public void sendToTrackingPlayers(final Packet<? super ClientGamePacketListener> packet) {
++            this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
+             for (ServerPlayerConnection connection : this.seenBy) {
+                 connection.send(packet);
              }
-+            } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++            } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
 +
 +            new io.evangelium.server.event.BroadcastPacketEvent(ChunkMap.this.level.getWorld(), packet, this.entity.getBukkitEntity()).callEvent(); // EvangeliumServer - BroadcastPacketEvent
          }
  
          @Override
-@@ -1331,27 +_,33 @@
+@@ -1382,27 +_,33 @@
  
          @Override
-         public void sendToTrackingPlayersFiltered(Packet<? super ClientGamePacketListener> packet, Predicate<ServerPlayer> filter) {
-+            this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
-             for (ServerPlayerConnection serverPlayerConnection : this.seenBy) {
-                 if (filter.test(serverPlayerConnection.getPlayer())) {
-                     serverPlayerConnection.send(packet);
+         public void sendToTrackingPlayersFiltered(final Packet<? super ClientGamePacketListener> packet, final Predicate<ServerPlayer> targetPredicate) {
++            this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
+             for (ServerPlayerConnection connection : this.seenBy) {
+                 if (targetPredicate.test(connection.getPlayer())) {
+                     connection.send(packet);
                  }
              }
-+            } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++            } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
          }
  
          public void broadcastRemoved() {
-+            this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
-             for (ServerPlayerConnection serverPlayerConnection : this.seenBy) {
-                 this.serverEntity.removePairing(serverPlayerConnection.getPlayer());
++            this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
+             for (ServerPlayerConnection connection : this.seenBy) {
+                 this.serverEntity.removePairing(connection.getPlayer());
              }
-+            } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++            } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
          }
  
-         public void removePlayer(ServerPlayer player) {
+         public void removePlayer(final ServerPlayer player) {
              org.spigotmc.AsyncCatcher.catchOp("player tracker clear"); // Spigot
-+            this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
++            this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
              if (this.seenBy.remove(player.connection)) {
                  this.serverEntity.removePairing(player);
                  if (this.seenBy.isEmpty()) {
                      ChunkMap.this.level.debugSynchronizers().dropEntity(this.entity);
                  }
              }
-+            } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++            } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
          }
  
-         public void updatePlayer(ServerPlayer player) {
-@@ -1383,6 +_,7 @@
+         public void updatePlayer(final ServerPlayer player) {
+@@ -1436,6 +_,7 @@
                  }
                  // CraftBukkit end
-                 if (flag) {
-+                    this.seenByLock.lock(); try { // ShreededPaper - seenBy thread safety
+                 if (visibleToPlayer) {
++                    this.seenByLock.lock(); try { // EvangeliumServer - seenBy thread safety
                      if (this.seenBy.add(player.connection)) {
                          // Paper start - entity tracking events
                          if (io.papermc.paper.event.player.PlayerTrackEntityEvent.getHandlerList().getRegisteredListeners().length == 0 || new io.papermc.paper.event.player.PlayerTrackEntityEvent(player.getBukkitEntity(), this.entity.getBukkitEntity()).callEvent()) {
-@@ -1396,6 +_,7 @@
+@@ -1449,6 +_,7 @@
                          // Paper end - entity tracking events
                          this.serverEntity.onPlayerAdd(); // Paper - fix desync when a player is added to the tracker
                      }
-+                    } finally { this.seenByLock.unlock(); } // ShreededPaper - seenBy thread safety
++                    } finally { this.seenByLock.unlock(); } // EvangeliumServer - seenBy thread safety
                  } else {
                      this.removePlayer(player);
                  }

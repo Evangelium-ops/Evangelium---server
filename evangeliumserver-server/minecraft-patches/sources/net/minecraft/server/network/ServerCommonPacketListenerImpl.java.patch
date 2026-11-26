@@ -20,7 +20,7 @@
      private volatile boolean suspendFlushingOnServerThread = false;
      // CraftBukkit start
      public final org.bukkit.craftbukkit.CraftServer cserver;
-@@ -110,6 +_,7 @@
+@@ -109,6 +_,7 @@
          // Paper start - improve keepalives
          long now = System.nanoTime();
          io.papermc.paper.util.KeepAlive.PendingKeepAlive pending = this.keepAlive.pendingKeepAlives.peek();
@@ -28,23 +28,23 @@
          // Purpur start - Alternative Keepalive Handling
          if (org.purpurmc.purpur.PurpurConfig.useAlternateKeepAlive) {
              if (this.keepAlivePending && !keepAlives.isEmpty() && keepAlives.contains(packet.getId())) {
-@@ -283,7 +_,7 @@
+@@ -276,7 +_,7 @@
          this.disconnect(DISCONNECT_UNEXPECTED_QUERY, io.papermc.paper.connection.DisconnectionReason.INVALID_COOKIE); // Paper - kick event cause
      }
  
 -    protected void keepConnectionAlive() {
 +    public void keepConnectionAlive() { // EvangeliumServer - make public
          Profiler.get().push("keepAlive");
-         long millis = Util.getMillis();
+         long now = Util.getMillis();
          // Paper start - improve keepalives
-@@ -312,12 +_,18 @@
+@@ -305,12 +_,18 @@
  
-                 io.papermc.paper.util.KeepAlive.PendingKeepAlive pka = new io.papermc.paper.util.KeepAlive.PendingKeepAlive(currTime, millis);
+                 io.papermc.paper.util.KeepAlive.PendingKeepAlive pka = new io.papermc.paper.util.KeepAlive.PendingKeepAlive(currTime, now);
                  this.keepAlive.pendingKeepAlives.add(pka);
 +                if (io.papermc.paper.util.KeepAlive.DEBUG) { // Evangelium - keepalive debug
 +                    final io.papermc.paper.util.KeepAlive ka = this.keepAlive;
-+                    ka.note("tx " + millis + " " + this.protocol() + " " + this.getClass().getSimpleName());
-+                    this.connection.send(new ClientboundKeepAlivePacket(pka.challengeId()), f -> ka.note("written " + millis + " ok=" + f.isSuccess() + (f.cause() != null ? " " + f.cause() : "")));
++                    ka.note("tx " + now + " " + this.protocol() + " " + this.getClass().getSimpleName());
++                    this.connection.send(new ClientboundKeepAlivePacket(pka.challengeId()), f -> ka.note("written " + now + " ok=" + f.isSuccess() + (f.cause() != null ? " " + f.cause() : "")));
 +                } else
                  this.send(new ClientboundKeepAlivePacket(pka.challengeId()));
              }
@@ -56,16 +56,16 @@
                  this.disconnect(TIMEOUT_DISCONNECTION_MESSAGE, io.papermc.paper.connection.DisconnectionReason.TIMEOUT); // Paper - kick event cause
                  // Paper end - improve keepalives
              }
-@@ -391,7 +_,7 @@
-         if (this.processedDisconnect) {
+@@ -384,7 +_,7 @@
+         if (!this.connection.isConnected()) {
              return;
          }
 -        if (!this.cserver.isPrimaryThread()) {
 +        if (this instanceof ServerGamePacketListenerImpl serverGamePacketListener ? !TickThread.isTickThreadFor(serverGamePacketListener.player) : !this.cserver.isPrimaryThread()) { // EvangeliumServer
              org.bukkit.craftbukkit.util.Waitable waitable = new org.bukkit.craftbukkit.util.Waitable() {
                  @Override
-                 protected Object evaluate() {
-@@ -400,9 +_,20 @@
+                 protected @Nullable Object evaluate() {
+@@ -393,9 +_,20 @@
                  }
              };
  
@@ -73,7 +73,7 @@
 +            // EvangeliumServer - run on player's thread
 +            if (this instanceof ServerGamePacketListenerImpl serverGamePacketListener) {
 +                if (TickThread.isTickThread()) {
-+                    serverGamePacketListener.player.level().chunkSource.tickingRegions.execute(RegionPos.forChunk(serverGamePacketListener.player.chunkPosition()), waitable);
++                    serverGamePacketListener.player.level().getChunkSource().tickingRegions.execute(RegionPos.forChunk(serverGamePacketListener.player.chunkPosition()), waitable);
 +                } else {
 +                    EvangeliumServer.runSync(serverGamePacketListener.player, waitable); // this.server.processQueue.add(waitable);
 +                }

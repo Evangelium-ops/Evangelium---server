@@ -64,7 +64,7 @@ public class LevelChunkRegion {
     }
 
     public void bumpLastAccess() {
-        this.lastAccessTick = this.level.levelData.getGameTime();
+        this.lastAccessTick = this.level.getGameTime();
     }
 
     public synchronized void add(LevelChunk levelChunk) {
@@ -80,11 +80,11 @@ public class LevelChunkRegion {
     private static final boolean PLANT_BUG = Boolean.getBoolean("evangeliumserver.spawnRequestsPlantBug"); // Evangelium - proves SpawnRequestCheck catches the old bug
 
     public synchronized void addPlayerTickingRequest(final ChunkPos chunkPos) {
-        this.playerTickingChunkRequests.addTo(chunkPos.toLong(), 1);
+        this.playerTickingChunkRequests.addTo(chunkPos.longKey(), 1);
     }
 
     public synchronized void removePlayerTickingRequest(final ChunkPos chunkPos) {
-        final long key = chunkPos.toLong();
+        final long key = chunkPos.longKey();
         if (this.playerTickingChunkRequests.addTo(key, -1) <= 1 || PLANT_BUG) { // PLANT_BUG: test hook, the old set behaviour
             this.playerTickingChunkRequests.remove(key);
         }
@@ -96,11 +96,11 @@ public class LevelChunkRegion {
     }
 
     public synchronized boolean isPlayerTickingRequested(final ChunkPos chunkPos) {
-        if (chunkPos.getRegionPos().toLong() != this.regionPos.toLong()) {
+        if (chunkPos.getRegionPos().longKey() != this.regionPos.longKey()) {
             throw new IllegalStateException("Chunk %s is not in region %s".formatted(chunkPos, this.regionPos));
         }
 
-        return this.playerTickingChunkRequests.containsKey(chunkPos.toLong());
+        return this.playerTickingChunkRequests.containsKey(chunkPos.longKey());
     }
 
     public synchronized void addTickingEntity(Entity entity) {
@@ -244,7 +244,7 @@ public class LevelChunkRegion {
     }
 
     public boolean isEmpty() {
-        return this.lastAccessTick < this.level.levelData.getGameTime() - 20
+        return this.lastAccessTick < this.level.getGameTime() - 20
                 && levelChunks.isEmpty()
                 && playerTickingChunkRequests.isEmpty()
                 && tickingEntities.size() == 0

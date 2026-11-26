@@ -41,7 +41,7 @@ public class EvangeliumServerChunkTicker {
         this.serverChunkCache = serverChunkCache;
     }
 
-    public CompletableFuture<Void> tickChunks(final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    public CompletableFuture<Void> tickChunks(final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         ServerLevel level = this.serverChunkCache.chunkMap.level;
         io.evangelium.server.region.SpawnRequestCheck.maybeCheck(level); // Evangelium - test hook -Devangeliumserver.verifySpawnRequests
         final long timingsStart = System.nanoTime(); // Evangelium - tick timings
@@ -49,14 +49,14 @@ public class EvangeliumServerChunkTicker {
         if (RegionTickDispatcher.ENABLED) {
             // Evangelium - lock-aware dispatcher: most expensive free region first, neighbours under a moved lock (RegionTickDispatcher)
             final List<LevelChunkRegion> regions = new ArrayList<>();
-            level.chunkSource.tickingRegions.forEach(regions::add);
+            level.getChunkSource().tickingRegions.forEach(regions::add);
             future = RegionTickDispatcher.tickAll(level.chunkScheduler.getRegionLocker(), regions,
-                    region -> this.tickRegionLocked(level, region, timingsStart, timeInhabited, filteredSpawningCategories, spawnState));
+                    region -> this.tickRegionLocked(level, region, timingsStart, filteredSpawningCategories, spawnState));
         } else {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        level.chunkSource.tickingRegions.forEach(
-                region -> futures.add(this.tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState))
+        level.getChunkSource().tickingRegions.forEach(
+                region -> futures.add(this.tickRegion(level, region, filteredSpawningCategories, spawnState))
         );
 
         future = CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new));
@@ -90,7 +90,7 @@ public class EvangeliumServerChunkTicker {
             List<CompletableFuture<Void>> futures = new ArrayList<>();
 
             trackedEntitiesWorkerList.clear();
-            level.chunkSource.tickingRegions.forEach(
+            level.getChunkSource().tickingRegions.forEach(
                     region -> region.forEachTrackedEntity(trackedEntitiesWorkerList::add)
             );
 
@@ -120,11 +120,11 @@ public class EvangeliumServerChunkTicker {
     }
 
     /** Evangelium - one region tick for RegionTickDispatcher: the caller holds the 3x3; failures are reported here as in tickRegion. */
-    private void tickRegionLocked(final ServerLevel level, final LevelChunkRegion region, final long scheduledAt, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    private void tickRegionLocked(final ServerLevel level, final LevelChunkRegion region, final long scheduledAt, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         final long started = System.nanoTime();
         TickTimings.add(TickTimings.Phase.REGION_LOCK_WAIT, started - scheduledAt);
         try {
-            this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
+            this._tickRegion(level, region, filteredSpawningCategories, spawnState);
         } catch (Throwable e) {
             REGION_FAILED.apply(region, e);
         } finally {
@@ -135,13 +135,13 @@ public class EvangeliumServerChunkTicker {
         }
     }
 
-    private CompletableFuture<Void> tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    private CompletableFuture<Void> tickRegion(final ServerLevel level, final LevelChunkRegion region, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         final long scheduledAt = System.nanoTime(); // Evangelium - tick timings
         return level.chunkScheduler.schedule(region.getRegionPos(), () -> {
             final long started = System.nanoTime();
             TickTimings.add(TickTimings.Phase.REGION_LOCK_WAIT, started - scheduledAt);
             try {
-                this._tickRegion(level, region, timeInhabited, filteredSpawningCategories, spawnState);
+                this._tickRegion(level, region, filteredSpawningCategories, spawnState);
             } finally {
                 TickTimings.region(System.nanoTime() - started);
                 RegionBudget.cost(region, System.nanoTime() - started); // Evangelium - kept in both modes
@@ -184,7 +184,7 @@ public class EvangeliumServerChunkTicker {
         return region != null && level.equals(region.getLevel()) && regionPos.equals(region.getRegionPos());
     }
 
-    private void _tickRegion(final ServerLevel level, final LevelChunkRegion region, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    private void _tickRegion(final ServerLevel level, final LevelChunkRegion region, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         try {
             OnDemandRegionAccess.clearTickAbandoned(); // Evangelium - plugin compatibility: a new tick starts clean
             currentlyTickingRegion.set(region);
@@ -227,14 +227,14 @@ public class EvangeliumServerChunkTicker {
                 // chunks at least three apart on several threads when the random tick speed makes it worth it (IntraRegion)
                 final List<LevelChunk> randomTickChunks = new ArrayList<>();
                 region.forEach(chunk -> {
-                    if (this._tickChunk(region, level, chunk, timeInhabited, filteredSpawningCategories, spawnState) && RegionBudget.ticks(chunk.getPos())) { // Evangelium - tick budget
+                    if (this._tickChunk(region, level, chunk, filteredSpawningCategories, spawnState) && RegionBudget.ticks(chunk.getPos())) { // Evangelium - tick budget
                         randomTickChunks.add(chunk);
                     }
                 });
                 final int randomTickSpeed = level.getGameRules().get(net.minecraft.world.level.gamerules.GameRules.RANDOM_TICK_SPEED);
                 final long randomStart = System.nanoTime(); // Evangelium - tick budget: divided work
                 if (IntraRegion.parallelRandomTicks(randomTickSpeed)) {
-                    IntraRegion.forEachChunkLocal(level, region, randomTickChunks, chunk -> chunk.getPos().toLong(), chunk -> level.tickChunk(chunk, randomTickSpeed));
+                    IntraRegion.forEachChunkLocal(level, region, randomTickChunks, chunk -> chunk.getPos().longKey(), chunk -> level.tickChunk(chunk, randomTickSpeed));
                 } else {
                     for (LevelChunk chunk : randomTickChunks) {
                         level.tickChunk(chunk, randomTickSpeed);
@@ -289,14 +289,14 @@ public class EvangeliumServerChunkTicker {
             });
             if (playerEntities != null && !playerEntities.isEmpty()) {
                 final long playersStart = System.nanoTime();
-                IntraRegion.forEachChunkLocal(level, region, playerEntities, entity -> entity.chunkPosition().toLong(), EvangeliumServerEntityTicker::tickEntity);
+                IntraRegion.forEachChunkLocal(level, region, playerEntities, entity -> entity.chunkPosition().longKey(), EvangeliumServerEntityTicker::tickEntity);
                 RegionBudget.notSliced(System.nanoTime() - playersStart);
             }
             if (chunkLocalEntities != null && !chunkLocalEntities.isEmpty()) {
                 if (chunkLocalEntities.size() < IntraRegion.MIN_ENTITIES) {
                     chunkLocalEntities.forEach(EvangeliumServerEntityTicker::tickEntity);
                 } else {
-                    IntraRegion.forEachChunkLocal(level, region, chunkLocalEntities, entity -> entity.chunkPosition().toLong(), EvangeliumServerEntityTicker::tickEntity);
+                    IntraRegion.forEachChunkLocal(level, region, chunkLocalEntities, entity -> entity.chunkPosition().longKey(), EvangeliumServerEntityTicker::tickEntity);
                 }
             }
 
@@ -321,7 +321,7 @@ public class EvangeliumServerChunkTicker {
                         EvangeliumServerPlayerTicker.tickPlayer(player);
                     }
                 }
-                IntraRegion.forEachChunkLocal(level, region, chunkLocalPlayers, player -> player.chunkPosition().toLong(), EvangeliumServerPlayerTicker::tickPlayer);
+                IntraRegion.forEachChunkLocal(level, region, chunkLocalPlayers, player -> player.chunkPosition().longKey(), EvangeliumServerPlayerTicker::tickPlayer);
             } else {
                 regionPlayers.forEach(EvangeliumServerPlayerTicker::tickPlayer);
             }
@@ -333,7 +333,7 @@ public class EvangeliumServerChunkTicker {
 
             if (region.isEmpty()) {
                 RegionBudget.forget(region); // Evangelium - tick budget
-                level.chunkSource.tickingRegions.remove(region.getRegionPos());
+                level.getChunkSource().tickingRegions.remove(region.getRegionPos());
             }
         } finally {
             currentlyTickingRegion.remove();
@@ -342,7 +342,7 @@ public class EvangeliumServerChunkTicker {
     }
 
     /** Evangelium - returns whether the chunk gets random ticks (they run afterwards, see _tickRegion). */
-    private boolean _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    private boolean _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
         if (levelChunk.moonrise$getChunkHolder().vanillaChunkHolder.hasChangesToBroadcast())
             EvangeliumServerChangesBroadcaster.add(levelChunk.moonrise$getChunkHolder().vanillaChunkHolder); // EvangeliumServer
 
@@ -358,18 +358,18 @@ public class EvangeliumServerChunkTicker {
         }
 
         if (spawnState != null && levelChunkRegion.isPlayerTickingRequested(levelChunk.getPos()) && RegionBudget.ticks(levelChunk.getPos())) { // Evangelium - tick budget: a slowed farm gets its mobs at its own speed
-            this._tickSpawningChunk(world, levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
+            this._tickSpawningChunk(world, levelChunk, filteredSpawningCategories, spawnState);
         }
 
         return true;
     }
 
-    private void _tickSpawningChunk(final ServerLevel world, final LevelChunk levelChunk, final long timeInhabited, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
-        if (!world.chunkSource.chunkMap.isChunkNearPlayer(world.chunkSource.chunkMap, levelChunk.getPos(), levelChunk)) {
+    private void _tickSpawningChunk(final ServerLevel world, final LevelChunk levelChunk, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+        if (!world.getChunkSource().chunkMap.isChunkNearPlayer(world.getChunkSource().chunkMap, levelChunk.getPos(), levelChunk)) {
             return;
         }
 
-        world.chunkSource.tickSpawningChunk(levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
+        world.getChunkSource().tickSpawningChunk(levelChunk, filteredSpawningCategories, spawnState);
     }
 
     public static boolean willTrySpawnMobsThisTick(final ServerLevel level) {

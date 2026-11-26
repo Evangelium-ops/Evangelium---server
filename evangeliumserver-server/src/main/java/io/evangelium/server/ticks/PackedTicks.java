@@ -189,7 +189,7 @@ public final class PackedTicks {
 
     /** Stable sort by chunk: keeps the order inside each chunk, so a same-chunk reorder is still a difference. */
     private static java.util.List<ScheduledTick<?>> byChunk(java.util.List<ScheduledTick<?>> list) {
-        list.sort(java.util.Comparator.comparingLong(t -> net.minecraft.world.level.ChunkPos.asLong(t.pos())));
+        list.sort(java.util.Comparator.comparingLong(t -> net.minecraft.world.level.ChunkPos.pack(t.pos())));
         return list;
     }
 

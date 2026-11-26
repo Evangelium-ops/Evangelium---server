@@ -12,10 +12,10 @@
      private static boolean hopperPush(final Level level, final Container destination, final Direction direction, final HopperBlockEntity hopper) {
 -        skipPushModeEventFire = skipHopperEvents;
 +        skipPushModeEventFireThreadLocal.set(skipHopperEvents); // EvangeliumServer - use thread local for skipPushModeEventFire
+         final long disallowedSlots = callPrepareTransferEvent(level, hopper, destination, true); // Paper - Add PrepareHopperTransferEvent
          boolean foundItem = false;
          for (int i = 0; i < hopper.getContainerSize(); ++i) {
-             final ItemStack item = hopper.getItem(i);
-@@ -238,7 +_,7 @@
+@@ -240,7 +_,7 @@
  
                  // We only need to fire the event once to give protection plugins a chance to cancel this event
                  // Because nothing uses getItem, every event call should end up the same result.
@@ -24,8 +24,8 @@
                      movedItem = callPushMoveEvent(destination, movedItem, hopper);
                      if (movedItem == null) { // cancelled
                          origItemStack.setCount(originalItemCount);
-@@ -274,7 +_,7 @@
-         container.setChanged(); // original logic always marks source inv as changed even if no move happens.
+@@ -275,7 +_,7 @@
+         final int movedItemCount = Math.min(level.spigotConfig.hopperAmount, originalItemCount);
          movedItem.setCount(movedItemCount);
  
 -        if (!skipPullModeEventFire) {
@@ -33,7 +33,7 @@
              movedItem = callPullMoveEvent(hopper, container, movedItem);
              if (movedItem == null) { // cancelled
                  origItemStack.setCount(originalItemCount);
-@@ -294,9 +_,9 @@
+@@ -295,9 +_,9 @@
                  origItemStack.setCount(originalItemCount - movedItemCount + remainingItemCount);
              }
  
@@ -45,7 +45,7 @@
              container.setChanged();
              return true;
          }
-@@ -320,7 +_,7 @@
+@@ -327,7 +_,7 @@
          );
          final boolean result = event.callEvent();
          if (!event.calledGetItem && !event.calledSetItem) {
@@ -54,8 +54,8 @@
          }
          if (!result) {
              applyCooldown(hopper);
-@@ -343,7 +_,7 @@
-         final io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent event = new io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent(sourceInventory, org.bukkit.craftbukkit.inventory.CraftItemStack.asCraftMirror(itemstack), destination, false);
+@@ -350,7 +_,7 @@
+         final io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent event = new io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent(sourceInventory, org.bukkit.craftbukkit.inventory.CraftItemStack.asBukkitMirror(itemstack), destination, false);
          final boolean result = event.callEvent();
          if (!event.calledGetItem && !event.calledSetItem) {
 -            skipPullModeEventFire = true;
@@ -63,33 +63,40 @@
          }
          if (!result) {
              applyCooldown(hopper);
-@@ -534,7 +_,7 @@
-         Container sourceContainer = getSourceContainer(level, hopper, blockPos, blockState);
-         if (sourceContainer != null) {
+@@ -505,7 +_,7 @@
+         Container container = getSourceContainer(level, hopper, blockPos, blockState);
+         if (container != null) {
              Direction direction = Direction.DOWN;
 -            skipPullModeEventFire = skipHopperEvents; // Paper - Perf: Optimize Hoppers
 +            skipPullModeEventFireThreadLocal.set(skipHopperEvents); // Paper - Perf: Optimize Hoppers // EvangeliumServer - use thread local for skipPullModeEventFire
+             final long disallowedSlots = callPrepareTransferEvent(level, container, hopper, false); // Paper - Add PrepareHopperTransferEvent
  
-             for (int i : getSlots(sourceContainer, direction)) {
-                 if (tryTakeInItemFromSlot(hopper, sourceContainer, i, direction, level)) { // Spigot
-@@ -674,7 +_,7 @@
-         ItemStack item = destination.getItem(slot);
-         if (canPlaceItemInContainer(destination, stack, slot, direction)) {
-             boolean flag = false;
--            boolean isEmpty = destination.isEmpty();
-+            boolean isEmpty = destination instanceof HopperBlockEntity && destination.isEmpty(); // Evangelium - only read for hoppers below; a chest scan per slot tried was wasted
-             if (item.isEmpty()) {
+             for (int slot : getSlots(container, direction)) {
+@@ -596,13 +_,11 @@
+             && !(from instanceof WorldlyContainer worldly && !worldly.canTakeItemThroughFace(slot, itemStack, direction));
+     }
+ 
+-    private static ItemStack tryMoveInItem(
+-        final @Nullable Container from, final Container container, ItemStack itemStack, final int slot, final @Nullable Direction direction
+-    ) {
++    private static ItemStack tryMoveInItem(@Nullable Container from, Container container, ItemStack itemStack, int slot, @Nullable Direction direction) {
+         ItemStack current = container.getItem(slot);
+         if (canPlaceItemInContainer(container, itemStack, slot, direction)) {
+             boolean success = false;
+-            boolean wasEmpty = container.isEmpty();
++            boolean wasEmpty = container instanceof HopperBlockEntity && container.isEmpty(); // Evangelium - only read for hoppers below; a chest scan per slot tried was wasted
+             if (current.isEmpty()) {
                  // Spigot start - SPIGOT-6693, SimpleContainer#setItem
                  ItemStack leftover = ItemStack.EMPTY; // Paper - Make hoppers respect inventory max stack size
-@@ -683,9 +_,9 @@
-                     stack = stack.split(destination.getMaxStackSize());
+@@ -611,9 +_,9 @@
+                     itemStack = itemStack.split(container.getMaxStackSize());
                  }
                  // Spigot end
 -                ignoreBlockEntityUpdates = true; // Paper - Perf: Optimize Hoppers
 +                ignoreBlockEntityUpdatesThreadLocal.set(true); // Paper - Perf: Optimize Hoppers // EvangeliumServer - use thread local for ignoreBlockEntityUpdates
-                 destination.setItem(slot, stack);
+                 container.setItem(slot, itemStack);
 -                ignoreBlockEntityUpdates = false; // Paper - Perf: Optimize Hoppers
 +                ignoreBlockEntityUpdatesThreadLocal.set(Boolean.FALSE); // Paper - Perf: Optimize Hoppers // EvangeliumServer - use thread local for ignoreBlockEntityUpdates // Evangelium - set, not remove: remove makes the next get rebuild the entry
-                 stack = leftover; // Paper - Make hoppers respect inventory max stack size
-                 flag = true;
-             } else if (canMergeItems(item, stack)) {
+                 itemStack = leftover; // Paper - Make hoppers respect inventory max stack size
+                 success = true;
+             } else if (canMergeItems(current, itemStack)) {

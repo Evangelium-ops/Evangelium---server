@@ -1,7 +1,7 @@
 --- a/net/minecraft/world/level/biome/BiomeManager.java
 +++ b/net/minecraft/world/level/biome/BiomeManager.java
 @@ -15,6 +_,40 @@
-     private final BiomeManager.NoiseBiomeSource noiseBiomeSource;
+     private final BiomeResolver noiseBiomeSource;
      private final long biomeZoomSeed;
  
 +    // Evangelium start - biome lookup cache: the 8 corner offsets of the last cell asked (shared between threads, so immutable)
@@ -38,33 +38,33 @@
 +    }
 +    // Evangelium end - biome lookup cache
 +
-     public BiomeManager(BiomeManager.NoiseBiomeSource noiseBiomeSource, long biomeZoomSeed) {
+     public BiomeManager(final BiomeResolver noiseBiomeSource, final long seed) {
          this.noiseBiomeSource = noiseBiomeSource;
-         this.biomeZoomSeed = biomeZoomSeed;
-@@ -41,6 +_,26 @@
-         int i6 = 0;
-         double d3 = Double.POSITIVE_INFINITY;
+         this.biomeZoomSeed = seed;
+@@ -45,6 +_,26 @@
+         int minI = 0;
+         double minFiddledDistance = Double.POSITIVE_INFINITY;
  
 +        // Evangelium start - biome lookup cache: same distances from cached offsets (same expression, same order)
 +        if (this.cacheFiddles) {
 +            Fiddles fiddles = this.lastFiddles;
-+            if (fiddles == null || fiddles.x != i3 || fiddles.y != i4 || fiddles.z != i5) {
-+                fiddles = new Fiddles(this.biomeZoomSeed, i3, i4, i5);
++            if (fiddles == null || fiddles.x != parentX || fiddles.y != parentY || fiddles.z != parentZ) {
++                fiddles = new Fiddles(this.biomeZoomSeed, parentX, parentY, parentZ);
 +                this.lastFiddles = fiddles;
 +            }
 +            double[] offsets = fiddles.offsets;
-+            for (int i7 = 0; i7 < 8; i7++) {
-+                double d4 = (i7 & 4) == 0 ? d : d - 1.0;
-+                double d5 = (i7 & 2) == 0 ? d1 : d1 - 1.0;
-+                double d6 = (i7 & 1) == 0 ? d2 : d2 - 1.0;
-+                double fiddledDistance = Mth.square(d6 + offsets[i7 * 3 + 2]) + Mth.square(d5 + offsets[i7 * 3 + 1]) + Mth.square(d4 + offsets[i7 * 3]);
-+                if (d3 > fiddledDistance) {
-+                    i6 = i7;
-+                    d3 = fiddledDistance;
++            for (int i = 0; i < 8; i++) {
++                double distanceX = (i & 4) == 0 ? fractX : fractX - 1.0;
++                double distanceY = (i & 2) == 0 ? fractY : fractY - 1.0;
++                double distanceZ = (i & 1) == 0 ? fractZ : fractZ - 1.0;
++                double next = Mth.square(distanceZ + offsets[i * 3 + 2]) + Mth.square(distanceY + offsets[i * 3 + 1]) + Mth.square(distanceX + offsets[i * 3]);
++                if (minFiddledDistance > next) {
++                    minI = i;
++                    minFiddledDistance = next;
 +                }
 +            }
 +        } else
 +        // Evangelium end - biome lookup cache
-         for (int i7 = 0; i7 < 8; i7++) {
-             boolean flag = (i7 & 4) == 0;
-             boolean flag1 = (i7 & 2) == 0;
+         for (int i = 0; i < 8; i++) {
+             boolean xEven = (i & 4) == 0;
+             boolean yEven = (i & 2) == 0;

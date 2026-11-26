@@ -1,17 +1,20 @@
 --- a/net/minecraft/world/level/LevelAccessor.java
 +++ b/net/minecraft/world/level/LevelAccessor.java
-@@ -28,12 +_,12 @@
+@@ -28,13 +_,13 @@
+     long nextSubTickCount();
  
      @Override
-     default <T> ScheduledTick<T> createTick(BlockPos pos, T type, int delay, TickPriority priority) {
--        return new ScheduledTick<>(type, pos, this.getGameTime() + delay, priority, this.nextSubTickCount());
-+        return new ScheduledTick<>(type, pos, this.getGameTime() + io.evangelium.server.threading.RegionBudget.delay(delay), priority, this.nextSubTickCount());
+-    default <T> ScheduledTick<T> createTick(final BlockPos pos, final T type, final int tickDelay, final TickPriority priority) {
+-        return new ScheduledTick<>(type, pos, this.getGameTime() + tickDelay, priority, this.nextSubTickCount());
++    default <T> ScheduledTick<T> createTick(BlockPos pos, T type, int tickDelay, TickPriority priority) {
++        return new ScheduledTick<>(type, pos, this.getGameTime() + io.evangelium.server.threading.RegionBudget.delay(tickDelay), priority, this.nextSubTickCount());
      }
  
      @Override
-     default <T> ScheduledTick<T> createTick(BlockPos pos, T type, int delay) {
--        return new ScheduledTick<>(type, pos, this.getGameTime() + delay, this.nextSubTickCount());
-+        return new ScheduledTick<>(type, pos, this.getGameTime() + io.evangelium.server.threading.RegionBudget.delay(delay), this.nextSubTickCount());
+-    default <T> ScheduledTick<T> createTick(final BlockPos pos, final T type, final int tickDelay) {
+-        return new ScheduledTick<>(type, pos, this.getGameTime() + tickDelay, this.nextSubTickCount());
++    default <T> ScheduledTick<T> createTick(BlockPos pos, T type, int tickDelay) {
++        return new ScheduledTick<>(type, pos, this.getGameTime() + io.evangelium.server.threading.RegionBudget.delay(tickDelay), this.nextSubTickCount());
      }
  
      LevelData getLevelData();

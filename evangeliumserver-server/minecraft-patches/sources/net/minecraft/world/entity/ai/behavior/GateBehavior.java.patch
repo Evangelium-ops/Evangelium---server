@@ -1,46 +1,48 @@
 --- a/net/minecraft/world/entity/ai/behavior/GateBehavior.java
 +++ b/net/minecraft/world/entity/ai/behavior/GateBehavior.java
-@@ -66,6 +_,25 @@
+@@ -77,7 +_,26 @@
+     }
  
      @Override
-     public final void tickOrStop(ServerLevel level, E entity, long gameTime) {
+-    public final void tickOrStop(final ServerLevel level, final E body, final long timestamp) {
++    public final void tickOrStop(ServerLevel level, E body, long timestamp) {
 +        // Evangelium start - indexed loops over the entries, no iterator or stream objects; same order, same calls
 +        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
 +            final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = this.behaviors.entries;
 +            final int size = entries.size();
 +            for (int i = 0; i < size; i++) {
-+                final BehaviorControl<? super E> behavior = entries.get(i).data;
++                final BehaviorControl<? super E> behavior = entries.get(i).getData();
 +                if (behavior.getStatus() == Behavior.Status.RUNNING) {
-+                    behavior.tickOrStop(level, entity, gameTime);
++                    behavior.tickOrStop(level, body, timestamp);
 +                }
 +            }
 +            for (int i = 0; i < size; i++) {
-+                if (entries.get(i).data.getStatus() == Behavior.Status.RUNNING) {
++                if (entries.get(i).getData().getStatus() == Behavior.Status.RUNNING) {
 +                    return;
 +                }
 +            }
-+            this.doStop(level, entity, gameTime);
++            this.doStop(level, body, timestamp);
 +            return;
 +        }
 +        // Evangelium end
          // Paper start - Perf: Remove streams from hot code
          for (final BehaviorControl<? super E> behavior : this.behaviors) {
              if (behavior.getStatus() == Behavior.Status.RUNNING) {
-@@ -81,6 +_,21 @@
+@@ -93,6 +_,21 @@
      @Override
-     public final void doStop(ServerLevel level, E entity, long gameTime) {
+     public final void doStop(final ServerLevel level, final E body, final long timestamp) {
          this.status = Behavior.Status.STOPPED;
 +        // Evangelium start - indexed loop
 +        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
 +            final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = this.behaviors.entries;
 +            for (int i = 0, size = entries.size(); i < size; i++) {
-+                final BehaviorControl<? super E> behavior = entries.get(i).data;
++                final BehaviorControl<? super E> behavior = entries.get(i).getData();
 +                if (behavior.getStatus() == Behavior.Status.RUNNING) {
-+                    behavior.doStop(level, entity, gameTime);
++                    behavior.doStop(level, body, timestamp);
 +                }
 +            }
 +            for (final MemoryModuleType<?> exitErasedMemory : this.exitErasedMemories) {
-+                entity.getBrain().eraseMemory(exitErasedMemory);
++                body.getBrain().eraseMemory(exitErasedMemory);
 +            }
 +            return;
 +        }
@@ -48,37 +50,45 @@
          // Paper start - Perf: Remove streams from hot code
          for (final BehaviorControl<? super E> behavior : this.behaviors) {
              if (behavior.getStatus() == Behavior.Status.RUNNING) {
-@@ -127,6 +_,16 @@
+@@ -134,9 +_,17 @@
+         RUN_ONE {
              // Paper start - Perf: Remove streams from hot code
              @Override
-             public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E owner, long gameTime) {
+-            public <E extends LivingEntity> void apply(
+-                final ShufflingList<BehaviorControl<? super E>> behaviors, final ServerLevel level, final E body, final long timestamp
+-            ) {
++            public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E body, long timestamp) {
 +                if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) { // Evangelium - indexed loop
 +                    final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = behaviors.entries;
 +                    for (int i = 0, size = entries.size(); i < size; i++) {
-+                        final BehaviorControl<? super E> behavior = entries.get(i).data;
-+                        if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, owner, gameTime)) {
++                        final BehaviorControl<? super E> behavior = entries.get(i).getData();
++                        if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, body, timestamp)) {
 +                            break;
 +                        }
 +                    }
 +                    return;
 +                }
                  for (final BehaviorControl<? super E> behavior : behaviors) {
-                     if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, owner, gameTime)) {
+                     if (behavior.getStatus() == Behavior.Status.STOPPED && behavior.tryStart(level, body, timestamp)) {
                          break;
-@@ -139,6 +_,16 @@
+@@ -148,9 +_,17 @@
+         TRY_ALL {
              // Paper start - Perf: Remove streams from hot code
              @Override
-             public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E owner, long gameTime) {
+-            public <E extends LivingEntity> void apply(
+-                final ShufflingList<BehaviorControl<? super E>> behaviors, final ServerLevel level, final E body, final long timestamp
+-            ) {
++            public <E extends LivingEntity> void apply(ShufflingList<BehaviorControl<? super E>> behaviors, ServerLevel level, E body, long timestamp) {
 +                if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) { // Evangelium - indexed loop
 +                    final List<ShufflingList.WeightedEntry<BehaviorControl<? super E>>> entries = behaviors.entries;
 +                    for (int i = 0, size = entries.size(); i < size; i++) {
-+                        final BehaviorControl<? super E> behavior = entries.get(i).data;
++                        final BehaviorControl<? super E> behavior = entries.get(i).getData();
 +                        if (behavior.getStatus() == Behavior.Status.STOPPED) {
-+                            behavior.tryStart(level, owner, gameTime);
++                            behavior.tryStart(level, body, timestamp);
 +                        }
 +                    }
 +                    return;
 +                }
                  for (final BehaviorControl<? super E> behavior : behaviors) {
                      if (behavior.getStatus() == Behavior.Status.STOPPED) {
-                         behavior.tryStart(level, owner, gameTime);
+                         behavior.tryStart(level, body, timestamp);

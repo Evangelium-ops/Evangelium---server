@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/Mob.java
 +++ b/net/minecraft/world/entity/Mob.java
-@@ -811,8 +_,12 @@
+@@ -838,8 +_,12 @@
          }
      }
  
@@ -13,16 +13,16 @@
          this.noActionTime++;
          // Paper start - Allow nerfed mobs to jump and float
          if (!this.aware) {
-@@ -828,7 +_,20 @@
+@@ -855,7 +_,20 @@
          this.sensing.tick();
-         profilerFiller.pop();
-         int i = this.tickCount + this.getId();
--        if (i % 2 != 0 && this.tickCount > 1) {
+         profiler.pop();
+         int idBasedTickCount = this.tickCount + this.getId();
+-        if (idBasedTickCount % 2 != 0 && this.tickCount > 1) {
 +        int far = io.evangelium.server.ai.FarAi.interval(this); // EvangeliumServer - far mobs think less often
 +        if (far > 1) {
 +            // far from every player: goals and targets are looked at every far ticks (movement below still runs every tick); their
 +            // chances and timers are scaled to that spacing (Goal.reducedTickDelay), so a far mob acts on vanilla's real-time schedule
-+            if (i % far == 0) {
++            if (idBasedTickCount % far == 0) {
 +                io.evangelium.server.ai.FarAi.enter(far);
 +                try {
 +                    this.targetSelector.tick();
@@ -31,17 +31,17 @@
 +                    io.evangelium.server.ai.FarAi.exit();
 +                }
 +            }
-+        } else if (i % 2 != 0 && this.tickCount > 1) {
-             profilerFiller.push("targetSelector");
++        } else if (idBasedTickCount % 2 != 0 && this.tickCount > 1) {
+             profiler.push("targetSelector");
              this.targetSelector.tickRunningGoals(false);
-             profilerFiller.pop();
-@@ -859,6 +_,9 @@
+             profiler.pop();
+@@ -886,6 +_,9 @@
          this.jumpControl.tick();
-         profilerFiller.pop();
-         profilerFiller.pop();
+         profiler.pop();
+         profiler.pop();
 +        } finally {
 +            io.evangelium.server.ai.AiDiagnostics.end(this, aiStarted);
 +        }
      }
  
-     protected void customServerAiStep(ServerLevel level) {
+     protected void customServerAiStep(final ServerLevel level) {

@@ -1,9 +1,12 @@
 --- a/net/minecraft/world/entity/ai/goal/RemoveBlockGoal.java
 +++ b/net/minecraft/world/entity/ai/goal/RemoveBlockGoal.java
-@@ -146,9 +_,76 @@
-         }
+@@ -143,9 +_,76 @@
+         return null;
      }
  
+-    @Override
+-    protected boolean isValidTarget(final LevelReader level, final BlockPos pos) {
+-        ChunkAccess chunk = level.getChunkIfLoadedImmediately(pos.getX() >> 4, pos.getZ() >> 4); // Paper - Prevent AI rules from loading chunks
 +    // Evangelium start - one search touches thousands of blocks of a few chunks; it runs at once on the owning thread, so a chunk cannot go away during it
 +    private @Nullable ChunkAccess scanChunk;
 +    private boolean scanning;
@@ -71,9 +74,8 @@
 +    }
 +    // Evangelium end
 +
-     @Override
-     protected boolean isValidTarget(LevelReader level, BlockPos pos) {
--        ChunkAccess chunk = level.getChunkIfLoadedImmediately(pos.getX() >> 4, pos.getZ() >> 4); // Paper - Prevent AI rules from loading chunks
++    @Override
++    protected boolean isValidTarget(LevelReader level, BlockPos pos) {
 +        ChunkAccess chunk = this.chunkAt(level, pos); // Evangelium
          return chunk != null
              && chunk.getBlockState(pos).is(this.blockToRemove)

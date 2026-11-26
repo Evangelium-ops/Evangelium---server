@@ -12,5 +12,5 @@
 +        // EvangeliumServer end - Add getBlockPos() for CloseableCommandBlockSource
 +
          @Override
-         public void setCommand(String command) {
+         public void setCommand(final String command) {
              super.setCommand(command);

@@ -24,21 +24,21 @@
 +    private final Map<String, PlayerTeam> teamsByName = new ConcurrentHashMap<>(); // EvangeliumServer - concurrent
 +    private final Map<String, PlayerTeam> teamsByPlayer = new ConcurrentHashMap<>(); // EvangeliumServer - concurrent
  
-     public @Nullable Objective getObjective(@Nullable String name) {
+     public @Nullable Objective getObjective(final @Nullable String name) {
          return this.objectivesByName.get(name);
-@@ -236,7 +_,7 @@
+@@ -234,7 +_,7 @@
          this.onObjectiveRemoved(objective);
      }
  
--    public void setDisplayObjective(DisplaySlot slot, @Nullable Objective objective) {
-+    public synchronized void setDisplayObjective(DisplaySlot slot, @Nullable Objective objective) { // EvangeliumServer - synchronized
+-    public void setDisplayObjective(final DisplaySlot slot, final @Nullable Objective objective) {
++    public synchronized void setDisplayObjective(final DisplaySlot slot, final @Nullable Objective objective) { // EvangeliumServer - synchronized
          this.displayObjectives.put(slot, objective);
      }
  
-@@ -245,6 +_,7 @@
+@@ -243,6 +_,7 @@
      }
  
-     public @Nullable PlayerTeam getPlayerTeam(String name) {
+     public @Nullable PlayerTeam getPlayerTeam(final String name) {
 +        if (name == null) return null; // EvangeliumServer
          return this.teamsByName.get(name);
      }

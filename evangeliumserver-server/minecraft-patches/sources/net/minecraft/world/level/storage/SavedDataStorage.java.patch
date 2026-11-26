@@ -1,0 +1,70 @@
+--- a/net/minecraft/world/level/storage/SavedDataStorage.java
++++ b/net/minecraft/world/level/storage/SavedDataStorage.java
+@@ -18,6 +_,8 @@
+ import java.util.Optional;
+ import java.util.Map.Entry;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ConcurrentHashMap;
++
+ import net.minecraft.SharedConstants;
+ import net.minecraft.core.HolderLookup;
+ import net.minecraft.nbt.CompoundTag;
+@@ -40,7 +_,7 @@
+ 
+ public class SavedDataStorage implements AutoCloseable {
+     private static final Logger LOGGER = LogUtils.getLogger();
+-    public final Map<SavedDataType<?>, Optional<SavedData>> cache = new HashMap<>();
++    public final Map<SavedDataType<?>, Optional<SavedData>> cache = new ConcurrentHashMap<>(); // EvangeliumServer - thread-safe
+     private final DataFixer fixerUpper;
+     private final HolderLookup.Provider registries;
+     private final Path dataFolder;
+@@ -63,24 +_,35 @@
+     }
+ 
+     public <T extends SavedData> T computeIfAbsent(final SavedDataType<T> type) {
+-        T data = this.get(type);
+-        if (data != null) {
+-            return data;
++        // EvangeliumServer start - thread-safe
++        // Fast path: ConcurrentHashMap#compute always locks the bin, even when the value is already present.
++        // This is called very frequently (eg. WorldBorder), so avoid lock contention with a lock-free get first.
++        final Optional<SavedData> existing = this.cache.get(type);
++        if (existing != null && existing.orElse(null) != null) {
++            return (T) existing.get();
+         }
+-
+-        T newData = (T)type.constructor().get();
+-        this.set(type, newData);
+-        return newData;
++        return (T) this.cache.compute(type, (key, optional) -> {
++            if (optional == null) {
++                optional = Optional.ofNullable(this.readSavedData(type));
++            }
++            if (optional.isPresent()) {
++                return optional;
++            }
++            T data = this.readSavedData(type);
++            if (data != null) {
++                return Optional.of(data);
++            }
++            return Optional.of(type.constructor().get());
++        }).orElse(null);
++        // EvangeliumServer end - thread-safe
+     }
+ 
+     public <T extends SavedData> @Nullable T get(final SavedDataType<T> type) {
+-        Optional<SavedData> data = this.cache.get(type);
+-        if (data == null) {
+-            data = Optional.ofNullable(this.readSavedData(type));
+-            this.cache.put(type, data);
+-        }
+-
+-        return (T)data.orElse(null);
++        // EvangeliumServer start - thread-safe
++        return (T) this.cache.computeIfAbsent(type, (key) -> {
++            return Optional.ofNullable(this.readSavedData(type));
++        }).orElse(null);
++        // EvangeliumServer end - thread-safe
+     }
+ 
+     private <T extends SavedData> @Nullable T readSavedData(final SavedDataType<T> type) {

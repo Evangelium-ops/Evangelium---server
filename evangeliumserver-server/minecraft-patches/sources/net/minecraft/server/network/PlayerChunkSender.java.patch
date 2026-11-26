@@ -23,14 +23,14 @@
      public static final float MAX_CHUNKS_PER_TICK = 64.0F;
      private static final float START_CHUNKS_PER_TICK = 9.0F;
 @@ -81,7 +_,22 @@
-     public static void sendChunk(ServerGamePacketListenerImpl packetListener, ServerLevel level, LevelChunk chunk) { // Paper - rewrite chunk system - public
+     public static void sendChunk(final ServerGamePacketListenerImpl connection, final ServerLevel level, final LevelChunk chunk) { // Paper - rewrite chunk system - public
          // Paper start - Anti-Xray
-         final boolean shouldModify = level.chunkPacketBlockController.shouldModify(packetListener.player, chunk);
--        packetListener.send(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify));
+         final boolean shouldModify = level.chunkPacketBlockController.shouldModify(connection.player, chunk);
+-        connection.send(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify));
 +        // EvangeliumServer start - Cache chunk packet
 +        Reference<ClientboundLevelChunkWithLightPacket> cachedChunkPacket = chunk.cachedChunkPacket;
 +        ClientboundLevelChunkWithLightPacket chunkPacket;
-+        if (cachedChunkPacket == null || (chunkPacket = cachedChunkPacket.get()) == null || chunkPacket.modifyBlocks != shouldModify) {
++        if (cachedChunkPacket == null || (chunkPacket = chunk.cachedChunkPacket.get()) == null || chunkPacket.modifyBlocks() != shouldModify) {
 +            final long buildStart = io.evangelium.server.util.ChunkPacketCacheStats.ON ? System.nanoTime() : 0L; // Evangelium - cache counters
 +            chunkPacket = new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null, shouldModify);
 +            if (io.evangelium.server.util.ChunkPacketCacheStats.ON) { // Evangelium start - cache counters
@@ -41,7 +41,7 @@
 +            if (CHUNK_PACKET_CACHING) chunk.cachedChunkPacket = EvangeliumServerConfiguration.get().optimizations.chunkPacketCaching.useSoftReferences ? new SoftReference<>(chunkPacket) : new WeakReference<>(chunkPacket);
 +        } else if (io.evangelium.server.util.ChunkPacketCacheStats.ON) io.evangelium.server.util.ChunkPacketCacheStats.hit(level.getGameTime() - chunk.cachedChunkPacketLastAccessed); // Evangelium - cache counters
 +        chunk.cachedChunkPacketLastAccessed = level.getGameTime();
-+        packetListener.send(chunkPacket);
++        connection.send(chunkPacket);
 +        // EvangeliumServer end - Cache chunk packet
          // Paper end - Anti-Xray
          // Paper start - PlayerChunkLoadEvent

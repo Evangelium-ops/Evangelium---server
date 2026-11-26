@@ -1,21 +1,15 @@
 --- a/net/minecraft/world/entity/ai/memory/ExpirableValue.java
 +++ b/net/minecraft/world/entity/ai/memory/ExpirableValue.java
-@@ -36,6 +_,18 @@
-         return this.value;
+@@ -13,6 +_,12 @@
+         return new ExpirableValue<>(value, Optional.of(ticksUntilExpiry));
      }
  
-+    // Evangelium start - the Optional view of the (final) value, made once: brains read memories many times per tick
-+    private Optional<T> evangelium$optional;
-+
++    // Evangelium - the Optional view of the value, for Brain's memory reads
++    // shortcut: 26.3 made this a record, so the Optional is no longer cached in a field; cache it in Brain if profiling shows the allocation
 +    public Optional<T> evangelium$optional() {
-+        Optional<T> optional = this.evangelium$optional;
-+        if (optional == null) {
-+            this.evangelium$optional = optional = Optional.ofNullable(this.value);
-+        }
-+        return optional;
++        return Optional.ofNullable(this.value);
 +    }
-+    // Evangelium end
 +
-     public boolean hasExpired() {
-         return this.timeToLive <= 0L;
-     }
+     @Override
+     public String toString() {
+         return this.value + (this.timeToLive.isPresent() ? " (ttl: " + this.timeToLive.get() + ")" : "");

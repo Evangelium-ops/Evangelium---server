@@ -62,7 +62,7 @@ public final class RegistrySyncCache {
         if (entry == null || entry.registries != registries || entry.generation != generation) {
             DynamicOps<Tag> dynamicOps = registries.compositeAccess().createSerializationContext(NbtOps.INSTANCE);
             List<Map.Entry<ResourceKey<? extends Registry<?>>, List<RegistrySynchronization.PackedRegistryEntry>>> data = new ArrayList<>();
-            RegistrySynchronization.packRegistries(dynamicOps, registries.getAccessFrom(RegistryLayer.WORLDGEN), packs,
+            RegistrySynchronization.packRegistries(dynamicOps, registries.getAccessFrom(RegistryLayer.WORLD), packs,
                 (resourceKey, list) -> data.add(Map.entry(resourceKey, List.copyOf(list))));
             entry = new Entry(registries, generation, List.copyOf(data), Map.copyOf(TagNetworkSerialization.serializeTagsToNetwork(registries)));
             if (GENERATION.get() == generation) {

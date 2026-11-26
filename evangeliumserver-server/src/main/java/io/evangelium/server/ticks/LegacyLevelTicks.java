@@ -55,7 +55,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
     }
 
     public void addContainer(ChunkPos chunkPos, LegacyChunkTicks<T> chunkTicks) {
-        long packedChunkPos = chunkPos.toLong();
+        long packedChunkPos = chunkPos.longKey();
         this.allContainers.put(packedChunkPos, chunkTicks);
         ScheduledTick<T> scheduledTick = chunkTicks.peek();
         if (scheduledTick != null) {
@@ -66,7 +66,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
     }
 
     public void removeContainer(ChunkPos chunkPos) {
-        long packedChunkPos = chunkPos.toLong();
+        long packedChunkPos = chunkPos.longKey();
         LegacyChunkTicks<T> levelChunkTicks = this.allContainers.remove(packedChunkPos);
         this.nextTickForContainer.remove(packedChunkPos);
         if (levelChunkTicks != null) {
@@ -76,7 +76,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
 
     @Override
     public void schedule(ScheduledTick<T> tick) {
-        long packedChunkPos = ChunkPos.asLong(tick.pos());
+        long packedChunkPos = ChunkPos.pack(tick.pos());
         LegacyChunkTicks<T> levelChunkTicks = this.allContainers.get(packedChunkPos);
         if (levelChunkTicks == null) {
             Util.logAndPauseIfInIde("Trying to schedule tick in not loaded position " + tick.pos());
@@ -155,7 +155,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
 
     private void updateContainerScheduling(ScheduledTick<T> tick) {
         synchronized (this.nextTickForContainer) { // Evangelium - region-wide map, written by intra-region helpers of different chunks
-        this.nextTickForContainer.put(ChunkPos.asLong(tick.pos()), tick.triggerTick());
+        this.nextTickForContainer.put(ChunkPos.pack(tick.pos()), tick.triggerTick());
         } // Evangelium
     }
 
@@ -207,7 +207,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
 
     @Override
     public boolean hasScheduledTick(BlockPos pos, T type) {
-        LegacyChunkTicks<T> levelChunkTicks = this.allContainers.get(ChunkPos.asLong(pos));
+        LegacyChunkTicks<T> levelChunkTicks = this.allContainers.get(ChunkPos.pack(pos));
         return levelChunkTicks != null && levelChunkTicks.hasScheduledTick(pos, type);
     }
 
@@ -231,7 +231,7 @@ public class LegacyLevelTicks<T> implements LevelTickAccess<T> {
 
         for (int i = sectionPosMinX; i <= sectionPosMaxX; i++) {
             for (int i1 = sectionPosMinZ; i1 <= sectionPosMaxZ; i1++) {
-                long packedChunkPos = ChunkPos.asLong(i, i1);
+                long packedChunkPos = ChunkPos.pack(i, i1);
                 LegacyChunkTicks<T> levelChunkTicks = this.allContainers.get(packedChunkPos);
                 if (levelChunkTicks != null) {
                     action.accept(packedChunkPos, levelChunkTicks);

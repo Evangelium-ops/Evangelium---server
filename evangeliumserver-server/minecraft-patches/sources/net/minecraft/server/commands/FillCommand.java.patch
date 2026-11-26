@@ -8,28 +8,29 @@
  import java.util.Collections;
  import java.util.List;
  import java.util.function.Predicate;
-@@ -188,6 +_,7 @@
-             if (level.isDebug()) {
-                 throw ERROR_FAILED.create();
-             } else {
-+                EvangeliumServer.ensureSync(level, new BlockPos(box.minX(), box.minY(), box.minZ()), () -> { // EvangeliumServer - run on correct region thread
-                 int i2 = 0;
- 
-                 for (BlockPos blockPos : BlockPos.betweenClosed(box.minX(), box.minY(), box.minZ(), box.maxX(), box.maxY(), box.maxZ())) {
-@@ -224,12 +_,14 @@
-                 }
- 
-                 if (i2 == 0) {
--                    throw ERROR_FAILED.create();
-+                    source.sendFailure(Component.translatable("commands.fill.failed")); // EvangeliumServer - run on correct region thread - send failure message instead of throwing
-                 } else {
-                     int i3 = i2;
-                     source.sendSuccess(() -> Component.translatable("commands.fill.success", i3), true);
--                    return i2;
-+                    // return i2; // EvangeliumServer - run on correct region thread
-                 }
-+                }); // EvangeliumServer - run on correct region thread
-+                return 1; // EvangeliumServer - run on correct region thread
-             }
+@@ -178,6 +_,7 @@
+             throw ERROR_FAILED.create();
          }
+ 
++        EvangeliumServer.ensureSync(level, new BlockPos(region.minX(), region.minY(), region.minZ()), () -> { // EvangeliumServer - run on correct region thread
+         int count = 0;
+ 
+         for (BlockPos pos : BlockPos.betweenClosed(region.minX(), region.minY(), region.minZ(), region.maxX(), region.maxY(), region.maxZ())) {
+@@ -214,12 +_,15 @@
+         }
+ 
+         if (count == 0) {
+-            throw ERROR_FAILED.create();
++            source.sendFailure(Component.translatable("commands.fill.failed")); // EvangeliumServer - run on correct region thread - send failure message instead of throwing
++            return; // EvangeliumServer - run on correct region thread - send failure message instead of throwing
+         }
+ 
+         int finalCount = count;
+         source.sendSuccess(() -> Component.translatable("commands.fill.success", finalCount), true);
+-        return count;
++        // return count; // EvangeliumServer - run on correct region thread
++        }); // EvangeliumServer - run on correct region thread
++        return 1; // EvangeliumServer - run on correct region thread
      }
+ 
+     @FunctionalInterface

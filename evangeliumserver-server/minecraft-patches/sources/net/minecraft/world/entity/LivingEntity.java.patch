@@ -1,15 +1,15 @@
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
-@@ -454,7 +_,7 @@
+@@ -470,7 +_,7 @@
                      if (damagePerBlock > 0.0) {
                          // Purpur start - Add option to teleport to spawn if outside world border
                          if (this.level().purpurConfig.teleportIfOutsideBorder && this instanceof ServerPlayer serverPlayer) {
--                            serverPlayer.teleport(org.bukkit.craftbukkit.util.CraftLocation.toBukkit(this.level().levelData.getRespawnData().pos(), this.level()));
-+                            serverPlayer.getBukkitEntity().teleportAsync(org.bukkit.craftbukkit.util.CraftLocation.toBukkit(this.level().levelData.getRespawnData().pos(), this.level())); // EvangeliumServer - use teleportAsync
+-                            serverPlayer.teleport(org.bukkit.craftbukkit.util.CraftLocation.toBukkit(this.level().getLevelData().getRespawnData().pos(), this.level()));
++                            serverPlayer.getBukkitEntity().teleportAsync(org.bukkit.craftbukkit.util.CraftLocation.toBukkit(this.level().getLevelData().getRespawnData().pos(), this.level())); // EvangeliumServer - use teleportAsync
                              return;
                          }
                          // Purpur end - Add option to teleport to spawn if outside world border
-@@ -555,9 +_,9 @@
+@@ -573,9 +_,9 @@
      }
  
      protected void tryAddFrost() {
@@ -19,20 +19,20 @@
 +        int ticksFrozen = this.getTicksFrozen(); // Evangelium - cheap test first, the block lookup only when frozen
 +        if (ticksFrozen > 0 && !this.getBlockStateOnLegacy().isAir()) {
 +            {
-                 AttributeInstance attribute = this.getAttribute(Attributes.MOVEMENT_SPEED);
-                 if (attribute == null) {
+                 AttributeInstance speed = this.getAttribute(Attributes.MOVEMENT_SPEED);
+                 if (speed == null) {
                      return;
-@@ -1360,6 +_,7 @@
+@@ -1353,6 +_,7 @@
  
      private void refreshDirtyAttributes() {
          Set<AttributeInstance> attributesToUpdate = this.getAttributes().getAttributesToUpdate();
 +        if (attributesToUpdate.isEmpty()) return; // Evangelium - nothing changed (almost every tick): no iterator, no clear
  
-         for (AttributeInstance attributeInstance : attributesToUpdate) {
-             this.onAttributeUpdated(attributeInstance.getAttribute());
-@@ -3811,7 +_,8 @@
+         for (AttributeInstance changedAttributeInstance : attributesToUpdate) {
+             this.onAttributeUpdated(changedAttributeInstance.getAttribute());
+@@ -3870,7 +_,8 @@
          if (this.level() instanceof ServerLevel serverLevel) {
-             profilerFiller.push("freezing");
+             profiler.push("freezing");
              if ((!this.isInPowderSnow || !this.canFreeze()) && !this.freezeLocked) { // Paper - Freeze Tick Lock API
 -                this.setTicksFrozen(Math.max(0, this.getTicksFrozen() - 2));
 +                final int ticksFrozen = this.getTicksFrozen(); // Evangelium - not frozen: setting 0 again would change nothing
@@ -40,7 +40,7 @@
              }
  
              this.removeFrost();
-@@ -3965,6 +_,8 @@
+@@ -4009,6 +_,8 @@
      protected void serverAiStep() {
      }
  
@@ -49,7 +49,7 @@
      protected void pushEntities() {
          // Paper start - don't run getEntities if we're not going to use its result
          if (!this.isPushable()) {
-@@ -3981,7 +_,35 @@
+@@ -4025,7 +_,35 @@
              return;
          }
          // Paper end - don't run getEntities if we're not going to use its result
@@ -61,21 +61,21 @@
 +        List<Entity> pushableEntities;
 +        int pushLimit = this.level().paperConfig().collisions.maxEntityCollisions;
 +        if (EVANGELIUM_CAPPED_PUSH_SEARCH) {
-+            int cap = Math.max(pushLimit, i);
++            int cap = Math.max(pushLimit, maxCramming);
 +            java.util.function.Predicate<Entity> pushable = EntitySelector.pushableBy(this);
 +            pushableEntities = new java.util.ArrayList<>();
 +            ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel) this.level()).moonrise$getEntityLookup()
 +                .getEntities(this, this.getBoundingBox(), pushableEntities, pushable, cap);
 +            if (pushableEntities.size() < cap) {
 +                ca.spottedleaf.moonrise.common.PlatformHooks.get().addToGetEntities(this.level(), this, this.getBoundingBox(), pushable, pushableEntities);
-+            } else if (i > 0) {
++            } else if (maxCramming > 0) {
 +                int notRiding = 0;
 +                for (Entity found : pushableEntities) {
 +                    if (!found.isPassenger()) {
 +                        notRiding++;
 +                    }
 +                }
-+                if (notRiding < i) {
++                if (notRiding < maxCramming) {
 +                    pushableEntities = this.level().getPushableEntities(this, this.getBoundingBox());
 +                }
 +            }

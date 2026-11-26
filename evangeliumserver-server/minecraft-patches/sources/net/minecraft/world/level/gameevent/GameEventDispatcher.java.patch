@@ -1,18 +1,18 @@
 --- a/net/minecraft/world/level/gameevent/GameEventDispatcher.java
 +++ b/net/minecraft/world/level/gameevent/GameEventDispatcher.java
 @@ -23,6 +_,7 @@
-         int notificationRadius = gameEvent.value().notificationRadius();
-         BlockPos blockPos = BlockPos.containing(pos);
+         int radius = gameEvent.value().notificationRadius();
+         BlockPos center = BlockPos.containing(position);
          // CraftBukkit start
 +        if (org.bukkit.event.world.GenericGameEvent.getHandlerList().getRegisteredListeners().length > 0) { // Evangelium - build the event only when a plugin listens
          org.bukkit.event.world.GenericGameEvent apiEvent = new org.bukkit.event.world.GenericGameEvent(
-             org.bukkit.craftbukkit.CraftGameEvent.minecraftHolderToBukkit(gameEvent), org.bukkit.craftbukkit.util.CraftLocation.toBukkit(blockPos, this.level),
-             (context.sourceEntity() == null) ? null : context.sourceEntity().getBukkitEntity(), notificationRadius, !org.bukkit.Bukkit.isPrimaryThread());
+             org.bukkit.craftbukkit.CraftGameEvent.minecraftHolderToBukkit(gameEvent), org.bukkit.craftbukkit.util.CraftLocation.toBukkit(center, this.level),
+             (context.sourceEntity() == null) ? null : context.sourceEntity().getBukkitEntity(), radius, !org.bukkit.Bukkit.isPrimaryThread());
 @@ -30,6 +_,7 @@
              return;
          }
-         notificationRadius = apiEvent.getRadius();
+         radius = apiEvent.getRadius();
 +        } // Evangelium
          // CraftBukkit end
-         int sectionPosCoord = SectionPos.blockToSectionCoord(blockPos.getX() - notificationRadius);
-         int sectionPosCoord1 = SectionPos.blockToSectionCoord(blockPos.getY() - notificationRadius);
+         int sectionMinX = SectionPos.blockToSectionCoord(center.getX() - radius);
+         int sectionMinY = SectionPos.blockToSectionCoord(center.getY() - radius);

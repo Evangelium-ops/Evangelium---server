@@ -95,7 +95,7 @@ public class SynchronousPluginExecution {
             throw new RegionTickAbandonedError("[compat] this region tick was abandoned by RegionGuard; no more plugin calls on it");
         }
         EvangeliumServerConfiguration config = EvangeliumServerConfiguration.get();
-        if (plugin == null || config == null || !config.multithreading.runUnsupportedPluginsInSync || plugin.getDescription().isFoliaSupported() || TickThread.isShutdownThread()) {
+        if (plugin == null || config == null || !config.multithreading.runUnsupportedPluginsInSync || plugin.getPluginMeta().isFoliaSupported() || TickThread.isShutdownThread()) {
             // Multi-thread safe plugin, run it straight away
             runnable.run();
             return;
@@ -249,7 +249,7 @@ public class SynchronousPluginExecution {
     }
 
     private static boolean fillPluginsToLock(Plugin plugin, TreeSet<String> pluginsToLock, List<String> parentList) {
-        if (plugin.getDescription().isFoliaSupported()) {
+        if (plugin.getPluginMeta().isFoliaSupported()) {
             // Multi-thread safe plugin, we don't need to lock it
             return false;
         }

@@ -123,7 +123,9 @@ public class LegacyChunkTicks<T> implements SerializableTickContainer<T>, TickCo
             list.addAll(this.pendingTicks);
         }
 
-        for (ScheduledTick<T> scheduledTick : this.tickQueue) {
+        List<ScheduledTick<T>> sortedTicks = new ArrayList<>(this.tickQueue); // 26.3: saved in sub-tick order, as vanilla
+        sortedTicks.sort(java.util.Comparator.comparingLong(ScheduledTick::subTickOrder));
+        for (ScheduledTick<T> scheduledTick : sortedTicks) {
             list.add(scheduledTick.toSavedTick(gameTime));
         }
 

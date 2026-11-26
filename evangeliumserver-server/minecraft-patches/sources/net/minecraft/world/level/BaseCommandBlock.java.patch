@@ -23,13 +23,13 @@
  
      public int getSuccessCount() {
          return this.successCount;
-@@ -206,9 +_,11 @@
+@@ -208,9 +_,11 @@
          @Override
-         public void sendSystemMessage(Component message) {
+         public void sendSystemMessage(final Component message) {
              if (this.trackOutput && !this.closed) { // Paper - add back source when output disabled
 +                EvangeliumServer.ensureSync(this.level, BaseCommandBlock.this.getBlockPos(), () -> { // EvangeliumServer - run sync
                  org.spigotmc.AsyncCatcher.catchOp("sendSystemMessage to a command block"); // Paper - Don't broadcast messages to command blocks
-                 BaseCommandBlock.this.lastOutput = Component.literal("[" + TIME_FORMAT.format(ZonedDateTime.now()) + "] ").append(message);
+                 BaseCommandBlock.this.lastOutput = Component.literal("[" + this.level.paperConfig().commandBlocks.timeFormatPattern.or(TIME_FORMAT).format(ZonedDateTime.now()) + "] ").append(message); // Paper - per-world configurable time format
                  BaseCommandBlock.this.onUpdated(this.level);
 +                }); // EvangeliumServer - run sync
              }

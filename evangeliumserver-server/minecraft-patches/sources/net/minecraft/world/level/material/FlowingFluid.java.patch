@@ -1,9 +1,10 @@
 --- a/net/minecraft/world/level/material/FlowingFluid.java
 +++ b/net/minecraft/world/level/material/FlowingFluid.java
-@@ -410,7 +_,177 @@
-         return i;
+@@ -426,7 +_,177 @@
+         return count;
      }
  
+-    protected Map<Direction, FluidState> getSpread(final ServerLevel level, final BlockPos pos, final BlockState state) {
 +    // Fork start - slope search as a breadth-first search over plain arrays (vanilla walks every path depth-first, hashing each
 +    // lookup); same result: the shortest path to a hole, holes end a path, the first step may not go back to the spreading block
 +    private static final boolean VERIFY_SLOPE_SEARCH = Boolean.getBoolean("evangeliumserver.verifyFluidSearch");
@@ -11,24 +12,24 @@
 +    private static final Direction[] SLOPE_DIRECTIONS = {Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST};
 +    private final ThreadLocal<SlopeSearch> slopeSearch = ThreadLocal.withInitial(SlopeSearch::new);
 +
-     protected Map<Direction, FluidState> getSpread(ServerLevel level, BlockPos pos, BlockState state) {
++    protected Map<Direction, FluidState> getSpread(ServerLevel level, BlockPos pos, BlockState state) {
 +        int limit = this.getSlopeFindDistance(level);
 +        if (limit >= SLOPE_R) {
 +            return this.getSpreadVanilla(level, pos, state);
 +        }
-+        Map<Direction, FluidState> map = this.getSpreadFast(level, pos, state, limit);
++        Map<Direction, FluidState> result = this.getSpreadFast(level, pos, state, limit);
 +        if (VERIFY_SLOPE_SEARCH) {
 +            Map<Direction, FluidState> vanilla = this.getSpreadVanilla(level, pos, state);
-+            if (!vanilla.equals(map)) {
-+                throw new IllegalStateException("fluid slope search differs at " + pos + ": " + map + " vanilla " + vanilla);
++            if (!vanilla.equals(result)) {
++                throw new IllegalStateException("fluid slope search differs at " + pos + ": " + result + " vanilla " + vanilla);
 +            }
 +        }
-+        return map;
++        return result;
 +    }
 +
 +    private Map<Direction, FluidState> getSpreadFast(ServerLevel level, BlockPos pos, BlockState state, int limit) {
-+        int i = 1000;
-+        Map<Direction, FluidState> map = Maps.newEnumMap(Direction.class);
++        int lowest = 1000;
++        Map<Direction, FluidState> result = Maps.newEnumMap(Direction.class);
 +        SlopeSearch search = null;
 +
 +        for (Direction direction : Direction.Plane.HORIZONTAL) {
@@ -44,17 +45,17 @@
 +                        search.begin(level, pos);
 +                    }
 +
-+                    int i1 = search.distance(blockPos, blockState, direction.getOpposite(), Math.min(limit, i));
-+                    if (i1 < i) {
-+                        map.clear();
++                    int i1 = search.distance(blockPos, blockState, direction.getOpposite(), Math.min(limit, lowest));
++                    if (i1 < lowest) {
++                        result.clear();
 +                    }
 +
-+                    if (i1 <= i) {
++                    if (i1 <= lowest) {
 +                        if (fluidState.canBeReplacedWith(level, blockPos, newLiquid.getType(), direction)) {
-+                            map.put(direction, newLiquid);
++                            result.put(direction, newLiquid);
 +                        }
 +
-+                        i = i1;
++                        lowest = i1;
 +                    }
 +                }
 +            }
@@ -63,7 +64,7 @@
 +        if (search != null) {
 +            search.level = null; // do not keep the world alive from a thread local
 +        }
-+        return map;
++        return result;
 +    }
 +
 +    private final class SlopeSearch {
@@ -175,6 +176,6 @@
 +
 +    protected Map<Direction, FluidState> getSpreadVanilla(ServerLevel level, BlockPos pos, BlockState state) {
 +    // Fork end - slope search
-         int i = 1000;
-         Map<Direction, FluidState> map = Maps.newEnumMap(Direction.class);
-         FlowingFluid.SpreadContext spreadContext = null;
+         int lowest = 1000;
+         Map<Direction, FluidState> result = Maps.newEnumMap(Direction.class);
+         FlowingFluid.SpreadContext context = null;

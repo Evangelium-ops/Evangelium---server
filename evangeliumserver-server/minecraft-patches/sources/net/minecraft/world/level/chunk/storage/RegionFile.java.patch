@@ -1,15 +1,15 @@
 --- a/net/minecraft/world/level/chunk/storage/RegionFile.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
-@@ -638,7 +_,11 @@
-                     } else {
-                         JvmProfiler.INSTANCE.onRegionFileRead(this.info, chunkPos, this.version, i1);
-                         // Paper start - recalculate header on regionfile corruption
--                        final DataInputStream ret = this.createChunkInputStream(chunkPos, b, createStream(byteBuffer, i1));
-+                        // EvangeliumServer start - fast chunk NBT read: deflate chunks are inflated in one go when the NBT is read
-+                        final DataInputStream ret = RegionFileVersion.fromId(b) == RegionFileVersion.VERSION_DEFLATE && net.minecraft.world.level.chunk.storage.InflatedChunkInput.enabled()
-+                            ? new net.minecraft.world.level.chunk.storage.InflatedChunkInput(byteBuffer.array(), byteBuffer.position(), i1)
-+                            : this.createChunkInputStream(chunkPos, b, createStream(byteBuffer, i1));
-+                        // EvangeliumServer end - fast chunk NBT read
-                         if (ret == null && this.canRecalcHeader && this.recalculateHeader()) {
-                             return this.getChunkDataInputStream(chunkPos);
-                         }
+@@ -629,7 +_,11 @@
+         } else {
+             JvmProfiler.INSTANCE.onRegionFileRead(this.info, pos, this.version, streamLength);
+             // Paper start - rewrite chunk system
+-            final DataInputStream ret = this.createChunkInputStream(pos, versionId, createStream(buffer, streamLength));
++            // EvangeliumServer start - fast chunk NBT read: deflate chunks are inflated in one go when the NBT is read
++            final DataInputStream ret = RegionFileVersion.fromId(versionId) == RegionFileVersion.VERSION_DEFLATE && net.minecraft.world.level.chunk.storage.InflatedChunkInput.enabled()
++                ? new net.minecraft.world.level.chunk.storage.InflatedChunkInput(buffer.array(), buffer.position(), streamLength)
++                : this.createChunkInputStream(pos, versionId, createStream(buffer, streamLength));
++            // EvangeliumServer end - fast chunk NBT read
+             // do not recalculate for custom compression, as the data is likely valid but unsupported
+             return ret != null || versionId == RegionFileVersion.VERSION_CUSTOM.getId() ? ret : this.recalculateAndRetry(pos, allowRecalc);
+             // Paper end - rewrite chunk system

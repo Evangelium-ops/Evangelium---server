@@ -1,4 +1,4 @@
-# Evangelium server
+# Evangelium server (Minecraft 26.3)
 
 The server software that runs inside [Project: Evangelium](https://evangelium.cc): a multithreaded Minecraft server. Several threads
 run one world together (each region of chunks is ticked by one thread at a time, and a region can split its work over helper threads),
@@ -13,7 +13,7 @@ How we measure it: https://evangelium.cc/benchmarks · Questions: support@evange
 ## Building
 
 1. `./gradlew applyAllPatches`
-2. `./gradlew createMojmapPaperclipJar` (the jar ends up in `evangeliumserver-server/build/libs`)
+2. `./gradlew createPaperclipJar` (the jar ends up in `evangeliumserver-server/build/libs`)
 
 ## License
 

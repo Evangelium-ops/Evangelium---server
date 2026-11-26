@@ -16,7 +16,15 @@
  import it.unimi.dsi.fastutil.longs.LongSet;
  import it.unimi.dsi.fastutil.objects.ObjectArrayList;
  import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
-@@ -73,7 +_,9 @@
+@@ -22,6 +_,7 @@
+ import net.minecraft.core.SectionPos;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.game.ClientGamePacketListener;
++import net.minecraft.server.MinecraftServer;
+ import net.minecraft.util.FileUtil;
+ import net.minecraft.util.Util;
+ import net.minecraft.util.VisibleForDebug;
+@@ -71,7 +_,9 @@
      private final @Nullable ChunkStatus[] lastChunkStatus = new ChunkStatus[4];
      private final @Nullable ChunkAccess[] lastChunk = new ChunkAccess[4];
      private final List<LevelChunk> spawningChunks = new ObjectArrayList<>();
@@ -27,7 +35,12 @@
      @VisibleForDebug
      private NaturalSpawner.@Nullable SpawnState lastSpawnState;
      // Paper start
-@@ -101,6 +_,12 @@
+@@ -100,10 +_,16 @@
+ 
+     @Override
+     public void moonrise$chunkHolderUnload(final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder chunkHolder) {
+-        this.chunkHoldersToBroadcast.remove(chunkHolder.vanillaChunkHolder);
++        // this.chunkHoldersToBroadcast.remove(chunkHolder.vanillaChunkHolder); // EvangeliumServer  - handled by the regions
      }
  
      private ChunkAccess syncLoad(final int chunkX, final int chunkZ, final ChunkStatus toStatus) {
@@ -40,7 +53,7 @@
          final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler chunkTaskScheduler = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler();
          final CompletableFuture<ChunkAccess> completable = new CompletableFuture<>();
          chunkTaskScheduler.scheduleChunkLoad(
-@@ -115,9 +_,11 @@
+@@ -118,9 +_,11 @@
              );
          }
  
@@ -53,40 +66,23 @@
              ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.popChunkWait();
          }
  
-@@ -198,6 +_,7 @@
-         Supplier<DimensionDataStorage> overworldDataStorage
+@@ -200,6 +_,7 @@
+         , final SavedDataStorage savedDataStorage // Paper - initialize SavedDataStorage earlier
      ) {
          this.level = level;
 +        this.tickingRegions = new LevelChunkRegionMap(this.level); // EvangeliumServer
          this.mainThreadProcessor = new ServerChunkCache.MainThreadExecutor(level);
          this.mainThread = Thread.currentThread();
-         Path path = levelStorageAccess.getDimensionPath(level.dimension()).resolve("data");
-@@ -350,14 +_,14 @@
-     }
- 
-     public CompletableFuture<ChunkResult<ChunkAccess>> getChunkFuture(int x, int z, ChunkStatus chunkStatus, boolean requireChunk) {
--        boolean flag = Thread.currentThread() == this.mainThread;
-+        boolean flag = TickThread.isTickThreadFor(this.level, x, z); // EvangeliumServer - regions
-         CompletableFuture<ChunkResult<ChunkAccess>> chunkFutureMainThread;
-         if (flag) {
-             chunkFutureMainThread = this.getChunkFutureMainThread(x, z, chunkStatus, requireChunk);
-             this.mainThreadProcessor.managedBlock(chunkFutureMainThread::isDone);
-         } else {
-             chunkFutureMainThread = CompletableFuture.<CompletableFuture<ChunkResult<ChunkAccess>>>supplyAsync(
--                    () -> this.getChunkFutureMainThread(x, z, chunkStatus, requireChunk), this.mainThreadProcessor
-+                    () -> this.getChunkFutureMainThread(x, z, chunkStatus, requireChunk), this.tickingRegions.executorFor(RegionPos.forChunk(x, z)) // EvangeliumServer - regions
-                 )
-                 .thenCompose(future -> (CompletionStage<ChunkResult<ChunkAccess>>)future);
-         }
-@@ -474,28 +_,37 @@
+         Path dataFolder = levelStorage.getDimensionPath(level.dimension()).resolve("data");
+@@ -494,61 +_,76 @@
      // CraftBukkit end
  
      @Override
--    public void tick(BooleanSupplier hasTimeLeft, boolean tickChunks) {
-+    public CompletableFuture<Void> tick(BooleanSupplier hasTimeLeft, boolean tickChunks) { // EvangeliumServer - run async
+-    public void tick(final BooleanSupplier haveTime, final boolean tickChunks) {
++    public CompletableFuture<Void> tick(final BooleanSupplier haveTime, final boolean tickChunks) { // EvangeliumServer - run async
 +        CompletableFuture<Void> future = CompletableFuture.completedFuture(null); // EvangeliumServer - run async
-         ProfilerFiller profilerFiller = Profiler.get();
-         profilerFiller.push("purge");
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("purge");
 +        CompletableFuture<Void> purgeStaleTicketsFuture = CompletableFuture.completedFuture(null); // EvangeliumServer - purgeStaleTickets async
          if (this.level.tickRateManager().runsNormally() || !tickChunks || this.level.spigotConfig.unloadFrozenChunks) { // Spigot
 -            this.ticketStorage.purgeStaleTickets(this.chunkMap);
@@ -95,7 +91,7 @@
          }
  
          this.runDistanceManagerUpdates();
-         profilerFiller.popPush("chunks");
+         profiler.popPush("chunks");
          if (tickChunks) {
              ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getPlayerChunkLoader().tick(); // Paper - rewrite chunk system
 -            this.tickChunks();
@@ -106,145 +102,142 @@
  
 +        future = CompletableFuture.allOf(future, purgeStaleTicketsFuture); // EvangeliumServer - purgeStaleTickets async
 +        future = future.thenRun(() -> { // EvangeliumServer - run async
-         profilerFiller.popPush("unload");
-         this.chunkMap.tick(hasTimeLeft);
-         profilerFiller.pop();
+         profiler.popPush("unload");
+         this.chunkMap.tick(haveTime);
+         profiler.pop();
          this.clearCache();
 +        }); // EvangeliumServer - run async
-+
 +        return future; // EvangeliumServer - run async
      }
  
 -    private void tickChunks() {
-+    private CompletableFuture<Void> tickChunks() { // EvangeliumServer - run async
++    private CompletableFuture<Void>  tickChunks() { // EvangeliumServer - run async
 +        CompletableFuture<Void> future = CompletableFuture.completedFuture(null); // EvangeliumServer - run async
-         long gameTime = this.level.getGameTime();
-         long l = gameTime - this.lastInhabitedUpdate;
-         this.lastInhabitedUpdate = gameTime;
-@@ -504,34 +_,41 @@
-             profilerFiller.push("pollingChunks");
-             if (this.level.tickRateManager().runsNormally()) {
-                 profilerFiller.push("tickingChunks");
--                this.tickChunks(profilerFiller, l);
-+                future = future.thenCompose(v -> this.tickChunks(profilerFiller, l)); // EvangeliumServer - run async
-                 profilerFiller.pop();
+         if (!this.level.isDebug()) {
+             ProfilerFiller profiler = Profiler.get();
+             profiler.push("pollingChunks");
+             if (this.level.tickRateManager().runsNormally() && this.level.paperConfig().unsupportedSettings.ticking.chunks) { // Paper - option to disable ticking
+                 profiler.push("tickingChunks");
+-                this.tickChunks(profiler);
++                future = future.thenCompose(v -> this.tickChunks(profiler)); // EvangeliumServer - run async
+                 profiler.pop();
 -            }
-+            } else future = future.thenCompose(v -> this.shreddedPaperChunkTicker.tickChunks(0, null, null)); // EvangeliumServer - still tick chunks anyway
++            } else future = future.thenCompose(v -> this.shreddedPaperChunkTicker.tickChunks(null, null)); // EvangeliumServer - still tick chunks anyway
  
--            this.broadcastChangedChunks(profilerFiller);
-+            // this.broadcastChangedChunks(profilerFiller); // EvangeliumServer - handled in the region
-             profilerFiller.pop();
+-            this.broadcastChangedChunks(profiler);
++            // this.broadcastChangedChunks(profiler); // EvangeliumServer - handled in the region
+             profiler.pop();
          }
 +
 +        return future; // EvangeliumServer - run async
      }
  
-     private void broadcastChangedChunks(ProfilerFiller profiler) {
+     private void broadcastChangedChunks(final ProfilerFiller profiler) {
 +        if (true) throw new UnsupportedOperationException("Disabled by EvangeliumServer"); // EvangeliumServer - handled in the region, ensure it stays that way
          profiler.push("broadcast");
  
 -        for (ChunkHolder chunkHolder : this.chunkHoldersToBroadcast) {
--            LevelChunk tickingChunk = chunkHolder.getChunkToSend(); // Paper - rewrite chunk system
--            if (tickingChunk != null) {
--                chunkHolder.broadcastChanges(tickingChunk);
+-            LevelChunk chunk = chunkHolder.getChunkToSend(); // Paper - rewrite chunk system
+-            if (chunk != null) {
+-                chunkHolder.broadcastChanges(chunk);
 -            }
 -        }
 -
 -        this.chunkHoldersToBroadcast.clear();
-+        // EvangeliumServer  - handled by the regions
++        // EvangeliumServer start - handled by the regions
 +//        for (ChunkHolder chunkHolder : this.chunkHoldersToBroadcast) {
-+//            LevelChunk tickingChunk = chunkHolder.getChunkToSend(); // Paper - rewrite chunk system
-+//            if (tickingChunk != null) {
-+//                chunkHolder.broadcastChanges(tickingChunk);
++//            LevelChunk chunk = chunkHolder.getChunkToSend(); // Paper - rewrite chunk system
++//            if (chunk != null) {
++//                chunkHolder.broadcastChanges(chunk);
 +//            }
 +//        }
 +//
 +//        this.chunkHoldersToBroadcast.clear();
-+        // EvangeliumServer  - handled by the regions
++        // EvangeliumServer end - handled by the regions
          profiler.pop();
      }
  
--    private void tickChunks(ProfilerFiller profiler, long timeInhabited) {
-+    private CompletableFuture<Void> tickChunks(ProfilerFiller profiler, long timeInhabited) { // EvangeliumServer - run async
+-    private void tickChunks(final ProfilerFiller profiler) {
++    private CompletableFuture<Void> tickChunks(final ProfilerFiller profiler) { // EvangeliumServer - run async
 +        CompletableFuture<Void> future = CompletableFuture.completedFuture(null); // EvangeliumServer - run async
          profiler.push("naturalSpawnCount");
-         int naturalSpawnChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
+         int chunkCount = this.distanceManager.getNaturalSpawnChunkCount();
          // Paper start - Optional per player mob spawns
-         NaturalSpawner.SpawnState spawnState;
+         NaturalSpawner.SpawnState spawnCookie;
 +        if (EvangeliumServerChunkTicker.willTrySpawnMobsThisTick(this.level)) { // EvangeliumServer - only create NaturalSpawner if we'll use it
          if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
              // re-set mob counts
-             for (ServerPlayer player : this.level.players) {
-@@ -547,15 +_,17 @@
+             for (ServerPlayer player : this.level.players()) {
+@@ -564,15 +_,17 @@
                  }
                  // Paper end - per player mob spawning backoff
              }
--            spawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, null, true);
-+            spawnState = NaturalSpawner.createStateParallel(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, true); // Evangelium - counted on the tick threads
+-            spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, null, true);
++            spawnCookie = NaturalSpawner.createStateParallel(chunkCount, this.level, this::getFullChunk, true); // Evangelium - counted on the tick threads
          } else {
-             spawnState = NaturalSpawner.createState(naturalSpawnChunkCount, this.level.getAllEntities(), this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
+             spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
          }
-+        } else { spawnState = null; } // EvangeliumServer - only create NaturalSpawner if we'll use it
++        } else { spawnCookie = null; } // EvangeliumServer - only create NaturalSpawner if we'll use it
          // Paper end - Optional per player mob spawns
-         this.lastSpawnState = spawnState;
-         boolean flag = this.level.getGameRules().get(GameRules.SPAWN_MOBS) && !this.level.players().isEmpty(); // CraftBukkit
-         int i = this.level.getGameRules().get(GameRules.RANDOM_TICK_SPEED);
-         List<MobCategory> filteredSpawningCategories;
-+        if (spawnState != null) { // EvangeliumServer - only create NaturalSpawner if we'll use it
-         if (flag && (this.spawnEnemies || this.spawnFriendlies)) { // Paper
+         this.lastSpawnState = spawnCookie;
+         boolean doMobSpawning = this.level.getGameRules().get(GameRules.SPAWN_MOBS) && !this.level.players().isEmpty(); // CraftBukkit
+         int tickSpeed = this.level.getGameRules().get(GameRules.RANDOM_TICK_SPEED);
+         List<MobCategory> spawningCategories;
++        if (spawnCookie != null) { // EvangeliumServer - only create NaturalSpawner if we'll use it
+         if (doMobSpawning && (this.spawnEnemies || this.spawnFriendlies)) { // Paper
              // Paper start - PlayerNaturallySpawnCreaturesEvent
-             for (ServerPlayer entityPlayer : this.level.players()) {
-@@ -570,37 +_,42 @@
+             for (ServerPlayer player : this.level.players()) {
+@@ -587,37 +_,42 @@
          } else {
-             filteredSpawningCategories = List.of();
+             spawningCategories = List.of();
          }
 -
--        List<LevelChunk> list = this.spawningChunks;
+-        List<LevelChunk> spawningChunks = this.spawningChunks;
 -
 -        try {
 -            profiler.popPush("filteringSpawningChunks");
--            this.chunkMap.collectSpawningChunks(list);
+-            this.chunkMap.collectSpawningChunks(spawningChunks);
 -            profiler.popPush("shuffleSpawningChunks");
 -            // Paper start - chunk tick iteration optimisation
--            this.shuffleRandom.setSeed(this.level.random.nextLong());
--            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) Util.shuffle(list, this.shuffleRandom); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
+-            this.shuffleRandom.setSeed(this.level.getRandom().nextLong());
+-            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) Util.shuffle(spawningChunks, this.level.getRandom()); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
 -            // Paper end - chunk tick iteration optimisation
 -            profiler.popPush("tickSpawningChunks");
 -
--            for (LevelChunk levelChunk : list) {
--                this.tickSpawningChunk(levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
+-            for (LevelChunk chunk : spawningChunks) {
+-                this.tickSpawningChunk(chunk, spawningCategories, spawnCookie);
 -            }
 -        } finally {
--            list.clear();
+-            spawningChunks.clear();
 -        }
-+        } else { filteredSpawningCategories = null; } // EvangeliumServer - only create NaturalSpawner if we'll use it
++        } else { spawningCategories = null; } // EvangeliumServer - only create NaturalSpawner if we'll use it
 +
-+        future = future.thenCompose(v -> this.shreddedPaperChunkTicker.tickChunks(timeInhabited, filteredSpawningCategories, spawnState)).thenRunAsync(() -> {}, this.level.levelThread); // EvangeliumServer - run async
++        future = future.thenCompose(v -> this.shreddedPaperChunkTicker.tickChunks(spawningCategories, spawnCookie)).thenRunAsync(() -> {}, this.level.levelThread); // EvangeliumServer - run async
 +        // EvangeliumServer start - moved to EvangeliumServerChunkTicker
-+//        List<LevelChunk> list = this.spawningChunks;
++//        List<LevelChunk> spawningChunks = this.spawningChunks;
 +//
 +//        try {
 +//            profiler.popPush("filteringSpawningChunks");
-+//            this.chunkMap.collectSpawningChunks(list);
++//            this.chunkMap.collectSpawningChunks(spawningChunks);
 +//            profiler.popPush("shuffleSpawningChunks");
 +//            // Paper start - chunk tick iteration optimisation
-+//            this.shuffleRandom.setSeed(this.level.random.nextLong());
-+//            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) Util.shuffle(list, this.shuffleRandom); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
++//            this.shuffleRandom.setSeed(this.level.getRandom().nextLong());
++//            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) Util.shuffle(spawningChunks, this.level.getRandom()); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
 +//            // Paper end - chunk tick iteration optimisation
 +//            profiler.popPush("tickSpawningChunks");
 +//
-+//            for (LevelChunk levelChunk : list) {
-+//                this.tickSpawningChunk(levelChunk, timeInhabited, filteredSpawningCategories, spawnState);
++//            for (LevelChunk chunk : spawningChunks) {
++//                this.tickSpawningChunk(chunk, timeDiff, spawningCategories, spawnCookie);
 +//            }
 +//        } finally {
-+//            list.clear();
++//            spawningChunks.clear();
 +//        }
 +        // EvangeliumServer end - moved to EvangeliumServerChunkTicker
  
          profiler.popPush("tickTickingChunks");
 -        this.iterateTickingChunksFaster(); // Paper - chunk tick iteration optimizations
 +        // this.iterateTickingChunksFaster(); // Paper - chunk tick iteration optimizations // EvangeliumServer - moved to EvangeliumServerChunkTicker
-         if (flag) {
+         if (doMobSpawning) {
              profiler.popPush("customSpawners");
 -            this.level.tickCustomSpawners(this.spawnEnemies);
 +            future = future.thenRun(() -> this.level.tickCustomSpawners(this.spawnEnemies)); // EvangeliumServer - run async
@@ -254,32 +247,32 @@
 +        return future; // EvangeliumServer - run async
      }
  
--    private void tickSpawningChunk(LevelChunk chunk, long timeInhabited, List<MobCategory> spawnCategories, NaturalSpawner.SpawnState spawnState) {
-+    public void tickSpawningChunk(LevelChunk chunk, long timeInhabited, List<MobCategory> spawnCategories, NaturalSpawner.SpawnState spawnState) { // EvangeliumServer - make public
-         ChunkPos pos = chunk.getPos();
-         chunk.incrementInhabitedTime(timeInhabited);
+-    private void tickSpawningChunk(final LevelChunk chunk, final List<MobCategory> spawningCategories, final NaturalSpawner.SpawnState spawnCookie) {
++    public void tickSpawningChunk(final LevelChunk chunk, final List<MobCategory> spawningCategories, final NaturalSpawner.SpawnState spawnCookie) { // EvangeliumServer - make public
+         ChunkPos chunkPos = chunk.getPos();
+         chunk.incrementInhabitedTime();
          if (true) { // Paper - rewrite chunk system
-@@ -656,16 +_,16 @@
-         int sectionPosZ = SectionPos.blockToSectionCoord(pos.getZ());
-         ChunkHolder visibleChunkIfPresent = this.getVisibleChunkIfPresent(ChunkPos.asLong(sectionPosX, sectionPosZ));
-         if (visibleChunkIfPresent != null && visibleChunkIfPresent.blockChanged(pos)) {
--            this.chunkHoldersToBroadcast.add(visibleChunkIfPresent);
-+            EvangeliumServerChangesBroadcaster.add(visibleChunkIfPresent); // EvangeliumServer  - handled by the regions
+@@ -673,16 +_,16 @@
+         int zc = SectionPos.blockToSectionCoord(pos.getZ());
+         ChunkHolder chunk = this.getVisibleChunkIfPresent(ChunkPos.pack(xc, zc));
+         if (chunk != null && chunk.blockChanged(pos)) {
+-            this.chunkHoldersToBroadcast.add(chunk);
++            EvangeliumServerChangesBroadcaster.add(chunk); // EvangeliumServer  - handled by the regions
          }
      }
  
      @Override
-     public void onLightUpdate(LightLayer lightLayer, SectionPos pos) {
+     public void onLightUpdate(final LightLayer layer, final SectionPos pos) {
 -        this.mainThreadProcessor.execute(() -> {
 +        this.level.moonrise$getChunkTaskScheduler().scheduleChunkTask(pos.x(), pos.z(), () -> { // EvangeliumServer - run on chunk thread
-             ChunkHolder visibleChunkIfPresent = this.getVisibleChunkIfPresent(pos.chunk().toLong());
-             if (visibleChunkIfPresent != null && visibleChunkIfPresent.sectionLightChanged(lightLayer, pos.y())) {
--                this.chunkHoldersToBroadcast.add(visibleChunkIfPresent);
-+                EvangeliumServerChangesBroadcaster.add(visibleChunkIfPresent); // EvangeliumServer  - handled by the regions
+             ChunkHolder chunk = this.getVisibleChunkIfPresent(pos.chunk().pack());
+             if (chunk != null && chunk.sectionLightChanged(layer, pos.y())) {
+-                this.chunkHoldersToBroadcast.add(chunk);
++                EvangeliumServerChangesBroadcaster.add(chunk); // EvangeliumServer  - handled by the regions
              }
          });
      }
-@@ -708,7 +_,7 @@
+@@ -725,7 +_,7 @@
          if (!player.isRemoved()) {
              this.chunkMap.move(player);
              if (player.isReceivingWaypoints()) {
@@ -288,28 +281,35 @@
              }
          }
      }
-@@ -781,7 +_,7 @@
+@@ -808,7 +_,7 @@
  
-     public void onChunkReadyToSend(ChunkHolder chunkHolder) {
-         if (chunkHolder.hasChangesToBroadcast()) {
--            this.chunkHoldersToBroadcast.add(chunkHolder);
-+            EvangeliumServerChangesBroadcaster.add(chunkHolder); // EvangeliumServer  - handled by the regions
+     public void onChunkReadyToSend(final ChunkHolder chunk) {
+         if (chunk.hasChangesToBroadcast()) {
+-            this.chunkHoldersToBroadcast.add(chunk);
++            EvangeliumServerChangesBroadcaster.add(chunk); // EvangeliumServer  - handled by the regions
          }
      }
  
-@@ -792,6 +_,8 @@
- 
-         @Override
-         public void managedBlock(BooleanSupplier isDone) {
-+            // Evangelium - nothing runs tasks inside an intra-region parallel phase, so a wait there would only end through RegionGuard
-+            if (io.evangelium.server.threading.IntraRegion.inParallelPhase() && !isDone.getAsBoolean()) throw new io.evangelium.server.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a wait for chunk/region tasks inside a parallel phase on " + Thread.currentThread().getName());
-             super.managedBlock(() -> MinecraftServer.throwIfFatalException() && isDone.getAsBoolean());
+@@ -818,6 +_,13 @@
          }
  
-@@ -823,12 +_,31 @@
+         @Override
++        public void managedBlock(final BooleanSupplier isDone) {
++            // Evangelium - nothing runs tasks inside an intra-region parallel phase, so a wait there would only end through RegionGuard
++            if (io.evangelium.server.threading.IntraRegion.inParallelPhase() && !isDone.getAsBoolean()) throw new io.evangelium.server.threading.IntraRegion.SyncLoadInPhaseException("[IntraRegion] a wait for chunk/region tasks inside a parallel phase on " + Thread.currentThread().getName());
++            super.managedBlock(isDone);
++        }
++
++        @Override
+         public Runnable wrapRunnable(final Runnable runnable) {
+             return runnable;
+         }
+@@ -844,13 +_,33 @@
+         }
  
          @Override
-         public boolean pollTask() {
+-        protected boolean pollTask() {
++        public boolean pollTask() { // EvangeliumServer - make public
 +            // EvangeliumServer start - run all region tasks cause the worker threads might be deadlocked and not get to them
 +            if (io.evangelium.server.threading.IntraRegion.inParallelPhase()) {
 +                return false; // Evangelium - no region or chunk tasks inside an intra-region parallel phase (owner or helper)
@@ -329,13 +329,14 @@
 +                });
 +            }
 +            // EvangeliumServer end
-             // Paper start - rewrite chunk system
-             final ServerChunkCache serverChunkCache = ServerChunkCache.this;
-             if (serverChunkCache.runDistanceManagerUpdates()) {
++
+             if (ServerChunkCache.this.runDistanceManagerUpdates()) {
                  return true;
-             } else {
--                return super.pollTask() | ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)serverChunkCache.level).moonrise$getChunkTaskScheduler().executeMainThreadTask();
-+                return (!EvangeliumServerTickThread.isEvangeliumServerTickThread() && super.pollTask()) | ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)serverChunkCache.level).moonrise$getChunkTaskScheduler().executeMainThreadTask(); // EvangeliumServer - don't run main thread tasks on workers
              }
-             // Paper end - rewrite chunk system
+ 
+             // Paper - rewrite chunk system
+-            return super.pollTask() | ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)ServerChunkCache.this.level).moonrise$getChunkTaskScheduler().executeMainThreadTask(); // Paper - rewrite chunk system
++            return (!EvangeliumServerTickThread.isEvangeliumServerTickThread() && super.pollTask()) | ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)ServerChunkCache.this.level).moonrise$getChunkTaskScheduler().executeMainThreadTask(); // Paper - rewrite chunk system // EvangeliumServer - don't run main thread tasks on workers
          }
+     }
+ }

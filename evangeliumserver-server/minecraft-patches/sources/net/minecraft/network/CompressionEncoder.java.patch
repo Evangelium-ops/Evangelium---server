@@ -55,4 +55,4 @@
 +    // EvangeliumServer end - write each packet once
  
      @Override
-     public void handlerRemoved(ChannelHandlerContext ctx) {
+     public void handlerRemoved(final ChannelHandlerContext ctx) {

@@ -152,8 +152,8 @@
              final int currentChunkOffZ = chunkZ << 4;
              final int neighbourChunkOffX = (chunkX + direction.x) << 4;
 @@ -592,12 +_,148 @@
-         final int chunkX = chunkPos.x;
-         final int chunkZ = chunkPos.z;
+         final int chunkX = chunkPos.x();
+         final int chunkZ = chunkPos.z();
  
 +        final boolean track = fromSection == this.minLightSection && toSection == this.maxLightSection && net.minecraft.world.level.chunk.LevelChunk.lightEdgeVersions(); // EvangeliumServer - light edge versions
 +        if (track) {

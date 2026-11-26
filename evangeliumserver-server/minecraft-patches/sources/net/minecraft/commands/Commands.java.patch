@@ -1,18 +1,18 @@
 --- a/net/minecraft/commands/Commands.java
 +++ b/net/minecraft/commands/Commands.java
-@@ -379,15 +_,24 @@
+@@ -393,16 +_,26 @@
  
          try {
-             if (contextChain != null) {
+             if (commandChain != null) {
 -                executeCommandInContext(
 +                // Evangelium start - Paper Brigadier commands of a plugin without Folia support run under its plugin lock, like Bukkit commands
 +                final Runnable evangeliumExecute = () -> executeCommandInContext(
-                     commandSourceStack,
+                     sender,
                      executionContext -> ExecutionContext.queueInitialCommandExecution(
-                         executionContext, command, contextChain, commandSourceStack, CommandResultCallback.EMPTY
+                         executionContext, commandString, commandChain, sender, CommandResultCallback.EMPTY
                      )
                  );
-+                final org.bukkit.plugin.Plugin evangeliumOwner = brigadierOwner(parseResults);
++                final org.bukkit.plugin.Plugin evangeliumOwner = brigadierOwner(command);
 +                if (evangeliumOwner != null) {
 +                    io.evangelium.server.threading.SynchronousPluginExecution.executeNoException(evangeliumOwner, evangeliumExecute::run);
 +                } else {
@@ -21,12 +21,14 @@
 +                // Evangelium end
              }
              // Paper start
-         } catch (Throwable var12) { // always gracefully handle it, no matter how bad:tm:
-+            if (var12 instanceof io.evangelium.server.threading.RegionTickAbandonedError abandoned) throw abandoned; // Evangelium - an abandoned region tick ends
-             if (throwCommandError) throw var12; // rethrow directly if requested
-             // Paper end
-             MutableComponent mutableComponent = Component.literal(var12.getMessage() == null ? var12.getClass().getName() : var12.getMessage());
-@@ -416,6 +_,29 @@
+         } catch (Throwable e) { // always gracefully handle it, no matter how bad:tm:
++            if (e instanceof io.evangelium.server.threading.RegionTickAbandonedError abandoned) throw abandoned; // Evangelium - an abandoned region tick ends
+             if (throwCommandError) throw e; // rethrow directly if requested
++            // Paper end
+             MutableComponent hover = Component.literal(e.getMessage() == null ? e.getClass().getName() : e.getMessage());
+             LOGGER.error("Command exception: /{}", commandString, e); // Paper - always show execution exception in console log
+             if (sender.getServer().isDebugging() || LOGGER.isDebugEnabled()) { // Paper - Debugging
+@@ -427,6 +_,29 @@
              Profiler.get().pop();
          }
      }
@@ -55,4 +57,4 @@
 +    // Evangelium end
  
      private static @Nullable ContextChain<CommandSourceStack> finishParsing(
-         ParseResults<CommandSourceStack> parseResults, String command, CommandSourceStack source
+         final ParseResults<CommandSourceStack> command, final String commandString, final CommandSourceStack sender

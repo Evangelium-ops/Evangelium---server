@@ -1,11 +1,11 @@
 --- a/net/minecraft/world/entity/ai/Brain.java
 +++ b/net/minecraft/world/entity/ai/Brain.java
-@@ -47,14 +_,38 @@
-     static final Logger LOGGER = LogUtils.getLogger();
-     private final Supplier<Codec<Brain<E>>> codec;
+@@ -37,14 +_,38 @@
+ 
+ public class Brain<E extends LivingEntity> {
      private static final int SCHEDULE_UPDATE_DELAY = 20;
--    private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = Maps.newHashMap();
-+    private final Map<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> memories = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>(); // Evangelium - read several times per behaviour per tick; MemoryModuleType has no equals, so identity hashing is the same lookup without HashMap nodes
+-    private final Map<MemoryModuleType<?>, MemorySlot<?>> memories = Maps.newHashMap();
++    private final Map<MemoryModuleType<?>, MemorySlot<?>> memories = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>(); // Evangelium - identity keys, read several times per behaviour per tick
      private final Map<SensorType<? extends Sensor<? super E>>, Sensor<? super E>> sensors = Maps.newLinkedHashMap();
 +    private static final Sensor<?>[] EMPTY_SENSORS = new Sensor<?>[0];
 +    private final Sensor<? super E>[] sensorArray;
@@ -41,40 +41,43 @@
      private Activity defaultActivity = Activity.IDLE;
      private long lastScheduleUpdate = -9999L;
  
-@@ -123,6 +_,7 @@
-         return mutableObject.get();
+@@ -68,6 +_,7 @@
+     }
+ 
+     @VisibleForTesting
++    @SuppressWarnings("unchecked")
+     protected Brain(
+         final Collection<? extends MemoryModuleType<?>> memoryTypes,
+         final Collection<? extends SensorType<? extends Sensor<? super E>>> sensorTypes,
+@@ -89,6 +_,9 @@
+             }
+         }
+ 
++        // Evangelium - sensor membership is private and fixed after construction; an array keeps the LinkedHashMap firing order
++        this.sensorArray = this.sensors.isEmpty() ? (Sensor<? super E>[]) EMPTY_SENSORS : this.sensors.values().toArray(Sensor[]::new);
++
+         for (ActivityData<E> activity : activities) {
+             this.addActivity(activity.activityType(), activity.behaviorPriorityPairs(), activity.conditions(), activity.memoriesToEraseWhenStopped());
+         }
+@@ -105,7 +_,9 @@
+         this.memories.putIfAbsent(memoryType, MemorySlot.create());
      }
  
 +    @SuppressWarnings("unchecked")
-     public Brain(
-         Collection<? extends MemoryModuleType<?>> memoryModuleTypes,
-         Collection<? extends SensorType<? extends Sensor<? super E>>> sensorTypes,
-@@ -139,6 +_,9 @@
-             this.sensors.put(sensorType, (Sensor<? super E>)sensorType.create());
-         }
- 
-+        // Sensor membership is private and fixed after construction; retain LinkedHashMap firing order.
-+        this.sensorArray = this.sensors.isEmpty() ? (Sensor<? super E>[]) EMPTY_SENSORS : this.sensors.values().toArray(Sensor[]::new);
-+
-         for (Sensor<? super E> sensor : this.sensors.values()) {
-             for (MemoryModuleType<?> memoryModuleType1 : sensor.requires()) {
-                 this.memories.put(memoryModuleType1, Optional.empty());
-@@ -197,12 +_,14 @@
-         if (optional == null) {
-             throw new IllegalStateException("Unregistered memory fetched: " + type);
-         } else {
-+            if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) return optional.isEmpty() ? Optional.empty() : (Optional<U>) optional.get().evangelium$optional(); // Evangelium - same value, no new Optional
-             return (Optional<U>) optional.map(ExpirableValue::getValue);
-         }
+     public Brain() {
++        this.sensorArray = (Sensor<? super E>[]) EMPTY_SENSORS; // Evangelium - no sensors
+         this.setCoreActivities(ImmutableSet.of(Activity.CORE));
+         this.useDefaultActivity();
+     }
+@@ -214,6 +_,7 @@
      }
  
-     public <U> @Nullable Optional<U> getMemoryInternal(MemoryModuleType<U> type) {
-         Optional<? extends ExpirableValue<?>> optional = this.memories.get(type);
-+        if (optional != null && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) return optional.isEmpty() ? Optional.empty() : (Optional<U>) optional.get().evangelium$optional(); // Evangelium
-         return optional == null ? null : (Optional<U>) optional.map(ExpirableValue::getValue);
+     public <U> Optional<U> getMemory(final MemoryModuleType<U> type) {
++        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) return this.getMemorySlot(type).evangelium$optional(); // Evangelium - same value, no new Optional
+         return Optional.ofNullable(this.getMemorySlot(type).value());
      }
  
-@@ -291,6 +_,8 @@
+@@ -309,6 +_,8 @@
              this.activeActivities.clear();
              this.activeActivities.addAll(this.coreActivities);
              this.activeActivities.add(activity);
@@ -83,9 +86,9 @@
          }
      }
  
-@@ -380,11 +_,13 @@
-                 .computeIfAbsent(activity, activity1 -> Sets.newLinkedHashSet())
-                 .add((BehaviorControl<? super E>)pair.getSecond());
+@@ -371,11 +_,13 @@
+                 .computeIfAbsent(activity, key -> Sets.newLinkedHashSet())
+                 .add(behavior);
          }
 +        this.behaviorGroups = null; // Evangelium
      }
@@ -96,23 +99,24 @@
 +        this.behaviorGroups = null; // Evangelium
      }
  
-     public boolean isActive(Activity activity) {
-@@ -406,18 +_,68 @@
+     public boolean isActive(final Activity activity) {
+@@ -384,14 +_,46 @@
  
-     public void tick(ServerLevel level, E entity) {
+     public void tick(final ServerLevel level, final E body) {
          this.forgetOutdatedMemories();
 +        this.evangeliumLastTick = level.getGameTime(); // Evangelium
-         this.tickSensors(level, entity);
--        this.startEachNonRunningBehavior(level, entity);
+         this.tickSensors(level, body);
+-        this.startEachNonRunningBehavior(level, body);
 +        // Evangelium start - only the decision to start something can wait; running behaviors, sensors and memories keep every tick
-+        if (!(entity instanceof net.minecraft.world.entity.npc.villager.Villager villager) || io.evangelium.server.ai.AiDiagnostics.villagerDecidesNow(villager, this.decideNextTick)) {
++        if (!(body instanceof net.minecraft.world.entity.npc.villager.Villager villager) || io.evangelium.server.ai.AiDiagnostics.villagerDecidesNow(villager, this.decideNextTick)) {
 +            this.decideNextTick = false;
-+            this.startEachNonRunningBehavior(level, entity);
++            this.startEachNonRunningBehavior(level, body);
 +        }
 +        // Evangelium end
-         this.tickEachRunningBehavior(level, entity);
+         this.tickEachRunningBehavior(level, body);
      }
  
+-    private void tickSensors(final ServerLevel level, final E body) {
 +    private boolean decideNextTick; // Evangelium - an activity changed: its behaviors must not wait
 +
 +    // Evangelium start - read-only sensing ahead of the brain tick (see Sensor#evangeliumPrecompute)
@@ -125,7 +129,8 @@
 +    }
 +
 +    public void evangeliumPresense(ServerLevel level, E entity) {
-+        for (Sensor<? super E> sensor : this.sensors.values()) {
+         for (Sensor<? super E> sensor : this.sensors.values()) {
+-            sensor.tick(level, body);
 +            if (sensor.evangeliumDueNext()) {
 +                sensor.evangeliumPrecompute(level, entity);
 +            }
@@ -133,46 +138,23 @@
 +    }
 +    // Evangelium end
 +
-     private void tickSensors(ServerLevel level, E brainHolder) {
--        for (Sensor<? super E> sensor : this.sensors.values()) {
--            sensor.tick(level, brainHolder);
++    private void tickSensors(ServerLevel level, E body) {
 +        if (io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()) {
 +            for (int i = 0; i < this.sensorArray.length; i++) {
-+                this.sensorArray[i].tick(level, brainHolder);
++                this.sensorArray[i].tick(level, body);
 +            }
 +        } else {
 +            for (Sensor<? super E> sensor : this.sensors.values()) {
-+                sensor.tick(level, brainHolder);
++                sensor.tick(level, body);
 +            }
          }
      }
  
-     private void forgetOutdatedMemories() {
-+        // Evangelium start - the same entries in the same order without an entry object per memory (erasing only replaces a value)
-+        if (net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
-+            var iterator = ((it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>>) this.memories).reference2ObjectEntrySet().fastIterator();
-+            while (iterator.hasNext()) {
-+                var entry = iterator.next();
-+                Optional<? extends ExpirableValue<?>> value = entry.getValue();
-+                if (value.isPresent()) {
-+                    ExpirableValue<?> expirableValue = value.get();
-+                    if (expirableValue.hasExpired()) {
-+                        this.eraseMemory(entry.getKey());
-+                    }
-+
-+                    expirableValue.tick();
-+                }
-+            }
-+            return;
-+        }
-+        // Evangelium end
-         for (Entry<MemoryModuleType<?>, Optional<? extends ExpirableValue<?>>> entry : this.memories.entrySet()) {
-             if (entry.getValue().isPresent()) {
-                 ExpirableValue<?> expirableValue = (ExpirableValue<?>)entry.getValue().get();
-@@ -438,9 +_,50 @@
+@@ -407,9 +_,50 @@
          }
      }
  
+-    private void startEachNonRunningBehavior(final ServerLevel level, final E body) {
 +    // Evangelium start
 +    @SuppressWarnings("unchecked")
 +    private BehaviorGroup<E>[] behaviorGroups() {
@@ -199,8 +181,8 @@
 +    }
 +    // Evangelium end
 +
-     private void startEachNonRunningBehavior(ServerLevel level, E entity) {
-         long gameTime = level.getGameTime();
++    private void startEachNonRunningBehavior(ServerLevel level, E body) {
+         long time = level.getGameTime();
  
 +        // Evangelium start - the same order; an activity a behavior switches on or off is still seen by the groups after it
 +        if (io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()) {
@@ -209,7 +191,7 @@
 +                    BehaviorControl<? super E>[] behaviors = group.behaviors();
 +                    for (int i = 0; i < behaviors.length; i++) {
 +                        if (behaviors[i].getStatus() == Behavior.Status.STOPPED) {
-+                            if (behaviors[i].tryStart(level, entity, gameTime) && behaviors[i] instanceof net.minecraft.world.entity.ai.behavior.OneShot<?> && !net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("running")) this.evangeliumOneShotsStarted++; // Evangelium
++                            if (behaviors[i].tryStart(level, body, time) && behaviors[i] instanceof net.minecraft.world.entity.ai.behavior.OneShot<?> && !net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("running")) this.evangeliumOneShotsStarted++; // Evangelium
 +                        }
 +                    }
 +                }
@@ -217,12 +199,12 @@
 +            return;
 +        }
 +        // Evangelium end
-         for (Map<Activity, Set<BehaviorControl<? super E>>> map : this.availableBehaviorsByPriority.values()) {
-             for (Entry<Activity, Set<BehaviorControl<? super E>>> entry : map.entrySet()) {
-                 Activity activity = entry.getKey();
-@@ -458,6 +_,45 @@
-     private void tickEachRunningBehavior(ServerLevel level, E entity) {
-         long gameTime = level.getGameTime();
+         for (Map<Activity, Set<BehaviorControl<? super E>>> behavioursByActivities : this.availableBehaviorsByPriority.values()) {
+             for (Entry<Activity, Set<BehaviorControl<? super E>>> behavioursForActivity : behavioursByActivities.entrySet()) {
+                 Activity activity = behavioursForActivity.getKey();
+@@ -427,6 +_,45 @@
+     private void tickEachRunningBehavior(final ServerLevel level, final E body) {
+         long timestamp = level.getGameTime();
  
 +        // Evangelium start - who runs is settled before the first tickOrStop, as with getRunningBehaviors(), without its list
 +        if (io.evangelium.server.ai.AiDiagnostics.brainOptimizationEnabled()) {
@@ -242,7 +224,7 @@
 +                    }
 +                }
 +                for (int i = 0; i < count; i++) {
-+                    running[i].tickOrStop(level, entity, gameTime);
++                    running[i].tickOrStop(level, body, timestamp);
 +                }
 +                return;
 +            }
@@ -256,13 +238,13 @@
 +                    }
 +                }
 +            }
-+            if (onlyStateful && evangeliumStateful != count) net.minecraft.world.entity.ai.AiOptimizations.mismatch("brain running scan: a one-shot is RUNNING with none started this tick: " + entity); // Evangelium - verifyAi
++            if (onlyStateful && evangeliumStateful != count) net.minecraft.world.entity.ai.AiOptimizations.mismatch("brain running scan: a one-shot is RUNNING with none started this tick: " + body); // Evangelium - verifyAi
 +            for (int i = 0; i < count; i++) {
-+                running[i].tickOrStop(level, entity, gameTime);
++                running[i].tickOrStop(level, body, timestamp);
 +            }
 +            return;
 +        }
 +        // Evangelium end
-         for (BehaviorControl<? super E> behaviorControl : this.getRunningBehaviors()) {
-             behaviorControl.tickOrStop(level, entity, gameTime);
+         for (BehaviorControl<? super E> behavior : this.getRunningBehaviors()) {
+             behavior.tickOrStop(level, body, timestamp);
          }

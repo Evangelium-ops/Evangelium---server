@@ -1,40 +1,41 @@
 --- a/net/minecraft/world/entity/ai/behavior/Behavior.java
 +++ b/net/minecraft/world/entity/ai/behavior/Behavior.java
-@@ -15,6 +_,7 @@
+@@ -16,6 +_,7 @@
      private final int minDuration;
      private final int maxDuration;
      private final String configKey; // Paper - configurable behavior tick rate and timings
 +    private Object evangeliumRateTable; private int evangeliumRateSize; private Object evangeliumRateType; private int evangeliumRate; // Evangelium - tick rate memo
  
-     public Behavior(Map<MemoryModuleType<?>, MemoryStatus> entryCondition) {
-         this(entryCondition, 60);
-@@ -46,7 +_,16 @@
+     public Behavior(final Map<MemoryModuleType<?>, MemoryStatus> entryCondition) {
+         this(entryCondition, DEFAULT_DURATION);
+@@ -52,7 +_,16 @@
      @Override
-     public final boolean tryStart(ServerLevel level, E owner, long gameTime) {
+     public final boolean tryStart(final ServerLevel level, final E body, final long timestamp) {
          // Paper start - configurable behavior tick rate and timings
--        int tickRate = java.util.Objects.requireNonNullElse(level.paperConfig().tickRates.behavior.get(owner.getType(), this.configKey), -1);
+-        int tickRate = java.util.Objects.requireNonNullElse(level.paperConfig().tickRates.behavior.get(body.getType(), this.configKey), -1);
 +        // Evangelium - the rate for this behaviour and owner type, looked up again only when the config table object (reload) or its size changes
 +        var evangeliumRates = level.paperConfig().tickRates.behavior;
 +        int tickRate;
-+        if (evangeliumRates == this.evangeliumRateTable && evangeliumRates.size() == this.evangeliumRateSize && owner.getType() == this.evangeliumRateType && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
++        if (evangeliumRates == this.evangeliumRateTable && evangeliumRates.size() == this.evangeliumRateSize && body.getType() == this.evangeliumRateType && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
 +            tickRate = net.minecraft.world.entity.ai.AiOptimizations.PLANT.equals("tickrate") ? this.evangeliumRate + 5 : this.evangeliumRate;
-+            if (net.minecraft.world.entity.ai.AiOptimizations.VERIFY && tickRate != java.util.Objects.requireNonNullElse(evangeliumRates.get(owner.getType(), this.configKey), -1)) net.minecraft.world.entity.ai.AiOptimizations.mismatch("behaviour tick-rate memo " + this.configKey);
++            if (net.minecraft.world.entity.ai.AiOptimizations.VERIFY && tickRate != java.util.Objects.requireNonNullElse(evangeliumRates.get(body.getType(), this.configKey), -1)) net.minecraft.world.entity.ai.AiOptimizations.mismatch("behaviour tick-rate memo " + this.configKey);
 +        } else {
-+            tickRate = java.util.Objects.requireNonNullElse(evangeliumRates.get(owner.getType(), this.configKey), -1);
-+            this.evangeliumRateTable = evangeliumRates; this.evangeliumRateSize = evangeliumRates.size(); this.evangeliumRateType = owner.getType(); this.evangeliumRate = tickRate;
++            tickRate = java.util.Objects.requireNonNullElse(evangeliumRates.get(body.getType(), this.configKey), -1);
++            this.evangeliumRateTable = evangeliumRates; this.evangeliumRateSize = evangeliumRates.size(); this.evangeliumRateType = body.getType(); this.evangeliumRate = tickRate;
 +        }
-         if (tickRate > -1 && gameTime < this.endTimestamp + tickRate) {
+         if (tickRate > -1 && timestamp < this.endTimestamp + tickRate) {
              return false;
          }
-@@ -103,7 +_,33 @@
+@@ -109,7 +_,33 @@
          return this.getClass().getSimpleName();
      }
  
+-    protected boolean hasRequiredMemories(final E body) {
 +    // Evangelium start - an immutable entry condition flattened into arrays once (same order, same checks)
 +    private MemoryModuleType<?>[] evangeliumConditionTypes;
 +    private MemoryStatus[] evangeliumConditionStates;
 +
-     protected boolean hasRequiredMemories(E owner) {
++    protected boolean hasRequiredMemories(E body) {
 +        if (this.entryCondition instanceof com.google.common.collect.ImmutableMap<?, ?> && net.minecraft.world.entity.ai.AiOptimizations.brainLoops()) {
 +            MemoryModuleType<?>[] types = this.evangeliumConditionTypes;
 +            MemoryStatus[] states = this.evangeliumConditionStates;
@@ -48,7 +49,7 @@
 +                this.evangeliumConditionStates = states = st;
 +                this.evangeliumConditionTypes = types = t;
 +            }
-+            net.minecraft.world.entity.ai.Brain<?> brain = owner.getBrain();
++            net.minecraft.world.entity.ai.Brain<?> brain = body.getBrain();
 +            for (int i = 0; i < types.length; i++) {
 +                if (!brain.checkMemory(types[i], states[i])) {
 +                    return false;
@@ -58,5 +59,5 @@
 +        }
 +        // Evangelium end
          for (Entry<MemoryModuleType<?>, MemoryStatus> entry : this.entryCondition.entrySet()) {
-             MemoryModuleType<?> memoryModuleType = entry.getKey();
-             MemoryStatus memoryStatus = entry.getValue();
+             MemoryModuleType<?> memoryType = entry.getKey();
+             MemoryStatus requiredStatus = entry.getValue();

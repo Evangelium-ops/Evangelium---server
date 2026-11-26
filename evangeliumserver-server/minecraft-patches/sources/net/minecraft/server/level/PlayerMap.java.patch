@@ -25,34 +25,34 @@
 +        return this.playersList; // EvangeliumServer
      }
  
-     public void addPlayer(ServerPlayer player, boolean skipPlayer) {
--        this.players.put(player, skipPlayer);
-+        this.playersLock.write(() -> this.players.put(player, skipPlayer)); // EvangeliumServer
+     public void addPlayer(final ServerPlayer player, final boolean ignored) {
+-        this.players.put(player, ignored);
++        this.playersLock.write(() -> this.players.put(player, ignored)); // EvangeliumServer
 +        this.playersList.add(player); // EvangeliumServer
      }
  
-     public void removePlayer(ServerPlayer player) {
+     public void removePlayer(final ServerPlayer player) {
 -        this.players.removeBoolean(player);
 +        this.playersLock.write(() -> this.players.removeBoolean(player)); // EvangeliumServer
 +        this.playersList.remove(player); // EvangeliumServer
      }
  
-     public void ignorePlayer(ServerPlayer player) {
+     public void ignorePlayer(final ServerPlayer player) {
 -        this.players.replace(player, true);
 +        this.playersLock.write(() -> this.players.replace(player, true)); // EvangeliumServer
      }
  
-     public void unIgnorePlayer(ServerPlayer player) {
+     public void unIgnorePlayer(final ServerPlayer player) {
 -        this.players.replace(player, false);
 +        this.playersLock.write(() -> this.players.replace(player, false)); // EvangeliumServer
      }
  
-     public boolean ignoredOrUnknown(ServerPlayer player) {
+     public boolean ignoredOrUnknown(final ServerPlayer player) {
 -        return this.players.getOrDefault(player, true);
 +        return this.playersLock.optimisticRead(() -> this.players.getOrDefault(player, true)); // EvangeliumServer
      }
  
-     public boolean ignored(ServerPlayer player) {
+     public boolean ignored(final ServerPlayer player) {
 -        return this.players.getBoolean(player);
 +        return this.playersLock.optimisticRead(() -> this.players.getBoolean(player)); // EvangeliumServer
      }

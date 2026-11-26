@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/waypoints/ServerWaypointManager.java
 +++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
-@@ -18,10 +_,40 @@
+@@ -18,7 +_,37 @@
  public class ServerWaypointManager implements WaypointManager<WaypointTransmitter> {
      private final Set<WaypointTransmitter> waypoints = new HashSet<>();
      private final Set<ServerPlayer> players = new HashSet<>();
@@ -36,35 +36,41 @@
 +        return removed;
 +    }
 +    // Evangelium end
+     // Paper start - optimize ServerWaypointManager with locator bar disabled
+     public boolean locatorBarEnabled; // Avoid a gamerule lookup for each player
+ 
+@@ -28,7 +_,7 @@
+     // Paper end - optimize ServerWaypointManager with locator bar disabled
  
      @Override
--    public void trackWaypoint(WaypointTransmitter waypoint) {
-+    public synchronized void trackWaypoint(WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
+-    public void trackWaypoint(final WaypointTransmitter waypoint) {
++    public synchronized void trackWaypoint(final WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
          this.waypoints.add(waypoint);
  
-         for (ServerPlayer serverPlayer : this.players) {
-@@ -30,29 +_,45 @@
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
+@@ -38,30 +_,46 @@
      }
  
      @Override
--    public void updateWaypoint(WaypointTransmitter waypoint) {
-+    public synchronized void updateWaypoint(WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
+-    public void updateWaypoint(final WaypointTransmitter waypoint) {
++    public synchronized void updateWaypoint(final WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
          if (this.waypoints.contains(waypoint)) {
--            Map<ServerPlayer, WaypointTransmitter.Connection> map = Tables.transpose(this.connections).row(waypoint);
--            SetView<ServerPlayer> set = Sets.difference(this.players, map.keySet());
+-            Map<ServerPlayer, WaypointTransmitter.Connection> playerConnection = Tables.transpose(this.connections).row(waypoint);
+-            SetView<ServerPlayer> potentialPlayers = Sets.difference(this.players, playerConnection.keySet());
 +            // Evangelium start - the index instead of a column view of the table
-+            Map<ServerPlayer, WaypointTransmitter.Connection> map = this.byWaypoint.getOrDefault(waypoint, Map.of());
++            Map<ServerPlayer, WaypointTransmitter.Connection> playerConnection = this.byWaypoint.getOrDefault(waypoint, Map.of());
  
--            for (Entry<ServerPlayer, WaypointTransmitter.Connection> entry : ImmutableSet.copyOf(map.entrySet())) {
-+            for (Entry<ServerPlayer, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(map.entrySet())) {
-                 this.updateConnection(entry.getKey(), waypoint, entry.getValue());
+-            for (Entry<ServerPlayer, WaypointTransmitter.Connection> waypointConnection : ImmutableSet.copyOf(playerConnection.entrySet())) {
++            for (Entry<ServerPlayer, WaypointTransmitter.Connection> waypointConnection : new java.util.ArrayList<>(playerConnection.entrySet())) {
+                 this.updateConnection(waypointConnection.getKey(), waypoint, waypointConnection.getValue());
              }
  
--            for (ServerPlayer serverPlayer : set) {
--                this.createConnection(serverPlayer, waypoint);
-+            for (ServerPlayer serverPlayer : this.players) {
-+                if (!map.containsKey(serverPlayer)) {
-+                    this.createConnection(serverPlayer, waypoint);
+-            for (ServerPlayer player : potentialPlayers) {
+-                this.createConnection(player, waypoint);
++            for (ServerPlayer player : this.players) {
++                if (!playerConnection.containsKey(player)) {
++                    this.createConnection(player, waypoint);
 +                }
              }
 +            // Evangelium end
@@ -72,20 +78,20 @@
      }
  
      @Override
--    public void untrackWaypoint(WaypointTransmitter waypoint) {
--        this.connections.column(waypoint).forEach((serverPlayer, connection) -> connection.disconnect());
+-    public void untrackWaypoint(final WaypointTransmitter waypoint) {
+-        this.connections.column(waypoint).forEach((player, connection) -> connection.disconnect());
 -        Tables.transpose(this.connections).row(waypoint).clear();
 +    public synchronized void untrackWaypoint(WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
 +        // Evangelium start - through the index
 +        Map<ServerPlayer, WaypointTransmitter.Connection> column = this.byWaypoint.remove(waypoint);
 +        if (column != null) {
-+            column.forEach((serverPlayer, connection) -> {
++            column.forEach((player, connection) -> {
 +                connection.disconnect();
-+                Map<WaypointTransmitter, WaypointTransmitter.Connection> row = this.connections.get(serverPlayer);
++                Map<WaypointTransmitter, WaypointTransmitter.Connection> row = this.connections.get(player);
 +                if (row != null) {
 +                    row.remove(waypoint);
 +                    if (row.isEmpty()) {
-+                        this.connections.remove(serverPlayer);
++                        this.connections.remove(player);
 +                    }
 +                }
 +            });
@@ -94,58 +100,60 @@
          this.waypoints.remove(waypoint);
      }
  
--    public void addPlayer(ServerPlayer player) {
-+    public synchronized void addPlayer(ServerPlayer player) { // EvangeliumServer - synchronized
+-    public void addPlayer(final ServerPlayer player) {
++    public synchronized void addPlayer(final ServerPlayer player) { // EvangeliumServer - synchronized
          this.players.add(player);
  
-         for (WaypointTransmitter waypointTransmitter : this.waypoints) {
-@@ -64,41 +_,50 @@
+         if (this.locatorBarEnabled) { // Paper - optimize ServerWaypointManager with locator bar disabled
+@@ -75,43 +_,52 @@
          }
      }
  
--    public void updatePlayer(ServerPlayer player) {
--        Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.row(player);
--        SetView<WaypointTransmitter> set = Sets.difference(this.waypoints, map.keySet());
+-    public void updatePlayer(final ServerPlayer player) {
++    public synchronized void updatePlayer(final ServerPlayer player) { // EvangeliumServer - synchronized
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
+-        Map<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnections = this.connections.row(player);
+-        SetView<WaypointTransmitter> potentialWaypoints = Sets.difference(this.waypoints, waypointConnections.keySet());
 -
--        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : ImmutableSet.copyOf(map.entrySet())) {
--            this.updateConnection(player, entry.getKey(), entry.getValue());
+-        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnection : ImmutableSet.copyOf(waypointConnections.entrySet())) {
+-            this.updateConnection(player, waypointConnection.getKey(), waypointConnection.getValue());
 -        }
 -
--        for (WaypointTransmitter waypointTransmitter : set) {
--            this.createConnection(player, waypointTransmitter);
+-        for (WaypointTransmitter waypoint : potentialWaypoints) {
+-            this.createConnection(player, waypoint);
 -        }
-+    public synchronized void updatePlayer(ServerPlayer player) { // EvangeliumServer - synchronized
-+        Map<WaypointTransmitter, WaypointTransmitter.Connection> map = this.connections.getOrDefault(player, Map.of());
++        Map<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnections = this.connections.getOrDefault(player, Map.of());
 +
 +        // Evangelium start - a plain list copy and a lookup per waypoint instead of an immutable set copy and a set difference view
-+        if (!map.isEmpty()) {
-+            for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(map.entrySet())) {
-+                this.updateConnection(player, entry.getKey(), entry.getValue());
++        if (!waypointConnections.isEmpty()) {
++            for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnection : new java.util.ArrayList<>(waypointConnections.entrySet())) {
++                this.updateConnection(player, waypointConnection.getKey(), waypointConnection.getValue());
 +            }
-+            map = this.connections.getOrDefault(player, Map.of()); // the row may have been dropped (emptied) or made anew above
++            waypointConnections = this.connections.getOrDefault(player, Map.of()); // the row may have been dropped (emptied) or made anew above
 +        }
 +
-+        for (WaypointTransmitter waypointTransmitter : this.waypoints) {
-+            if (!map.containsKey(waypointTransmitter)) {
-+                this.createConnection(player, waypointTransmitter);
++        for (WaypointTransmitter waypoint : this.waypoints) {
++            if (!waypointConnections.containsKey(waypoint)) {
++                this.createConnection(player, waypoint);
 +            }
 +        }
 +        // Evangelium end
      }
  
--    public void removePlayer(ServerPlayer player) {
+-    public void removePlayer(final ServerPlayer player) {
 -        this.connections.row(player).values().removeIf(connection -> {
 -            connection.disconnect();
 -            return true;
 -        });
-+    public synchronized void removePlayer(ServerPlayer player) { // EvangeliumServer - synchronized
+-        this.untrackWaypoint(player);
++    public synchronized void removePlayer(final ServerPlayer player) { // EvangeliumServer - synchronized
 +        // Evangelium start - through the index
 +        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : new java.util.ArrayList<>(this.connections.getOrDefault(player, Map.of()).entrySet())) {
 +            entry.getValue().disconnect();
 +            this.evangeliumRemove(player, entry.getKey());
 +        }
 +        // Evangelium end
-         this.untrackWaypoint((WaypointTransmitter)player);
++        this.untrackWaypoint((WaypointTransmitter)player);
          this.players.remove(player);
      }
  
@@ -157,10 +165,11 @@
 +        this.byWaypoint.clear(); // Evangelium
      }
  
--    public void remakeConnections(WaypointTransmitter waypoint) {
-+    public synchronized void remakeConnections(WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
-         for (ServerPlayer serverPlayer : this.players) {
-             this.createConnection(serverPlayer, waypoint);
+-    public void remakeConnections(final WaypointTransmitter waypoint) {
++    public synchronized void remakeConnections(final WaypointTransmitter waypoint) { // EvangeliumServer - synchronized
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
+         for (ServerPlayer player : this.players) {
+             this.createConnection(player, waypoint);
          }
      }
  
@@ -170,8 +179,8 @@
 +        return Set.copyOf(this.waypoints); // EvangeliumServer - synchronized - make a copy
      }
  
-     private static boolean isLocatorBarEnabledFor(ServerPlayer player) {
-@@ -109,10 +_,10 @@
+     // Paper start - optimize ServerWaypointManager with locator bar disabled
+@@ -125,10 +_,10 @@
          if (player != waypoint) {
              if (isLocatorBarEnabledFor(player)) {
                  waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(connection -> {
@@ -184,12 +193,12 @@
                      if (connection != null) {
                          connection.disconnect();
                      }
-@@ -129,10 +_,10 @@
+@@ -145,10 +_,10 @@
                  } else {
-                     waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(connection1 -> {
-                         connection1.connect();
--                        this.connections.put(player, waypoint, connection1);
-+                        this.evangeliumPut(player, waypoint, connection1); // Evangelium
+                     waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(newConnection -> {
+                         newConnection.connect();
+-                        this.connections.put(player, waypoint, newConnection);
++                        this.evangeliumPut(player, waypoint, newConnection); // Evangelium
                      }, () -> {
                          connection.disconnect();
 -                        this.connections.remove(player, waypoint);

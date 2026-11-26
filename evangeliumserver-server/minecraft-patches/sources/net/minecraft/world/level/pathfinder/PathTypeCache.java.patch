@@ -16,39 +16,43 @@
 +    private final Entry[] entries = new Entry[this.evangeliumMask + 1];
 +    // Evangelium end
  
-     public PathType getOrCompute(BlockGetter level, BlockPos pos) {
-         long packedBlockPos = pos.asLong();
-@@ -19,25 +_,26 @@
+     public PathType getOrCompute(final BlockGetter level, final BlockPos pos) {
+         long key = pos.asLong();
+@@ -18,26 +_,27 @@
+         return cachedPathType != null ? cachedPathType : this.compute(level, pos, index, key);
      }
  
-     private @Nullable PathType get(int index, long pos) {
--        return this.positions[index] == pos ? this.pathTypes[index] : null;
+-    private @Nullable PathType get(final int index, final long key) {
+-        return this.positions[index] == key ? this.pathTypes[index] : null;
++    private @Nullable PathType get(int index, long key) {
 +        Entry entry = this.entries[index]; // Evangelium
-+        return entry != null && entry.pos == pos ? entry.type : null;
++        return entry != null && entry.pos == key ? entry.type : null;
      }
  
-     private PathType compute(BlockGetter level, BlockPos pos, int index, long packedPos) {
-         PathType pathTypeFromState = WalkNodeEvaluator.getPathTypeFromState(level, pos);
--        this.positions[index] = packedPos;
--        this.pathTypes[index] = pathTypeFromState;
-+        this.entries[index] = new Entry(packedPos, pathTypeFromState); // Evangelium
-         return pathTypeFromState;
+-    private PathType compute(final BlockGetter level, final BlockPos pos, final int index, final long key) {
++    private PathType compute(BlockGetter level, BlockPos pos, int index, long key) {
+         PathType pathType = WalkNodeEvaluator.getPathTypeFromState(level, pos);
+-        this.positions[index] = key;
+-        this.pathTypes[index] = pathType;
++        this.entries[index] = new Entry(key, pathType); // Evangelium
+         return pathType;
      }
  
-     public void invalidate(BlockPos pos) {
-         long packedBlockPos = pos.asLong();
-         int i = index(packedBlockPos);
--        if (this.positions[i] == packedBlockPos) {
--            this.pathTypes[i] = null;
-+        Entry entry = this.entries[i]; // Evangelium
-+        if (entry != null && entry.pos == packedBlockPos) {
-+            this.entries[i] = null;
+-    public void invalidate(final BlockPos pos) {
++    public void invalidate(BlockPos pos) {
+         long key = pos.asLong();
+         int index = index(key);
+-        if (this.positions[index] == key) {
+-            this.pathTypes[index] = null;
++        Entry entry = this.entries[index]; // Evangelium
++        if (entry != null && entry.pos == key) {
++            this.entries[index] = null;
          }
      }
  
--    private static int index(long packedPos) {
--        return (int)HashCommon.mix(packedPos) & 4095;
-+    private int index(long packedPos) {
-+        return (int)HashCommon.mix(packedPos) & this.evangeliumMask; // Evangelium
+-    private static int index(final long pos) {
+-        return (int)HashCommon.mix(pos) & 4095;
++    private int index(long pos) {
++        return (int)HashCommon.mix(pos) & this.evangeliumMask; // Evangelium
      }
  }

@@ -1,6 +1,6 @@
 --- a/src/main/java/io/papermc/paper/threadedregions/EntityScheduler.java
 +++ b/src/main/java/io/papermc/paper/threadedregions/EntityScheduler.java
-@@ -194,6 +_,18 @@
+@@ -225,6 +_,18 @@
       * @throws IllegalStateException If the scheduler is retired.
       */
      public void executeTick() {

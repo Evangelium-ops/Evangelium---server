@@ -1,0 +1,11 @@
+--- a/net/minecraft/world/entity/EntityFluidInteraction.java
++++ b/net/minecraft/world/entity/EntityFluidInteraction.java
+@@ -89,7 +_,7 @@
+ 
+                             tracker.height = Math.max(fluidTop - entityY, tracker.height);
+                             if (current != null) {
+-                                Vec3 flow = fluidState.getFlow(level, mutablePos);
++                                Vec3 flow = PhysicsCache.flow(entity.level(), mutablePos, fluidState, null); // Evangelium - flowCache (valid until a block changes on this tick thread)
+                                 current.height = Math.max(tracker.height, current.height);
+                                 if (current.height < 0.4) {
+                                     flow = flow.scale(current.height);

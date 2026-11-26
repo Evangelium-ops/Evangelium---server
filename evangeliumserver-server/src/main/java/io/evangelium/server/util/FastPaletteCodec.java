@@ -82,7 +82,7 @@ public final class FastPaletteCodec {
             BLOCKS_BY_NAME.put(name, block);
         }
         BlockState state = block.defaultBlockState();
-        if (state.getValues().isEmpty()) {
+        if (state.getValues().findAny().isEmpty()) {
             return state;   // the codec reads nothing more for a block without properties
         }
         Tag properties = entry.get("Properties");
@@ -133,7 +133,7 @@ public final class FastPaletteCodec {
         if (tag == null) {
             tag = new CompoundTag();
             tag.putString("Name", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
-            if (!state.getValues().isEmpty()) {
+            if (!state.getValues().findAny().isEmpty()) {
                 CompoundTag properties = new CompoundTag();
                 for (Property<?> property : state.getProperties()) {
                     properties.putString(property.getName(), name(state, property));

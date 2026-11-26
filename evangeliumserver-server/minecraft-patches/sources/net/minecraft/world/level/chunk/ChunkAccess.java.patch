@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/chunk/ChunkAccess.java
 +++ b/net/minecraft/world/level/chunk/ChunkAccess.java
-@@ -327,6 +_,14 @@
+@@ -341,6 +_,14 @@
          return true;
      }
  
@@ -15,19 +15,19 @@
      public void markUnsaved() {
          this.unsaved = true;
      }
-@@ -519,6 +_,7 @@
-             int clampedY = Mth.clamp(y, minY, maxY);
-             int sectionIndex = this.getSectionIndex(QuartPos.toBlock(clampedY));
-             this.sections[sectionIndex].setBiome(x & 3, clampedY & 3, z & 3, biome);
+@@ -578,6 +_,7 @@
+             int clampedQuartY = Mth.clamp(quartY, quartMinY, quartMaxY);
+             int sectionIndex = this.getSectionIndex(QuartPos.toBlock(clampedQuartY));
+             this.sections[sectionIndex].setNoiseBiome(quartX & 3, clampedQuartY & 3, quartZ & 3, biome);
 +            if (this instanceof LevelChunk) io.evangelium.server.spawn.SpawnSkip.BIOME_EPOCH.incrementAndGet(); // Evangelium - natural spawn skip
          } catch (Throwable throwable) {
              CrashReport report = CrashReport.forThrowable(throwable, "Setting biome");
-             CrashReportCategory reportCategory = report.addCategory("Biome being set");
-@@ -539,6 +_,7 @@
-             int quartPosY = QuartPos.fromSection(sectionY);
-             section.fillBiomesFromNoise(resolver, sampler, quartPosMinX, quartPosY, quartPosMinZ);
+             CrashReportCategory category = report.addCategory("Biome being set");
+@@ -598,6 +_,7 @@
+             int quartMinY = QuartPos.fromSection(sectionY);
+             section.fillBiomesFromNoise(biomeResolver, quartMinX, quartMinY, quartMinZ);
          }
 +        if (this instanceof LevelChunk) io.evangelium.server.spawn.SpawnSkip.BIOME_EPOCH.incrementAndGet(); // Evangelium - natural spawn skip
      }
  
-     public boolean hasAnyStructureReferences() {
+     public @Nullable BelowZeroRetrogen getBelowZeroRetrogen() {

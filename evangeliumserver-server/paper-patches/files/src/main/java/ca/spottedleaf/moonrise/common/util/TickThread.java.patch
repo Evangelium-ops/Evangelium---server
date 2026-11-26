@@ -165,7 +165,7 @@
  
      public static boolean isTickThreadFor(final Level world, final BlockPos pos) {
 -        return isTickThread();
-+        return isTickThreadFor(world, ChunkPos.of(pos)); // EvangeliumServer
++        return isTickThreadFor(world, ChunkPos.containing(pos)); // EvangeliumServer
      }
  
      public static boolean isTickThreadFor(final Level world, final BlockPos pos, final int blockRadius) {

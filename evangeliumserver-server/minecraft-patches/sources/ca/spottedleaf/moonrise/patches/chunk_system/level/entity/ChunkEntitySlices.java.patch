@@ -169,15 +169,15 @@
              }
  
              list.add(entity);
-@@ -529,6 +_,7 @@
-             final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
+@@ -530,6 +_,7 @@
+             final int max = Mth.clamp(Mth.floor(box.maxY + 0.0) >> 4, minSection, maxSection);
  
              final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
 +            final boolean packed = this.packed && PACKED_BOXES; // Evangelium
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
-@@ -538,13 +_,25 @@
+@@ -539,13 +_,25 @@
                  }
  
                  final Entity[] storage = list.storage;
@@ -204,15 +204,15 @@
  
                      if (predicate != null && !predicate.test(entity)) {
                          continue;
-@@ -568,6 +_,7 @@
-             final int max = Mth.clamp(Mth.floor(box.maxY + 2.0) >> 4, minSection, maxSection);
+@@ -570,6 +_,7 @@
+             final int max = Mth.clamp(Mth.floor(box.maxY + 0.0) >> 4, minSection, maxSection);
  
              final BasicEntityList<Entity>[] entitiesBySection = this.entitiesBySection;
 +            final boolean packed = this.packed && PACKED_BOXES; // Evangelium
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
-@@ -577,13 +_,25 @@
+@@ -579,13 +_,25 @@
                  }
  
                  final Entity[] storage = list.storage;

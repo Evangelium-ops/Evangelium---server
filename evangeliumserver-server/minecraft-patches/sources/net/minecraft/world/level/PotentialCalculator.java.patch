@@ -16,7 +16,7 @@
 +    private int size;
 +    private volatile int published;
  
-     public void addCharge(BlockPos pos, double charge) {
+     public void addCharge(final BlockPos pos, final double charge) {
          if (charge != 0.0) {
 -            this.charges.add(new PotentialCalculator.PointCharge(pos, charge));
 +            synchronized (this) {
@@ -29,25 +29,25 @@
          }
      }
  
-@@ -18,14 +_,27 @@
-             return 0.0;
-         } else {
-             double d = 0.0;
-+            final int n = this.published;
-+            final PotentialCalculator.PointCharge[] charges = this.charges;
- 
--            for (PotentialCalculator.PointCharge pointCharge : this.charges) {
--                d += pointCharge.getPotentialChange(pos);
-+            for (int i = 0; i < n; i++) {
-+                d += charges[i].getPotentialChange(pos);
-             }
- 
-             return d * charge;
+@@ -19,15 +_,27 @@
          }
+ 
+         double potentialChange = 0.0;
+-
+-        for (PotentialCalculator.PointCharge point : this.charges) {
+-            potentialChange += point.getPotentialChange(pos);
++        final int n = this.published; // Evangelium - snapshot: count first, then the array
++        final PotentialCalculator.PointCharge[] charges = this.charges;
++        for (int i = 0; i < n; i++) {
++            potentialChange += charges[i].getPotentialChange(pos);
+         }
+ 
+         return potentialChange * charge;
      }
-+
+ 
+-    private static class PointCharge {
 +    /** Test hook (NaturalSpawner verify): the same charges in the same order. */
-+    public boolean evangeliumSameAs(PotentialCalculator other) {
++    public boolean evangeliumSameAs(final PotentialCalculator other) {
 +        int n = this.published;
 +        if (n != other.published) return false;
 +        for (int i = 0; i < n; i++) {
@@ -56,6 +56,8 @@
 +        return true;
 +    }
 +    // Evangelium end
- 
-     static class PointCharge {
++
++    static class PointCharge {
          private final BlockPos pos;
+         private final double charge;
+ 

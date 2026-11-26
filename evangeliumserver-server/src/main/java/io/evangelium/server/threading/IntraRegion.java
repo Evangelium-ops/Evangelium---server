@@ -6,6 +6,7 @@ import io.evangelium.server.util.TickTimings;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.entity.BlockEntityTypes;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
@@ -69,8 +70,8 @@ public final class IntraRegion {
      * containers go through scheduled ticks, so they never spread while the chunks run.
      */
     private static final Set<BlockEntityType<?>> CHUNK_LOCAL = Set.of(
-            BlockEntityType.FURNACE, BlockEntityType.BLAST_FURNACE, BlockEntityType.SMOKER, BlockEntityType.BREWING_STAND,
-            BlockEntityType.CAMPFIRE, BlockEntityType.HOPPER, BlockEntityType.MOB_SPAWNER);
+            BlockEntityTypes.FURNACE, BlockEntityTypes.BLAST_FURNACE, BlockEntityTypes.SMOKER, BlockEntityTypes.BREWING_STAND,
+            BlockEntityTypes.CAMPFIRE, BlockEntityTypes.HOPPER, BlockEntityTypes.MOB_SPAWNER);
 
     static {
         LOGGER.info("Intra-region parallelism: {} helper threads", HELPERS);
@@ -202,7 +203,7 @@ public final class IntraRegion {
         Long2ObjectLinkedOpenHashMap<List<T>> byBatch = new Long2ObjectLinkedOpenHashMap<>();
         for (int i = 0; i < items.size(); i++) {
             // batches get keys far apart, so the distance rule never holds one back
-            byBatch.computeIfAbsent(net.minecraft.world.level.ChunkPos.asLong((i % batches) * 8, 0), k -> new ArrayList<>()).add(items.get(i));
+            byBatch.computeIfAbsent(net.minecraft.world.level.ChunkPos.pack((i % batches) * 8, 0), k -> new ArrayList<>()).add(items.get(i));
         }
         final long start = System.nanoTime();
         try {

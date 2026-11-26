@@ -2,29 +2,29 @@
 +++ b/net/minecraft/network/PacketEncoder.java
 @@ -25,7 +_,22 @@
          try {
-             ADVENTURE_LOCALE.set(channelHandlerContext.channel().attr(io.papermc.paper.adventure.PaperAdventure.LOCALE_ATTRIBUTE).get()); // Paper - adventure; set player's locale
-             this.protocolInfo.codec().encode(byteBuf, packet);
+             ADVENTURE_LOCALE.set(ctx.channel().attr(io.papermc.paper.adventure.PaperAdventure.LOCALE_ATTRIBUTE).get()); // Paper - adventure; set player's locale
+             this.protocolInfo.codec().encode(output, packet);
 +            // EvangeliumServer start - write each packet once: verify mode encodes again into a fresh buffer the old way
 +            if (io.evangelium.server.network.PacketFraming.VERIFY) {
-+                final ByteBuf expected = channelHandlerContext.alloc().buffer(Math.max(256, byteBuf.readableBytes()));
++                final ByteBuf expected = ctx.alloc().buffer(Math.max(256, output.readableBytes()));
 +                try {
 +                    this.protocolInfo.codec().encode(expected, packet);
 +                    io.evangelium.server.network.PacketFraming.ENCODE_VERIFIED.increment();
-+                    io.evangelium.server.network.PacketFraming.compare("encode", expected, byteBuf, packetType);
++                    io.evangelium.server.network.PacketFraming.compare("encode", expected, output, packetId);
 +                } catch (Throwable t) {
-+                    LOGGER.warn("[PacketFraming] verify encode of {} failed: {}", packetType, t.toString());
++                    LOGGER.warn("[PacketFraming] verify encode of {} failed: {}", packetId, t.toString());
 +                } finally {
 +                    expected.release();
 +                }
 +            }
 +            // EvangeliumServer end - write each packet once
-             int i = byteBuf.readableBytes();
-+            if (io.evangelium.server.network.PacketFraming.IN_PLACE) { final int[] last = LAST_SIZE.get(packet.getClass()); final int hint = i > 252 ? i : 0; if (last[0] != hint) last[0] = hint; } // EvangeliumServer - write each packet once (small packets never write the shared hint)
+             int writtenBytes = output.readableBytes();
++            if (io.evangelium.server.network.PacketFraming.IN_PLACE) { final int[] last = LAST_SIZE.get(packet.getClass()); final int hint = writtenBytes > 252 ? writtenBytes : 0; if (last[0] != hint) last[0] = hint; } // EvangeliumServer - write each packet once (small packets never write the shared hint)
              if (LOGGER.isDebugEnabled()) {
                  LOGGER.debug(
-                     Connection.PACKET_SENT_MARKER, "OUT: [{}:{}] {} -> {} bytes", this.protocolInfo.id().id(), packetType, packet.getClass().getName(), i
-@@ -50,6 +_,28 @@
-             ProtocolSwapHandler.handleOutboundTerminalPacket(channelHandlerContext, packet);
+                     Connection.PACKET_SENT_MARKER,
+@@ -55,6 +_,28 @@
+             ProtocolSwapHandler.handleOutboundTerminalPacket(ctx, packet);
          }
      }
 +

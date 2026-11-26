@@ -20,7 +20,7 @@ public final class AiCommand extends Command {
         if (!testPermission(sender)) return true;
         if (args.length > 1) { sender.sendMessage(getUsage()); return true; }
         var classes = new HashMap<EntityType<?>, Class<?>>();
-        for (var field : EntityType.class.getFields()) {
+        for (var field : net.minecraft.world.entity.EntityTypes.class.getFields()) { // 26.3: the type constants live in EntityTypes
             if (field.getType() == EntityType.class && field.getGenericType() instanceof ParameterizedType generic
                 && generic.getActualTypeArguments()[0] instanceof Class<?> type) {
                 try { classes.put((EntityType<?>) field.get(null), type); }

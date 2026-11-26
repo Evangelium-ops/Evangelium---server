@@ -195,10 +195,10 @@ public final class NearbyPlayerIndex {
     private @Nullable Player getNearestTargetedPlayer0(ServerLevel level, TargetingConditions conditions, @Nullable LivingEntity source, double x, double y, double z, boolean fast) {
         final double range = conditions.evangeliumRange();
         if (fast && source != null && range > 0.0) {
-            // TargetingConditions.test fails every player farther from the source than max(range * visibility, 2): visibility is at most
-            // 1, or a Purpur mob-head factor if one is configured above 1
-            final double maxVisibility = Math.max(1.0, Math.max(Math.max(level.purpurConfig.skeletonHeadVisibilityPercent, level.purpurConfig.zombieHeadVisibilityPercent),
-                    Math.max(level.purpurConfig.piglinHeadVisibilityPercent, level.purpurConfig.creeperHeadVisibilityPercent)));
+            // TargetingConditions.test fails every player farther from the source than max(range * visibility, 2). 26.3: visibility comes
+            // from the MOB_VISIBILITY item component, whose codec allows up to 10
+            // shortcut: bound by the codec maximum (always correct, filters less); look at worn items instead if the index shows up in profiles
+            final double maxVisibility = 10.0;
             final double reach = Math.max(range * maxVisibility, 2.0) + DRIFT + 1.0;
             final double reach2 = reach * reach;
             final double sx = source.getX();

@@ -16,14 +16,14 @@
              void addTo(final ServerPlayer player, final ServerLevel world, final int chunkX, final int chunkZ) {
 -                ((ChunkTickServerLevel)world).moonrise$addPlayerTickingRequest(chunkX, chunkZ);
 +                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ); // EvangeliumServer
-+                world.chunkSource.tickingRegions.addPlayerTickingRequest(chunkPos); // Evangelium - never into a region being dropped // ((ChunkTickServerLevel)world).moonrise$addPlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
++                world.getChunkSource().tickingRegions.addPlayerTickingRequest(chunkPos); // Evangelium - never into a region being dropped // ((ChunkTickServerLevel)world).moonrise$addPlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
              }
  
              @Override
              void removeFrom(final ServerPlayer player, final ServerLevel world, final int chunkX, final int chunkZ) {
 -                ((ChunkTickServerLevel)world).moonrise$removePlayerTickingRequest(chunkX, chunkZ);
 +                ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ); // EvangeliumServer
-+                world.chunkSource.tickingRegions.getOrCreate(chunkPos.getRegionPos()).removePlayerTickingRequest(chunkPos); // ((ChunkTickServerLevel)world).moonrise$removePlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
++                world.getChunkSource().tickingRegions.getOrCreate(chunkPos.getRegionPos()).removePlayerTickingRequest(chunkPos); // ((ChunkTickServerLevel)world).moonrise$removePlayerTickingRequest(chunkX, chunkZ); // EvangeliumServer - handled by the regions
              }
          };
          // Moonrise end - chunk tick iteration
@@ -74,7 +74,7 @@
          for (int i = 0; i < TOTAL_MAP_TYPES; ++i) {
 +            if (evangeliumSkip(MAP_TYPES[i])) continue; // Evangelium
              // use 0 for default, will be updated by tickPlayer
-             (newTrackers[i] = new TrackedPlayer(player, MAP_TYPES[i])).add(chunk.x, chunk.z, 0);
+             (newTrackers[i] = new TrackedPlayer(player, MAP_TYPES[i])).add(chunk.x(), chunk.z(), 0);
          }
 @@ -90,12 +_,13 @@
      }
@@ -104,13 +104,13 @@
          final ChunkPos chunk = player.chunkPosition();
  
 +        if (EVANGELIUM_GENERAL_MAPS) { // Evangelium
-         players[NearbyMapType.GENERAL.ordinal()].update(chunk.x, chunk.z, GENERAL_AREA_VIEW_DISTANCE);
-         players[NearbyMapType.GENERAL_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_SMALL_VIEW_DISTANCE);
-         players[NearbyMapType.GENERAL_REALLY_SMALL.ordinal()].update(chunk.x, chunk.z, GENERAL_REALLY_SMALL_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL.ordinal()].update(chunk.x(), chunk.z(), GENERAL_AREA_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_SMALL.ordinal()].update(chunk.x(), chunk.z(), GENERAL_SMALL_VIEW_DISTANCE);
+         players[NearbyMapType.GENERAL_REALLY_SMALL.ordinal()].update(chunk.x(), chunk.z(), GENERAL_REALLY_SMALL_VIEW_DISTANCE);
 +        } // Evangelium
-         players[NearbyMapType.TICK_VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getTickViewDistance(player));
-         players[NearbyMapType.VIEW_DISTANCE.ordinal()].update(chunk.x, chunk.z, PlatformHooks.get().getViewDistance(player));
-         players[NearbyMapType.SPAWN_RANGE.ordinal()].update(chunk.x, chunk.z, ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE); // Moonrise - chunk tick iteration
+         players[NearbyMapType.TICK_VIEW_DISTANCE.ordinal()].update(chunk.x(), chunk.z(), PlatformHooks.get().getTickViewDistance(player));
+         players[NearbyMapType.VIEW_DISTANCE.ordinal()].update(chunk.x(), chunk.z(), PlatformHooks.get().getViewDistance(player));
+         players[NearbyMapType.SPAWN_RANGE.ordinal()].update(chunk.x(), chunk.z(), ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE); // Moonrise - chunk tick iteration
      }
  
      public TrackedChunk getChunk(final ChunkPos pos) {
@@ -191,7 +191,7 @@
  
 -            final TrackedChunk chunk = NearbyPlayers.this.byChunk.get(chunkKey);
 +            NearbyPlayers.this.chunkModificationLock.write(chunkKey, () -> { // EvangeliumServer
-+            TrackedChunk chunk = NearbyPlayers.this.byChunkLock.optimisticRead(() -> NearbyPlayers.this.byChunk.get(chunkKey)); // EvangeliumServer
++            final TrackedChunk chunk = NearbyPlayers.this.byChunkLock.optimisticRead(() -> NearbyPlayers.this.byChunk.get(chunkKey)); // EvangeliumServer
              final NearbyMapType type = this.type;
              if (chunk != null) {
                  chunk.addPlayer(parameter, type);
@@ -216,7 +216,7 @@
 +            NearbyPlayers.this.chunkModificationLock.write(chunkKey, () -> { // EvangeliumServer
 +            final TrackedChunk chunk = NearbyPlayers.this.byChunkLock.optimisticRead(() -> NearbyPlayers.this.byChunk.get(chunkKey)); // EvangeliumServer
              if (chunk == null) {
-                 throw new IllegalStateException("Chunk should exist at " + new ChunkPos(chunkKey));
+                 throw new IllegalStateException("Chunk should exist at " + ChunkPos.unpack(chunkKey));
              }
 @@ -262,12 +_,13 @@
              type.removeFrom(parameter, NearbyPlayers.this.world, chunkX, chunkZ);

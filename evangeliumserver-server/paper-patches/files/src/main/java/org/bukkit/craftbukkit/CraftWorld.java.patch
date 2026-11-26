@@ -1,6 +1,6 @@
 --- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
-@@ -2,10 +_,14 @@
+@@ -2,10 +_,13 @@
  
  import ca.spottedleaf.moonrise.common.list.ReferenceList;
  import ca.spottedleaf.moonrise.common.util.CoordinateUtils;
@@ -9,21 +9,12 @@
  import com.google.common.base.Predicates;
  import com.google.common.collect.Lists;
  import com.mojang.datafixers.util.Pair;
-+import io.evangelium.server.region.RegionPos;
 +import io.evangelium.server.threading.EvangeliumServerTickThread;
 +import io.evangelium.server.threading.SynchronousPluginExecution;
  import io.papermc.paper.FeatureHooks;
- import io.papermc.paper.raytracing.BlockCollisionMode;
- import io.papermc.paper.raytracing.PositionedRayTraceConfigurationBuilder;
-@@ -27,6 +_,7 @@
- import java.util.Random;
- import java.util.Set;
- import java.util.UUID;
-+import java.util.concurrent.CompletableFuture;
- import java.util.function.Consumer;
- import java.util.function.Predicate;
- import java.util.stream.Collectors;
-@@ -237,7 +_,7 @@
+ import io.papermc.paper.entity.poi.PaperPoiSearchResult;
+ import io.papermc.paper.entity.poi.PaperPoiType;
+@@ -241,7 +_,7 @@
  
      @Override
      public int getTickableTileEntityCount() {
@@ -32,7 +23,7 @@
      }
  
      @Override
-@@ -370,6 +_,7 @@
+@@ -377,6 +_,7 @@
  
      @Override
      public Chunk getChunkAt(int x, int z) {
@@ -40,7 +31,7 @@
          warnUnsafeChunk("getting a faraway chunk", x, z); // Paper
          net.minecraft.world.level.chunk.LevelChunk chunk = (net.minecraft.world.level.chunk.LevelChunk) this.world.getChunk(x, z, ChunkStatus.FULL, true);
          return new CraftChunk(chunk);
-@@ -400,11 +_,13 @@
+@@ -407,11 +_,13 @@
      @Override
      public boolean isChunkGenerated(int x, int z) {
          // Paper start - Fix this method
@@ -59,16 +50,16 @@
          ChunkAccess chunk = world.getChunkSource().getChunkAtImmediately(x, z);
          if (chunk != null) {
              return chunk instanceof ImposterProtoChunk || chunk instanceof net.minecraft.world.level.chunk.LevelChunk;
-@@ -413,7 +_,7 @@
+@@ -420,7 +_,7 @@
          ca.spottedleaf.moonrise.common.PlatformHooks.get().scheduleChunkLoad(
-             this.world, x, z, false, ChunkStatus.EMPTY, true, ca.spottedleaf.concurrentutil.util.Priority.NORMAL, future::complete
+             this.world, x, z, false, ChunkStatus.EMPTY, true, ca.spottedleaf.concurrentutil.util.Priority.BLOCKING, future::complete
          );
 -        world.getChunkSource().mainThreadProcessor.managedBlock(future::isDone);
 +        if (TickThread.isTickThread()) world.getChunkSource().mainThreadProcessor.managedBlock(future::isDone); // EvangeliumServer - only managed block if tick thread
          return future.thenApply(c -> {
              if (c != null) {
                  return c.getPersistedStatus() == ChunkStatus.FULL;
-@@ -738,13 +_,15 @@
+@@ -757,18 +_,20 @@
  
      @Override
      public boolean generateTree(Location loc, TreeType type, BlockChangeDelegate delegate) {
@@ -76,33 +67,26 @@
 -        this.world.captureBlockStates = true;
 +        this.world.captureTreeGenerationThreadLocal.set(true); // EvangeliumServer - use thread local
 +        this.world.captureBlockStatesThreadLocal.set(true); // EvangeliumServer - use thread local
-+        this.world.capturedTileEntitiesThreadLocal.get().clear(); // EvangeliumServer - use thread local - clear beforehand
++        this.world.capturedBlockEntitiesThreadLocal.get().clear(); // EvangeliumServer - use thread local - clear beforehand
 +        this.world.capturedBlockStatesThreadLocal.get().clear(); // EvangeliumServer - use thread local - clear beforehand
-         boolean grownTree = this.generateTree(loc, type);
--        this.world.captureBlockStates = false;
--        this.world.captureTreeGeneration = false;
-+        this.world.captureBlockStatesThreadLocal.set(false); // EvangeliumServer - use thread local
-+        this.world.captureTreeGenerationThreadLocal.set(false); // EvangeliumServer - use thread local
-         if (grownTree) { // Copy block data to delegate
--            for (BlockState blockstate : this.world.capturedBlockStates.values()) {
-+            for (BlockState blockstate : this.world.capturedBlockStatesThreadLocal.get().values()) { // EvangeliumServer - use thread local
-                 BlockPos position = ((CraftBlockState) blockstate).getPosition();
-                 net.minecraft.world.level.block.state.BlockState oldBlock = this.world.getBlockState(position);
-                 int flags = ((CraftBlockState) blockstate).getFlags();
-@@ -752,10 +_,10 @@
-                 net.minecraft.world.level.block.state.BlockState newBlock = this.world.getBlockState(position);
-                 this.world.notifyAndUpdatePhysics(position, null, oldBlock, newBlock, newBlock, flags, net.minecraft.world.level.block.Block.UPDATE_LIMIT);
-             }
+         List<org.bukkit.craftbukkit.block.CraftBlockState> capturedBlockStates;
+         boolean grownTree;
+         try {
+             grownTree = this.generateTree(loc, type);
+         } finally {
+-            this.world.captureTreeGeneration = false;
+-            this.world.captureBlockStates = false;
++            this.world.captureTreeGenerationThreadLocal.remove(); // EvangeliumServer - use thread local
++            this.world.captureBlockStatesThreadLocal.remove(); // EvangeliumServer - use thread local
+ 
+-            capturedBlockStates = new ArrayList<>(this.world.capturedBlockStates.values());
 -            this.world.capturedBlockStates.clear();
++            capturedBlockStates = new ArrayList<>(this.world.capturedBlockStatesThreadLocal.get().values()); // EvangeliumServer - use thread local
 +            this.world.capturedBlockStatesThreadLocal.get().clear(); // EvangeliumServer - use thread local
-             return true;
-         } else {
--            this.world.capturedBlockStates.clear();
-+            this.world.capturedBlockStatesThreadLocal.get().clear(); // EvangeliumServer - use thread local
-             return false;
          }
-     }
-@@ -1134,6 +_,13 @@
+         if (grownTree) { // Copy block data to delegate
+             for (CraftBlockState snapshot : capturedBlockStates) {
+@@ -1195,6 +_,13 @@
      public void save(boolean flush) {
          org.spigotmc.AsyncCatcher.catchOp("world save"); // Spigot
          this.server.checkSaveState();
@@ -116,7 +100,7 @@
          boolean oldSave = this.world.noSave;
  
          this.world.noSave = false;
-@@ -1587,7 +_,7 @@
+@@ -1654,7 +_,7 @@
          if (!(entity instanceof CraftEntity craftEntity) || entity.getWorld() != this || sound == null || category == null) return;
  
          ClientboundSoundEntityPacket packet = new ClientboundSoundEntityPacket(CraftSound.bukkitToMinecraftHolder(sound), net.minecraft.sounds.SoundSource.valueOf(category.name()), craftEntity.getHandle(), volume, pitch, seed);
@@ -125,7 +109,7 @@
          if (entityTracker != null) {
              entityTracker.sendToTrackingPlayersAndSelf(packet);
          }
-@@ -1608,7 +_,7 @@
+@@ -1675,7 +_,7 @@
          if (!(entity instanceof CraftEntity craftEntity) || entity.getWorld() != this || sound == null || category == null) return;
  
          ClientboundSoundEntityPacket packet = new ClientboundSoundEntityPacket(Holder.direct(SoundEvent.createVariableRangeEvent(Identifier.parse(sound))), net.minecraft.sounds.SoundSource.valueOf(category.name()), craftEntity.getHandle(), volume, pitch, seed);
@@ -134,7 +118,7 @@
          if (entityTracker != null) {
              entityTracker.sendToTrackingPlayersAndSelf(packet);
          }
-@@ -2035,11 +_,12 @@
+@@ -2102,11 +_,12 @@
      @Override
      public void getChunkAtAsync(int x, int z, boolean gen, boolean urgent, @NotNull Consumer<? super Chunk> cb) {
          warnUnsafeChunk("getting a faraway chunk async", x, z); // Paper
@@ -148,7 +132,7 @@
              }
          );
  
-@@ -2049,11 +_,12 @@
+@@ -2116,11 +_,12 @@
      public void getChunksAtAsync(int minX, int minZ, int maxX, int maxZ, boolean urgent, Runnable cb) {
          warnUnsafeChunk("getting a faraway chunk async", minX, minZ); // Paper
          warnUnsafeChunk("getting a faraway chunk async", maxX, maxZ); // Paper

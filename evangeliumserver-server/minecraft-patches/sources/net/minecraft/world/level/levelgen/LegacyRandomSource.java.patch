@@ -3,26 +3,26 @@
 @@ -30,6 +_,10 @@
  
      @Override
-     public void setSeed(long seed) {
+     public void setSeed(final long seed) {
 +        // EvangeliumServer start - thread safe - we don't really care about inconsistent randomness to vanilla as long as it's random
 +        this.seed.set((seed ^ 25214903917L) & 281474976710655L);
 +        if (true) return;
 +        // EvangeliumServer end
          if (!this.seed.compareAndSet(this.seed.get(), (seed ^ 25214903917L) & 281474976710655L)) {
              throw ThreadingDetector.makeThreadingException("LegacyRandomSource", null);
-         } else {
+         }
 @@ -39,6 +_,14 @@
  
      @Override
-     public int next(int size) {
+     public int next(final int bits) {
 +        // EvangeliumServer start - thread safe - we don't really care about inconsistent randomness to vanilla as long as it's random
 +        long oldseed, nextseed;
 +        do {
 +            oldseed = this.seed.get();
 +            nextseed = oldseed * 25214903917L + 11L & 281474976710655L;
 +        } while (!this.seed.compareAndSet(oldseed, nextseed));
-+        if (true) return (int)(nextseed >> 48 - size);
++        if (true) return (int) (nextseed >> 48 - bits);
 +        // EvangeliumServer end
-         long l = this.seed.get();
-         long l1 = l * 25214903917L + 11L & 281474976710655L;
-         if (!this.seed.compareAndSet(l, l1)) {
+         long oldSeed = this.seed.get();
+         long newSeed = oldSeed * 25214903917L + 11L & 281474976710655L;
+         if (!this.seed.compareAndSet(oldSeed, newSeed)) {

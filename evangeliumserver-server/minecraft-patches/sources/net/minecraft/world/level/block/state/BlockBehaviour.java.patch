@@ -1,25 +1,31 @@
 --- a/net/minecraft/world/level/block/state/BlockBehaviour.java
 +++ b/net/minecraft/world/level/block/state/BlockBehaviour.java
-@@ -1,5 +_,6 @@
- package net.minecraft.world.level.block.state;
- 
+@@ -10,6 +_,8 @@
+ import java.util.function.Function;
+ import java.util.function.Predicate;
+ import java.util.function.ToIntFunction;
++
 +import ca.spottedleaf.moonrise.common.util.TickThread;
- import com.mojang.serialization.Codec;
- import com.mojang.serialization.MapCodec;
- import com.mojang.serialization.codecs.RecordCodecBuilder;
-@@ -167,7 +_,7 @@
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.core.Holder;
+@@ -159,7 +_,7 @@
      }
  
-     protected void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean movedByPiston) {
+     protected void onPlace(final BlockState state, final Level level, final BlockPos pos, final BlockState oldState, final boolean movedByPiston) {
 -        org.spigotmc.AsyncCatcher.catchOp("block onPlace"); // Spigot
 +        TickThread.ensureTickThread(level, pos, "block onPlace"); // Spigot // EvangeliumServer
      }
  
-     protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos, boolean movedByPiston) {
-@@ -421,6 +_,17 @@
-         private static final VoxelShape[] FULL_BLOCK_OCCLUSION_SHAPES = Util.make(
-             new VoxelShape[DIRECTIONS.length], shape -> Arrays.fill(shape, Shapes.block())
-         );
+     protected void affectNeighborsAfterRemoval(final BlockState state, final ServerLevel level, final BlockPos pos, final boolean movedByPiston) {
+@@ -439,7 +_,20 @@
+     public abstract static class BlockStateBase extends StateHolder<Block, BlockState> implements TypedInstance<Block>, ca.spottedleaf.moonrise.patches.starlight.blockstate.StarlightAbstractBlockState, ca.spottedleaf.moonrise.patches.collisions.block.CollisionBlockState { // Paper - rewrite chunk system // Paper - optimise collisions
+         private static final Direction[] DIRECTIONS = Direction.values();
+         private static final VoxelShape[] EMPTY_OCCLUSION_SHAPES = Util.make(new VoxelShape[DIRECTIONS.length], s -> Arrays.fill(s, Shapes.empty()));
+-        private static final VoxelShape[] FULL_BLOCK_OCCLUSION_SHAPES = Util.make(new VoxelShape[DIRECTIONS.length], s -> Arrays.fill(s, Shapes.block()));
++        private static final VoxelShape[] FULL_BLOCK_OCCLUSION_SHAPES = Util.make(
++            new VoxelShape[DIRECTIONS.length], s -> Arrays.fill(s, Shapes.block())
++        );
 +        // Evangelium start - cached "is this state a point of interest" (PoiTypes is fixed after bootstrap), saves two HashMap lookups per setBlock
 +        private byte evangeliumPoi; // 0 not looked up yet, 1 no, 2 yes
 +        public final boolean evangeliumHasPoi() {
@@ -34,10 +40,10 @@
          private final int lightEmission;
          private final boolean useShapeForLightOcclusion;
          private final boolean isAir;
-@@ -470,6 +_,40 @@
-         private boolean emptyCollisionShape;
-         private boolean emptyConstantCollisionShape;
-         private VoxelShape constantCollisionShape;
+@@ -496,6 +_,41 @@
+             return block.hasLargeCollisionShape() || block.getBlock() instanceof net.minecraft.world.level.block.piston.MovingPistonBlock;
+         }
+ 
 +        // Evangelium start - context-free collision shape (PhysicsOptimizations.contextFreeShapes): for a state with a shape cache whose
 +        // block class does not override getCollisionShape(state, level, pos, context), the entity collision shape is the default one,
 +        // hasCollision ? getShape(level, pos, empty context) : empty, which is exactly the cached collision shape (vanilla's own cache
@@ -72,10 +78,11 @@
 +            }
 +        };
 +        // Evangelium end
- 
++
          private static void initCaches(final VoxelShape shape, final boolean neighbours) {
              ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)shape).moonrise$isFullBlock();
-@@ -613,6 +_,23 @@
+             ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)shape).moonrise$occludesFullBlock();
+@@ -659,6 +_,23 @@
                  this.occludesFullBlock = ((ca.spottedleaf.moonrise.patches.collisions.shape.CollisionVoxelShape)collisionShape).moonrise$occludesFullBlock();
                  this.emptyCollisionShape = collisionShape.isEmpty();
                  this.emptyConstantCollisionShape = this.constantCollisionShape != null && this.constantCollisionShape.isEmpty();

@@ -9,11 +9,11 @@
  import net.minecraft.core.BlockPos;
  import net.minecraft.core.GlobalPos;
  import net.minecraft.core.Holder;
-@@ -33,6 +_,7 @@
-                             return false;
-                         } else {
-                             BlockPos blockPos = instance.<GlobalPos>get(potentialJobSite).pos();
-+                            if (!TickThread.isTickThreadFor(level, blockPos)) return true; // EvangeliumServer - don't run outside poi region
-                             Optional<Holder<PoiType>> type = level.getPoiManager().getType(blockPos);
-                             if (type.isEmpty()) {
-                                 return true;
+@@ -36,6 +_,7 @@
+                         }
+ 
+                         BlockPos poiPos = i.<GlobalPos>get(potentialJob).pos();
++                        if (!TickThread.isTickThreadFor(level, poiPos)) return true; // EvangeliumServer - don't run outside poi region
+                         Optional<Holder<PoiType>> poiType = level.getPoiManager().getType(poiPos);
+                         if (poiType.isEmpty()) {
+                             return true;

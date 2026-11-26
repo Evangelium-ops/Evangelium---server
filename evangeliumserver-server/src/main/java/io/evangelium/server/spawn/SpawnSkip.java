@@ -46,7 +46,7 @@ import net.minecraft.world.level.levelgen.structure.structures.NetherFortressStr
  * attempt that would have picked a mob (no spawn list) or found a valid spot (either rule) is counted and logged as a mismatch.
  */
 public final class SpawnSkip {
-    public static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("evangeliumserver.spawnSkip", "true"));
+    public static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("evangeliumserver.spawnSkip", "false")); // 26.3: off until reworked for environment attributes
     public static final boolean VERIFY = Boolean.getBoolean("evangeliumserver.verifySpawnSkip");
     static final int MAX_AGE = Integer.getInteger("evangeliumserver.spawnSkipMaxAge", 1200);
     private static final int RETRY = 20;
@@ -80,14 +80,15 @@ public final class SpawnSkip {
             final java.util.List<java.util.Set<EntityType<?>>> types = new java.util.ArrayList<>();
             for (int c = 0; c < CATS.length; c++) types.add(new java.util.HashSet<>());
             final Registry<Biome> biomes = level.registryAccess().lookupOrThrow(Registries.BIOME);
+            // 26.3: a biome's spawn list is an environment attribute modifier layered over other sources, not a plain list. Until the
+            // skip is reworked for that, every biome may spawn every category and every type of it (the skip can never be wrong, only idle).
+            int allMask = 0;
+            for (MobCategory cat : CATS) allMask |= 1 << cat.ordinal();
+            for (EntityType<?> type : net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE) {
+                for (MobCategory cat : CATS) if (type.getCategory() == cat) types.get(cat.ordinal()).add(type);
+            }
             for (Biome biome : biomes) {
-                int m = 0;
-                for (MobCategory cat : CATS) {
-                    final var list = biome.getMobSettings().getMobs(cat);
-                    if (!list.isEmpty()) m |= 1 << cat.ordinal();
-                    for (var w : list.unwrap()) types.get(cat.ordinal()).add(w.value().type());
-                }
-                i.biomeMask.put(biome, m);
+                i.biomeMask.put(biome, allMask);
             }
             final Registry<Structure> structures = level.registryAccess().lookupOrThrow(Registries.STRUCTURE);
             for (Structure structure : structures) {

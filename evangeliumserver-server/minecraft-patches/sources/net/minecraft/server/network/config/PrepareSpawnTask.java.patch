@@ -9,7 +9,7 @@
  import net.minecraft.core.BlockPos;
  import net.minecraft.network.Connection;
  import net.minecraft.network.protocol.Packet;
-@@ -47,14 +_,30 @@
+@@ -48,14 +_,30 @@
          this.server = server;
          this.nameAndId = new net.minecraft.server.players.NameAndId(profile); // Paper - passthrough profile and packet listener - create from profile
          this.loadListener = LevelLoadListener.noop(); // Paper - per level load listener - this is already a no-op on dedicated server, but we moved it to Level
@@ -23,7 +23,7 @@
 +    // Evangelium end - join preload
  
      @Override
-     public void start(Consumer<Packet<?>> task) {
+     public void start(final Consumer<Packet<?>> connection) {
 +        // Evangelium start - join preload: wait for the background read (Loading.tick), the old synchronous read otherwise
 +        if (this.preload != null) {
 +            this.state = new PrepareSpawnTask.Loading();
@@ -35,18 +35,18 @@
 +    private void begin(Optional<net.minecraft.nbt.CompoundTag> playerTag) {
 +        // Evangelium end - join preload
 +        final long joinTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
-         try (ProblemReporter.ScopedCollector scopedCollector = new ProblemReporter.ScopedCollector(LOGGER)) {
--            Optional<ValueInput> optional = this.server
+         try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(LOGGER)) {
+-            Optional<ValueInput> loadedData = this.server
 -                .getPlayerList()
 -                .loadPlayerData(this.nameAndId)
-+            Optional<ValueInput> optional = playerTag // Evangelium - join preload: read before
-                 .map(compoundTag -> TagValueInput.create(scopedCollector, this.server.registryAccess(), compoundTag));
++            Optional<ValueInput> loadedData = playerTag // Evangelium - join preload: read before
+                 .map(tag -> TagValueInput.create(reporter, this.server.registryAccess(), tag));
              // Paper start - move logic in Entity to here, to use bukkit supplied world UUID & reset to main world spawn if no valid world is found
-             this.newPlayer = optional.isEmpty(); // New players don't have saved data!
-@@ -112,30 +_,31 @@
-                 .orElseGet(() -> PlayerSpawnFinder.findSpawn(serverLevel, respawnData.pos()));
-             Vec2 vec2 = savedPosition.rotation().orElse(new Vec2(respawnData.yaw(), respawnData.pitch()));
-             this.state = new PrepareSpawnTask.Preparing(serverLevel, completableFuture, vec2);
+             this.newPlayer = loadedData.isEmpty(); // New players don't have saved data!
+@@ -111,30 +_,31 @@
+             // Paper end - move logic in Entity to here, to use bukkit supplied world UUID & reset to main world spawn if no valid world is found
+             Vec2 spawnAngle = loadedPosition.rotation().orElse(new Vec2(respawnData.yaw(), respawnData.pitch()));
+             this.state = new PrepareSpawnTask.Preparing(spawnLevel, spawnPosition, spawnAngle);
 -        }
 +        } finally { io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_MAIN, joinTimer); } // Evangelium - join timings
      }
@@ -66,21 +66,21 @@
                      yield false;
                  }
              }
--            case PrepareSpawnTask.Ready ready -> true;
+-            case PrepareSpawnTask.Ready ignored -> true;
 +            case PrepareSpawnTask.Ready ready -> io.evangelium.server.player.JoinPacer.tryAcquire(); // Evangelium - join pacing
              default -> throw new MatchException(null, null);
          };
      }
  
--    public ServerPlayer spawnPlayer(Connection connection, CommonListenerCookie cookie) {
-+    public void spawnPlayer(Connection connection, CommonListenerCookie cookie) { // EvangeliumServer - return void
+-    public ServerPlayer spawnPlayer(final Connection connection, final CommonListenerCookie cookie) {
++    public void spawnPlayer(final Connection connection, final CommonListenerCookie cookie) { // EvangeliumServer - return void
          if (this.state instanceof PrepareSpawnTask.Ready ready) {
 -            return ready.spawn(connection, cookie);
 +            ready.spawn(connection, cookie); // EvangeliumServer - return void
          } else {
              throw new IllegalStateException("Player spawn was not ready");
          }
-@@ -151,6 +_,13 @@
+@@ -150,6 +_,13 @@
          if (this.state instanceof PrepareSpawnTask.Preparing preparing) {
              preparing.cancel();
          }
@@ -94,10 +94,11 @@
  
          this.state = null;
      }
-@@ -160,6 +_,31 @@
+@@ -159,7 +_,32 @@
          return TYPE;
      }
  
+-    private final class Preparing implements PrepareSpawnTask.State {
 +    // Evangelium start - join preload
 +    final class Loading implements PrepareSpawnTask.State {
 +        void tick() {
@@ -123,33 +124,39 @@
 +    }
 +    // Evangelium end - join preload
 +
-     final class Preparing implements PrepareSpawnTask.State {
++    final class Preparing implements PrepareSpawnTask.State {
          private ServerLevel spawnLevel; // Paper - remove final
          private CompletableFuture<Vec3> spawnPosition; // Paper - remove final
-@@ -190,8 +_,10 @@
-                         if (PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents != null) {
-                             serverPlayer = PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents;
-                         } else {
--                            serverPlayer = new ServerPlayer(
-+                            final io.evangelium.server.player.JoinPreload legacyPreload = PrepareSpawnTask.this.preloaded; // Evangelium - join preload
-+                            java.util.function.Supplier<ServerPlayer> create = () -> new ServerPlayer( // Evangelium - join preload
-                                 PrepareSpawnTask.this.server, PrepareSpawnTask.this.server.overworld(), PrepareSpawnTask.this.profile, net.minecraft.server.level.ClientInformation.createDefault());
-+                            serverPlayer = legacyPreload != null ? legacyPreload.with(create) : create.get(); // Evangelium - join preload
-                             PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents = serverPlayer;
-                         }
-                         org.spigotmc.event.player.PlayerSpawnLocationEvent ev = new org.spigotmc.event.player.PlayerSpawnLocationEvent(
-@@ -261,9 +_,22 @@
-             this.spawnLevel.getChunkSource().addTicketWithRadius(TicketType.PLAYER_SPAWN, new ChunkPos(BlockPos.containing(this.spawnPosition)), 3);
+         private Vec2 spawnAngle; // Paper - remove final
+@@ -190,12 +_,14 @@
+                     if (PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents != null) {
+                         player = PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents;
+                     } else {
+-                        player = new ServerPlayer(
++                        final io.evangelium.server.player.JoinPreload legacyPreload = PrepareSpawnTask.this.preloaded; // Evangelium - join preload
++                        java.util.function.Supplier<ServerPlayer> create = () -> new ServerPlayer( // Evangelium - join preload
+                             PrepareSpawnTask.this.server,
+                             PrepareSpawnTask.this.server.overworld(),
+                             PrepareSpawnTask.this.profile,
+                             net.minecraft.server.level.ClientInformation.createDefault()
+                         );
++                        player = legacyPreload != null ? legacyPreload.with(create) : create.get(); // Evangelium - join preload
+                         PrepareSpawnTask.this.listener.connection.savedPlayerForLegacyEvents = player;
+                     }
+                     org.spigotmc.event.player.PlayerSpawnLocationEvent ev = new org.spigotmc.event.player.PlayerSpawnLocationEvent(
+@@ -264,9 +_,23 @@
+             this.spawnLevel.getChunkSource().addTicketWithRadius(TicketType.PLAYER_SPAWN, ChunkPos.containing(BlockPos.containing(this.spawnPosition)), 3);
          }
  
--        public ServerPlayer spawn(Connection connection, CommonListenerCookie cookie) {
-+        public void spawn(Connection connection, CommonListenerCookie cookie) { // EvangeliumServer - return void
+-        public ServerPlayer spawn(final Connection connection, final CommonListenerCookie cookie) {
++        public void spawn(final Connection connection, final CommonListenerCookie cookie) { // EvangeliumServer - return void
 +            EvangeliumServer.ensureSync(this.spawnLevel, BlockPos.containing(this.spawnPosition), () -> { // EvangeliumServer - spawn on spawn positions' thread
++            if (!connection.isConnected()) return; // EvangeliumServer - ensure still connected before continuing
 +            final long spawnTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
 +            final long pacerTimer = System.nanoTime(); // Evangelium - join pacing: measured spawn cost
 +            try { // Evangelium - join timings
-             ChunkPos chunkPos = new ChunkPos(BlockPos.containing(this.spawnPosition));
-             this.spawnLevel.waitForEntities(chunkPos, 3);
+             ChunkPos spawnChunk = ChunkPos.containing(BlockPos.containing(this.spawnPosition));
+             this.spawnLevel.waitForEntities(spawnChunk, 3);
 +            // Evangelium start - join preload: use what was read in the configuration phase, unless the player's files were saved since
 +            io.evangelium.server.player.JoinPreload preload = PrepareSpawnTask.this.preloaded;
 +            PrepareSpawnTask.this.preloaded = null;
@@ -160,67 +167,65 @@
 +            final io.evangelium.server.player.JoinPreload spawnPreload = preload;
 +            // Evangelium end - join preload
              // Paper start - configuration api - possibly use legacy saved server player instance
-             ServerPlayer serverPlayer;
+             ServerPlayer player;
              if (connection.savedPlayerForLegacyEvents != null) {
-@@ -274,20 +_,23 @@
-                 serverPlayer.updateOptionsNoEvents(cookie.clientInformation());
-                 serverPlayer.setServerLevel(this.spawnLevel);
+@@ -277,20 +_,23 @@
+                 player.updateOptionsNoEvents(cookie.clientInformation());
+                 player.setServerLevel(this.spawnLevel);
              } else {
--                serverPlayer = new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation());
+-                player = new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation());
 +                final long ctorTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
-+                serverPlayer = spawnPreload != null ? spawnPreload.with(() -> new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation())) : new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation()); // Evangelium - join preload
++                player = spawnPreload != null ? spawnPreload.with(() -> new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation())) : new ServerPlayer(PrepareSpawnTask.this.server, this.spawnLevel, cookie.gameProfile(), cookie.clientInformation()); // Evangelium - join preload
 +                io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_CTOR, ctorTimer); // Evangelium - join timings
              }
              // Paper end - configuration api - possibly use legacy saved server player instance
+             PrepareSpawnTask.this.listener.paperConnection.applyPendingEntityId(player); // Paper - internal entity id api - possibly override player network id if plugins used internal API to configure it.
  
-             ServerPlayer var7;
-             try (ProblemReporter.ScopedCollector scopedCollector = new ProblemReporter.ScopedCollector(serverPlayer.problemPath(), PrepareSpawnTask.LOGGER)) {
--                Optional<ValueInput> optional = PrepareSpawnTask.this.server
+             try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(player.problemPath(), PrepareSpawnTask.LOGGER)) {
+-                Optional<ValueInput> input = PrepareSpawnTask.this.server
 +                final long loadTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
-+                Optional<ValueInput> optional = (spawnPreload != null ? spawnPreload.takeSpawnTag() : PrepareSpawnTask.this.server // Evangelium - join preload
++                Optional<ValueInput> input = (spawnPreload != null ? spawnPreload.takeSpawnTag() : PrepareSpawnTask.this.server // Evangelium - join preload
                      .getPlayerList()
 -                    .loadPlayerData(PrepareSpawnTask.this.nameAndId)
 +                    .loadPlayerData(PrepareSpawnTask.this.nameAndId)) // Evangelium - join preload
                      // CraftBukkit start
                      .map(tag -> {
-                         org.bukkit.craftbukkit.entity.CraftPlayer craftPlayer = serverPlayer.getBukkitEntity();
+                         org.bukkit.craftbukkit.entity.CraftPlayer craftPlayer = player.getBukkitEntity();
                          // Only update first played if it is older than the one we have
--                        long modified = new java.io.File(net.minecraft.server.network.config.PrepareSpawnTask.this.server.playerDataStorage.getPlayerDir(), serverPlayer.getStringUUID() + ".dat").lastModified();
-+                        long modified = spawnPreload != null ? spawnPreload.playerFileModified : new java.io.File(net.minecraft.server.network.config.PrepareSpawnTask.this.server.playerDataStorage.getPlayerDir(), serverPlayer.getStringUUID() + ".dat").lastModified(); // Evangelium - join preload
+-                        long modified = new java.io.File(PrepareSpawnTask.this.server.getPlayerList().playerIo.getPlayerDir(), player.getStringUUID() + ".dat").lastModified();
++                        long modified = spawnPreload != null ? spawnPreload.playerFileModified : new java.io.File(PrepareSpawnTask.this.server.getPlayerList().playerIo.getPlayerDir(), player.getStringUUID() + ".dat").lastModified(); // Evangelium - join preload
                          if (modified < craftPlayer.getFirstPlayed()) {
                              craftPlayer.setFirstPlayed(modified);
                          }
-@@ -295,6 +_,7 @@
+@@ -298,6 +_,7 @@
                      })
                      // CraftBukkit end
-                     .map(compoundTag -> TagValueInput.create(scopedCollector, PrepareSpawnTask.this.server.registryAccess(), compoundTag));
-+                if (spawnPreload != null) spawnPreload.with(() -> { optional.ifPresent(serverPlayer::load); return null; }); else // Evangelium - join preload: lets load() use the decoded recipe book
-                 optional.ifPresent(serverPlayer::load);
+                     .map(tag -> TagValueInput.create(reporter, PrepareSpawnTask.this.server.registryAccess(), tag));
++                if (spawnPreload != null) spawnPreload.with(() -> { input.ifPresent(player::load); return null; }); else // Evangelium - join preload: lets load() use the decoded recipe book
+                 input.ifPresent(player::load);
                  // CraftBukkit start - Better rename detection
-                 if (optional.isPresent()) {
-@@ -307,7 +_,10 @@
+                 if (input.isPresent()) {
+@@ -310,16 +_,21 @@
                  }
                  // Paper end - Entity#getEntitySpawnReason
-                 serverPlayer.snapTo(this.spawnPosition, this.spawnAngle.x, this.spawnAngle.y);
+                 player.snapTo(this.spawnPosition, this.spawnAngle.x, this.spawnAngle.y);
 +                io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_LOAD, loadTimer); // Evangelium - join timings
 +                final long placeTimer = io.evangelium.server.util.TickTimings.start(); // Evangelium - join timings
-                 PrepareSpawnTask.this.server.getPlayerList().placeNewPlayer(connection, serverPlayer, cookie);
+                 PrepareSpawnTask.this.server.getPlayerList().placeNewPlayer(connection, player, cookie);
 +                io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_PLACE, placeTimer); // Evangelium - join timings
-                 optional.ifPresent(valueInput -> {
-                     serverPlayer.loadAndSpawnEnderPearls(valueInput);
-                     serverPlayer.loadAndSpawnParentVehicle(valueInput);
-@@ -315,10 +_,12 @@
-                 var7 = serverPlayer;
+                 input.ifPresent(tag -> {
+                     player.loadAndSpawnEnderPearls(tag);
+                     player.loadAndSpawnParentVehicle(tag);
+                 });
+-                return player;
++                // return player; // EvangeliumServer - return void
              }
- 
--            return var7;
-+            // return var7; // EvangeliumServer - return void
 +            } finally { io.evangelium.server.util.TickTimings.since(io.evangelium.server.util.TickTimings.Phase.JOIN_SPAWN, spawnTimer); io.evangelium.server.player.JoinPacer.spawnCost(System.nanoTime() - pacerTimer); } // Evangelium - join timings + pacing
 +            }); // EvangeliumServer - spawn on spawn positions' thread
          }
      }
  
--    sealed interface State permits PrepareSpawnTask.Preparing, PrepareSpawnTask.Ready {
+-    private sealed interface State permits PrepareSpawnTask.Preparing, PrepareSpawnTask.Ready {
 +    sealed interface State permits PrepareSpawnTask.Loading, PrepareSpawnTask.Preparing, PrepareSpawnTask.Ready { // Evangelium - join preload
      }
  }

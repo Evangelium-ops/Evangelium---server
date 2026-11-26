@@ -44,8 +44,8 @@
  
 @@ -98,7 +_,7 @@
              }
-         } catch (JsonIOException | IOException var6) {
-             LOGGER.error("Couldn't save stats to {}", this.file, var6);
+         } catch (IOException | JsonIOException e) {
+             LOGGER.error("Couldn't save stats to {}", this.file, e);
 -        }
 +        } finally { io.evangelium.server.player.JoinPreload.endSave(saveKey); } // Evangelium - join preload
      }

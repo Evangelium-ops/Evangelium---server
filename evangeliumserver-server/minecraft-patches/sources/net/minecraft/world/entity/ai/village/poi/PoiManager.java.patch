@@ -31,21 +31,21 @@
          }
      }
  
-@@ -347,7 +_,7 @@
-         return this.getOrLoad(SectionPos.asLong(pos)).flatMap(poiSection -> poiSection.getDebugPoiInfo(pos)).orElse(null);
+@@ -419,7 +_,7 @@
+         return this.getOrLoad(SectionPos.asLong(pos)).flatMap(section -> section.getDebugPoiInfo(pos)).orElse(null);
      }
  
--    public int sectionsToVillage(SectionPos sectionPos) {
-+    public synchronized int sectionsToVillage(SectionPos sectionPos) { // EvangeliumServer - synchronized
+-    public int sectionsToVillage(final SectionPos sectionPos) {
++    public synchronized int sectionsToVillage(final SectionPos sectionPos) { // EvangeliumServer - synchronized
          // Paper start - rewrite chunk system
          this.villageDistanceTracker.propagateUpdates();
          return convertBetweenLevels(this.villageDistanceTracker.getLevel(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkSectionKey(sectionPos)));
-@@ -364,12 +_,16 @@
+@@ -433,12 +_,16 @@
      }
  
      @Override
--    public void tick(BooleanSupplier aheadOfTime) {
-+    public synchronized void tick(BooleanSupplier aheadOfTime) { // EvangeliumServer - synchronized
+-    public void tick(final BooleanSupplier haveTime) {
++    public synchronized void tick(final BooleanSupplier haveTime) { // EvangeliumServer - synchronized
          this.villageDistanceTracker.propagateUpdates(); // Paper - rewrite chunk system
      }
  
@@ -53,7 +53,8 @@
 +    public volatile long evangelium$version;
 +
      @Override
-     public void setDirty(long sectionPos) { // Paper - public
+-    public void setDirty(final long sectionPos) { // Paper - public
++    public void setDirty(long sectionPos) { // Paper - public
 +        this.evangelium$version++; // Evangelium - every POI add/remove/ticket change ends here
          // Paper start - rewrite chunk system
          final int chunkX = ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkSectionX(sectionPos);

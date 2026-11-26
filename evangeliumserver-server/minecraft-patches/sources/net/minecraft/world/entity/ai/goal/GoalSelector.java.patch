@@ -16,6 +16,6 @@
 +        } else {
 +            this.lockedFlags.entrySet().removeIf(entry -> !entry.getValue().isRunning());
 +        }
-         profilerFiller.pop();
-         profilerFiller.push("goalUpdate");
+         profiler.pop();
+         profiler.push("goalUpdate");
  

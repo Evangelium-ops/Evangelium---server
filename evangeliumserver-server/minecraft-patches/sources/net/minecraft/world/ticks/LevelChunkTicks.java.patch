@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/ticks/LevelChunkTicks.java
 +++ b/net/minecraft/world/ticks/LevelChunkTicks.java
-@@ -1,22 +_,70 @@
+@@ -1,24 +_,70 @@
  package net.minecraft.world.ticks;
  
 -import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
@@ -11,6 +11,7 @@
 +import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 +import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
  import java.util.ArrayList;
+-import java.util.Comparator;
 -import java.util.Iterator;
 +import java.util.Arrays;
  import java.util.List;
@@ -24,6 +25,11 @@
  import net.minecraft.core.BlockPos;
  import org.jspecify.annotations.Nullable;
  
+-public class LevelChunkTicks<T> implements TickContainerAccess<T>, SerializableTickContainer<T>, ca.spottedleaf.moonrise.patches.chunk_system.ticks.ChunkSystemLevelChunkTicks { // Paper - rewrite chunk system
+-    private static final Comparator<ScheduledTick<?>> SUB_TICK_ORDERING = Comparator.comparingLong(ScheduledTick::subTickOrder);
+-    private final Queue<ScheduledTick<T>> tickQueue = new PriorityQueue<>(ScheduledTick.DRAIN_ORDER);
+-    private @Nullable List<SavedTick<T>> pendingTicks;
+-    private final Set<ScheduledTick<?>> ticksPerPosition = new ObjectOpenCustomHashSet<>(ScheduledTick.UNIQUE_TICK_HASH);
 +/**
 + * Evangelium - packed scheduled ticks. Same behaviour as the old object based class (kept as {@link LegacyChunkTicks}), stored as
 + * primitive arrays:
@@ -31,7 +37,7 @@
 + * <li>saved ticks that are not unpacked yet (chunk not ticking): one word + one delay per tick (was SavedTick + BlockPos + a probe
 + * ScheduledTick in a hash set, ~110 bytes per tick);</li>
 + * <li>the live queue: a binary heap over three long arrays that runs exactly the java.util.PriorityQueue algorithm (same sift up / sift
-+ * down, same comparisons), so the array order (= order written to chunk NBT, = sub-tick order after a reload) and the poll order are
++ * down, same comparisons), so the poll order is
 + * identical to the old queue, ties included;</li>
 + * <li>the (type, pos) uniqueness set: a LongOpenHashSet over the word without the priority, created only when a chunk is actually
 + * scheduled into, polled or asked (until then it equals the set of keys of the contents), and dropped again when the chunk has no
@@ -41,10 +47,7 @@
 + * Anything unusual (a tick of another chunk, removeIf) switches the container to the old structure with the identical state.
 + * Switch: -Devangeliumserver.packedTicks=false (old structure everywhere).
 + */
- public class LevelChunkTicks<T> implements SerializableTickContainer<T>, TickContainerAccess<T>, ca.spottedleaf.moonrise.patches.chunk_system.ticks.ChunkSystemLevelChunkTicks { // Paper - rewrite chunk system
--    private final Queue<ScheduledTick<T>> tickQueue = new PriorityQueue<>(ScheduledTick.DRAIN_ORDER);
--    private @Nullable List<SavedTick<T>> pendingTicks;
--    private final Set<ScheduledTick<?>> ticksPerPosition = new ObjectOpenCustomHashSet<>(ScheduledTick.UNIQUE_TICK_HASH);
++public class LevelChunkTicks<T> implements SerializableTickContainer<T>, TickContainerAccess<T>, ca.spottedleaf.moonrise.patches.chunk_system.ticks.ChunkSystemLevelChunkTicks { // Paper - rewrite chunk system
 +    private static final Object[] NO_TYPES = new Object[0];
 +    private static final long[] NO_LONGS = new long[0];
 +
@@ -79,7 +82,7 @@
      private @Nullable BiConsumer<LevelChunkTicks<T>, ScheduledTick<T>> onTickAdded;
  
      // Paper start - rewrite chunk system
-@@ -34,108 +_,576 @@
+@@ -36,111 +_,582 @@
  
      @Override
      public final boolean moonrise$isDirty(final long tick) {
@@ -115,12 +118,13 @@
 +        }
      }
  
-     public LevelChunkTicks(List<SavedTick<T>> pendingTicks) {
+-    public LevelChunkTicks(final List<SavedTick<T>> pendingTicks) {
 -        this.pendingTicks = pendingTicks;
 -
--        for (SavedTick<T> savedTick : pendingTicks) {
--            this.ticksPerPosition.add(ScheduledTick.probe(savedTick.type(), savedTick.pos()));
+-        for (SavedTick<T> pendingTick : pendingTicks) {
+-            this.ticksPerPosition.add(ScheduledTick.probe(pendingTick.type(), pendingTick.pos()));
 -        }
++    public LevelChunkTicks(List<SavedTick<T>> pendingTicks) {
 +        this.shadow = PackedTicks.VERIFY ? new LegacyChunkTicks<>(new ArrayList<>(pendingTicks)) : null;
 +        if (!PackedTicks.ENABLED) {
 +            this.legacy = new LegacyChunkTicks<>(pendingTicks);
@@ -172,7 +176,7 @@
 +        this.dSize = size;
      }
  
-     public void setOnTickAdded(@Nullable BiConsumer<LevelChunkTicks<T>, ScheduledTick<T>> onTickAdded) {
+     public void setOnTickAdded(final @Nullable BiConsumer<LevelChunkTicks<T>, ScheduledTick<T>> onTickAdded) {
          this.onTickAdded = onTickAdded;
 +        if (this.legacy != null) {
 +            // same contract as the packed path: only a tick that became the head is reported
@@ -214,12 +218,43 @@
      }
  
      public @Nullable ScheduledTick<T> poll() {
--        ScheduledTick<T> scheduledTick = this.tickQueue.poll();
--        if (scheduledTick != null) {
--            this.ticksPerPosition.remove(scheduledTick); this.dirty = true; // Paper - rewrite chunk system
+-        ScheduledTick<T> result = this.tickQueue.poll();
+-        if (result != null) {
+-            this.ticksPerPosition.remove(result); this.dirty = true; // Paper - rewrite chunk system
 -        }
 -
--        return scheduledTick;
+-        return result;
+-    }
+-
+-    @Override
+-    public void schedule(final ScheduledTick<T> tick) {
+-        if (this.ticksPerPosition.add(tick)) {
+-            this.scheduleUnchecked(tick); this.dirty = true; // Paper - rewrite chunk system
+-        }
+-    }
+-
+-    private void scheduleUnchecked(final ScheduledTick<T> tick) {
+-        this.tickQueue.add(tick);
+-        if (this.onTickAdded != null) {
+-            this.onTickAdded.accept(this, tick);
+-        }
+-    }
+-
+-    @Override
+-    public boolean hasScheduledTick(final BlockPos pos, final T type) {
+-        return this.ticksPerPosition.contains(ScheduledTick.probe(type, pos));
+-    }
+-
+-    public void removeIf(final Predicate<ScheduledTick<T>> test) {
+-        Iterator<ScheduledTick<T>> iterator = this.tickQueue.iterator();
+-
+-        while (iterator.hasNext()) {
+-            ScheduledTick<T> tick = iterator.next();
+-            if (test.test(tick)) {
+-                iterator.remove(); this.dirty = true; // Paper - rewrite chunk system
+-                this.ticksPerPosition.remove(tick);
+-            }
+-        }
 +        if (this.legacy != null) {
 +            return this.legacy.poll();
 +        }
@@ -235,19 +270,10 @@
 +            this.releaseIfEmpty();
 +        }
 +        return result;
-     }
- 
-     @Override
-     public void schedule(ScheduledTick<T> tick) {
--        if (this.ticksPerPosition.add(tick)) {
--            this.scheduleUnchecked(tick); this.dirty = true; // Paper - rewrite chunk system
--        }
--    }
--
--    private void scheduleUnchecked(ScheduledTick<T> tick) {
--        this.tickQueue.add(tick);
--        if (this.onTickAdded != null) {
--            this.onTickAdded.accept(this, tick);
++    }
++
++    @Override
++    public void schedule(ScheduledTick<T> tick) {
 +        if (this.shadow != null) {
 +            this.shadow.schedule(tick);
 +        }
@@ -271,12 +297,11 @@
 +                }
 +            }
 +            this.dirty = true; // Paper - rewrite chunk system
-         }
-     }
- 
-     @Override
-     public boolean hasScheduledTick(BlockPos pos, T type) {
--        return this.ticksPerPosition.contains(ScheduledTick.probe(type, pos));
++        }
++    }
++
++    @Override
++    public boolean hasScheduledTick(BlockPos pos, T type) {
 +        boolean result = this.legacy != null ? this.legacy.hasScheduledTick(pos, type) : this.hasScheduledTick0(pos, type);
 +        if (this.shadow != null) {
 +            PackedTicks.check();
@@ -316,18 +341,9 @@
 +            }
 +        }
 +        return this.keys.contains(key);
-     }
- 
-     public void removeIf(Predicate<ScheduledTick<T>> predicate) {
--        Iterator<ScheduledTick<T>> iterator = this.tickQueue.iterator();
--
--        while (iterator.hasNext()) {
--            ScheduledTick<T> scheduledTick = iterator.next();
--            if (predicate.test(scheduledTick)) {
--                iterator.remove(); this.dirty = true; // Paper - rewrite chunk system
--                this.ticksPerPosition.remove(scheduledTick);
--            }
--        }
++    }
++
++    public void removeIf(Predicate<ScheduledTick<T>> predicate) {
 +        if (this.shadow != null) {
 +            this.shadow.removeIf(predicate);
 +        }
@@ -360,13 +376,32 @@
      }
  
      @Override
-     public List<SavedTick<T>> pack(long gameTime) {
-+        List<SavedTick<T>> result = this.pack0(gameTime);
+-    public List<SavedTick<T>> pack(final long currentTick) {
+-        this.lastSaved = currentTick; // Paper - rewrite chunk system
+-        List<SavedTick<T>> ticks = new ArrayList<>(this.tickQueue.size());
+-        if (this.pendingTicks != null) {
+-            ticks.addAll(this.pendingTicks);
+-        }
+-
+-        List<ScheduledTick<T>> sortedTicks = new ArrayList<>(this.tickQueue);
+-        sortedTicks.sort(SUB_TICK_ORDERING);
+-
+-        for (ScheduledTick<T> tick : sortedTicks) {
+-            ticks.add(tick.toSavedTick(currentTick));
+-        }
+-
+-        return ticks;
+-    }
+-
+-    public void unpack(final long currentTick) {
+-        if (this.pendingTicks != null) {
++    public List<SavedTick<T>> pack(long currentTick) {
++        List<SavedTick<T>> result = this.pack0(currentTick);
 +        if (this.shadow != null) {
 +            PackedTicks.check();
-+            List<SavedTick<T>> old = this.shadow.pack(gameTime);
++            List<SavedTick<T>> old = this.shadow.pack(currentTick);
 +            if (!PackedTicks.sameSaved(result, old)) {
-+                PackedTicks.mismatch("pack(" + gameTime + ") new=" + result + " old=" + old);
++                PackedTicks.mismatch("pack(" + currentTick + ") new=" + result + " old=" + old);
 +            }
 +        }
 +        return result;
@@ -376,17 +411,7 @@
 +        if (this.legacy != null) {
 +            return this.legacy.pack(gameTime);
 +        }
-         this.lastSaved = gameTime; // Paper - rewrite chunk system
--        List<SavedTick<T>> list = new ArrayList<>(this.tickQueue.size());
--        if (this.pendingTicks != null) {
--            list.addAll(this.pendingTicks);
--        }
--
--        for (ScheduledTick<T> scheduledTick : this.tickQueue) {
--            list.add(scheduledTick.toSavedTick(gameTime));
--        }
--
--        return list;
++        this.lastSaved = gameTime; // Paper - rewrite chunk system
 +        int pending = this.dWords != null ? this.dSize : 0;
 +        int size = pending + this.hSize;
 +        if (size == 0) {
@@ -398,30 +423,35 @@
 +            System.arraycopy(this.dWords, 0, words, 0, pending);
 +            System.arraycopy(this.dDelays, 0, delays, 0, pending);
 +        }
-+        for (int i = 0; i < this.hSize; i++) {
-+            words[pending + i] = this.hWord[i];
-+            delays[pending + i] = (int) (this.hTrig[i] - gameTime);
++        // 26.3: the queue is written in sub-tick order (vanilla sorts by ScheduledTick::subTickOrder before saving), not heap order
++        Integer[] order = new Integer[this.hSize];
++        for (int i = 0; i < this.hSize; i++) order[i] = i;
++        final long[] sub = this.hSub;
++        Arrays.sort(order, (x, y) -> Long.compare(sub[x], sub[y]));
++        for (int k = 0; k < this.hSize; k++) {
++            int i = order[k];
++            words[pending + k] = this.hWord[i];
++            delays[pending + k] = (int) (this.hTrig[i] - gameTime);
 +        }
 +        // the type array is shared: entries below typeCount are never written again (addType copies on grow), and the list
 +        // only reads entries its words use
 +        return new PackedTickList<>(this.types, words, delays, size, this.chunkX, this.chunkZ);
-     }
- 
-     public void unpack(long gameTime) {
--        if (this.pendingTicks != null) {
++    }
++
++    public void unpack(long currentTick) {
 +        if (this.shadow != null) {
-+            this.shadow.unpack(gameTime);
++            this.shadow.unpack(currentTick);
 +        }
 +        if (this.legacy != null) {
-+            this.legacy.unpack(gameTime);
++            this.legacy.unpack(currentTick);
 +            return;
 +        }
 +        if (this.dWords != null) {
-             this.lastSaved = gameTime; // Paper - rewrite chunk system
--            int i = -this.pendingTicks.size();
+             this.lastSaved = currentTick; // Paper - rewrite chunk system
+-            int subTickBase = -this.pendingTicks.size();
 -
--            for (SavedTick<T> savedTick : this.pendingTicks) {
--                this.scheduleUnchecked(savedTick.unpack(gameTime, i++));
+-            for (SavedTick<T> pendingTick : this.pendingTicks) {
+-                this.scheduleUnchecked(pendingTick.unpack(currentTick, subTickBase++));
 -            }
 -        }
 -
@@ -430,10 +460,10 @@
 +            int[] delays = this.dDelays;
 +            int size = this.dSize;
 +            this.ensureHeapCapacity(this.hSize + size);
-+            long i = -size;
++            long subTickBase = -size;
 +
 +            for (int j = 0; j < size; j++) {
-+                if (this.heapOffer(gameTime + delays[j], i++, words[j])) {
++                if (this.heapOffer(currentTick + delays[j], subTickBase++, words[j])) {
 +                    this.head = null;
 +                    if (this.onTickAdded != null) {
 +                        this.onTickAdded.accept(this, this.peek());
