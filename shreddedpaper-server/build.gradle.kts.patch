@@ -1,6 +1,6 @@
 --- a/purpur-server/build.gradle.kts
 +++ b/purpur-server/build.gradle.kts
-@@ -35,6 +_,24 @@
+@@ -35,6 +_,25 @@
      activeFork = purpur
      // Purpur end - Rebrand
  
@@ -20,6 +20,7 @@
 +        }
 +    }
 +    activeFork = shreddedpaper
++    bundlerJarName = "evangeliumserver"   // the server jar inside the paperclip (versions/<mc>/evangeliumserver-<mc>.jar) shows in every stack trace
 +    // ShreddedPaper e d - Rebrand
 +
      spigot {
