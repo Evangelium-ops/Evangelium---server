@@ -34,6 +34,15 @@
      private ServerPlayer.@Nullable RespawnConfig respawnConfig;
      private final TextFilter textFilter;
      private boolean textFilteringEnabled;
+@@ -279,7 +_,7 @@
+     private @Nullable BlockPos raidOmenPosition;
+     private Vec3 lastKnownClientMovement = Vec3.ZERO;
+     private Input lastClientInput = Input.EMPTY;
+-    private final Set<ThrownEnderpearl> enderPearls = new HashSet<>();
++    private final Set<ThrownEnderpearl> enderPearls = java.util.concurrent.ConcurrentHashMap.newKeySet(); // EvangeliumServer - pearls register, unload and get saved on different region threads
+     private boolean postEffectsDirty = true;
+     private long timeEntitySatOnShoulder;
+     private CompoundTag shoulderEntityLeft = new CompoundTag();
 @@ -418,6 +_,53 @@
      private int containerUpdateDelay; // Paper - Configurable container update tick rate
      public long loginTime; // Paper - Replace OfflinePlayer#getLastPlayed
@@ -98,6 +107,17 @@
              .ifPresent(p -> this.recipeBook.loadUntrusted(p, id -> this.server.getRecipeManager().byKey(id).isPresent()));
          this.getBukkitEntity().readExtraData(input); // CraftBukkit
          if (this.isSleeping()) {
+@@ -636,7 +_,9 @@
+             for (ThrownEnderpearl enderPearl : this.enderPearls) {
+                 if (enderPearl.level().paperConfig().misc.legacyEnderPearlBehavior) continue; // Paper - Allow using old ender pearl behavior
+                 if (enderPearl.isRemoved()) {
+-                    LOGGER.warn("Trying to save removed ender pearl, skipping");
++                    // EvangeliumServer start - a pearl that unloaded with its chunk (a stasis chamber) is saved in that chunk; drop the leftover entry instead of warning at every save
++                    this.enderPearls.remove(enderPearl);
++                    // EvangeliumServer end
+                 } else {
+                     ValueOutput pearlTag = pearlsOutput.addChild();
+                     enderPearl.save(pearlTag);
 @@ -655,6 +_,8 @@
          if (!pearlLevelKey.isEmpty()) {
              ServerLevel pearlLevel = this.level().getServer().getLevel(pearlLevelKey.get());
