@@ -29,6 +29,12 @@ public class EvangeliumServerChunkTicker {
 
     private static final Logger LOGGER = LogUtils.getClassLogger();
     static final boolean PROCESS_TRACK_QUEUE_IN_PARALLEL = io.evangelium.server.util.DevSwitch.on("process-track-queue-in-parallel");
+    /**
+     * Evangelium - mob spawning chunk by chunk on the region's helpers (chunks five apart), see IntraRegion. Off unless
+     * -Devangeliumserver.parallelSpawning=true: measured 2026-11-27 (120 bots) it was slower, about 1.3 ms of spawning per region per tick is
+     * too little to share and the shared spawn state then gets contended.
+     */
+    static final boolean PARALLEL_SPAWNING = Boolean.getBoolean("evangeliumserver.parallelSpawning");
     public static final boolean FLUSH_QUEUE_IN_PARALLEL = io.evangelium.server.util.DevSwitch.on("flush-queue-in-parallel"); // also read by Connection
 
     private static final ThreadLocal<LevelChunkRegion> currentlyTickingRegion = new ThreadLocal<>();
@@ -226,11 +232,20 @@ public class EvangeliumServerChunkTicker {
                 // Evangelium - bookkeeping and mob spawning stay on this thread; random ticks, snow and ice reach about one chunk and run in
                 // chunks at least three apart on several threads when the random tick speed makes it worth it (IntraRegion)
                 final List<LevelChunk> randomTickChunks = new ArrayList<>();
+                final List<LevelChunk> spawnChunks = PARALLEL_SPAWNING && IntraRegion.enabled() ? new ArrayList<>() : null; // Evangelium - parallel spawning
                 region.forEach(chunk -> {
-                    if (this._tickChunk(region, level, chunk, filteredSpawningCategories, spawnState) && RegionBudget.ticks(chunk.getPos())) { // Evangelium - tick budget
+                    if (this._tickChunk(region, level, chunk, filteredSpawningCategories, spawnState, spawnChunks) && RegionBudget.ticks(chunk.getPos())) { // Evangelium - tick budget
                         randomTickChunks.add(chunk);
                     }
                 });
+                // Evangelium start - parallel spawning: a pack wanders about 20 blocks (reach 2 chunks), so chunks five apart spawn at once
+                if (spawnChunks != null && !spawnChunks.isEmpty()) {
+                    final long spawnStart = System.nanoTime();
+                    IntraRegion.forEachChunkLocal(level, region, spawnChunks, chunk -> chunk.getPos().longKey(), 2,
+                            chunk -> level.chunkSource.tickSpawningChunk(chunk, filteredSpawningCategories, spawnState));
+                    io.evangelium.server.util.TickTimings.add(io.evangelium.server.util.TickTimings.Phase.SPAWN, System.nanoTime() - spawnStart);
+                }
+                // Evangelium end
                 final int randomTickSpeed = level.getGameRules().get(net.minecraft.world.level.gamerules.GameRules.RANDOM_TICK_SPEED);
                 final long randomStart = System.nanoTime(); // Evangelium - tick budget: divided work
                 if (IntraRegion.parallelRandomTicks(randomTickSpeed)) {
@@ -342,7 +357,7 @@ public class EvangeliumServerChunkTicker {
     }
 
     /** Evangelium - returns whether the chunk gets random ticks (they run afterwards, see _tickRegion). */
-    private boolean _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState) {
+    private boolean _tickChunk(final LevelChunkRegion levelChunkRegion, final ServerLevel world, final LevelChunk levelChunk, final List<MobCategory> filteredSpawningCategories, final NaturalSpawner.SpawnState spawnState, final List<LevelChunk> spawnChunks) {
         if (levelChunk.moonrise$getChunkHolder().vanillaChunkHolder.hasChangesToBroadcast())
             EvangeliumServerChangesBroadcaster.add(levelChunk.moonrise$getChunkHolder().vanillaChunkHolder); // EvangeliumServer
 
@@ -358,7 +373,16 @@ public class EvangeliumServerChunkTicker {
         }
 
         if (spawnState != null && levelChunkRegion.isPlayerTickingRequested(levelChunk.getPos()) && RegionBudget.ticks(levelChunk.getPos())) { // Evangelium - tick budget: a slowed farm gets its mobs at its own speed
+            // Evangelium - parallel spawning: collected, spawned after the loop on several threads. A chunk inside a structure's reach (fortress,
+            // swamp hut, monument, outpost) stays on this thread: its structure mobs need the structure's start chunk, up to 8 chunks away and
+            // maybe not loaded, which only this thread may load (a helper would have to skip it)
+            if (spawnChunks != null && levelChunk.getAllReferences().isEmpty()) {
+                if (world.chunkSource.chunkMap.isChunkNearPlayer(world.chunkSource.chunkMap, levelChunk.getPos(), levelChunk)) {
+                    spawnChunks.add(levelChunk);
+                }
+            } else {
             this._tickSpawningChunk(world, levelChunk, filteredSpawningCategories, spawnState);
+            }
         }
 
         return true;
