@@ -51,3 +51,12 @@
  
                  this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.HIT); // CraftBukkit - add Bukkit remove cause
              } else {
+@@ -173,7 +_,7 @@
+             int sectionPosZ = SectionPos.blockToSectionCoord(this.position().z());
+             Entity entity = this.owner != null ? findOwnerIncludingDeadPlayer(serverLevel, this.owner.getUUID()) : null;
+             if (entity instanceof ServerPlayer serverPlayer
+-                && !entity.isAlive()
++                && serverPlayer.isDeadOrDying() // EvangeliumServer - was !isAlive(): a player changing dimension is "removed" for a moment, and a pearl ticking on another region thread then vanished as if its owner had died
+                 && !serverPlayer.wonGame
+                 && serverPlayer.level().getGameRules().get(GameRules.ENDER_PEARLS_VANISH_ON_DEATH)) {
+                 this.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DESPAWN); // CraftBukkit - add Bukkit remove cause
