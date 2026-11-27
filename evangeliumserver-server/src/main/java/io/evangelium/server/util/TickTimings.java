@@ -24,7 +24,9 @@ public final class TickTimings {
         // the player file read + load, placeNewPlayer, PlayerJoinEvent inside it, the first full advancement packet
         JOIN_MAIN, JOIN_REGSYNC, JOIN_SPAWN, JOIN_CTOR, JOIN_STATS, JOIN_ADV_READ, JOIN_ADV_LISTEN, JOIN_LOAD, JOIN_PLACE, JOIN_EVENT, JOIN_ADV_PACKET,
         // Evangelium - random ticks (+ snow and ice) of all regions, wall time of each region's random tick phase, summed
-        RANDOM_TICKS
+        RANDOM_TICKS,
+        // Evangelium - mob spawning of all regions when it runs on helpers (parallel spawning), wall time per region, summed
+        SPAWN
     }
 
     private static final AtomicLong JOINS = new AtomicLong();

@@ -159,6 +159,14 @@ public final class IntraRegion {
      * the same time. Must be called by the thread that owns the region, from inside its tick.
      */
     public static <T> void forEachChunkLocal(ServerLevel level, LevelChunkRegion region, List<T> items, ToLongFunction<T> chunkKey, ChunkWork<T> work) {
+        forEachChunkLocal(level, region, items, chunkKey, 1, work);
+    }
+
+    /**
+     * {@link #forEachChunkLocal} for work that reaches {@code reach} chunks around its own (1 for random ticks and block entities, 2 for mob
+     * spawning, whose packs wander about 20 blocks): two chunks run at the same time only when what they touch cannot overlap.
+     */
+    public static <T> void forEachChunkLocal(ServerLevel level, LevelChunkRegion region, List<T> items, ToLongFunction<T> chunkKey, int reach, ChunkWork<T> work) {
         if (POOL == null || region == null || items.size() < MIN_CHUNKS) {   // no region: not inside a region tick, stay serial
             runSerially(items, work);
             return;
@@ -180,7 +188,7 @@ public final class IntraRegion {
             return;
         }
         final long start = System.nanoTime();
-        Schedule<T> schedule = new Schedule<>(byChunk);
+        Schedule<T> schedule = new Schedule<>(byChunk, 2 * reach);
         try {
             run(level, region, level.chunkScheduler.getRegionLocker().lend(), schedule, work);
         } finally {
@@ -206,7 +214,7 @@ public final class IntraRegion {
         }
         final long start = System.nanoTime();
         try {
-            run(level, region, level.chunkScheduler.getRegionLocker().lend(), new Schedule<>(byBatch), work);
+            run(level, region, level.chunkScheduler.getRegionLocker().lend(), new Schedule<>(byBatch, 2), work);
         } finally {
             TickTimings.add(TickTimings.Phase.PHASED, System.nanoTime() - start);
         }
@@ -242,8 +250,11 @@ public final class IntraRegion {
         private int doneCount;
         private final int[] running;
         private int runningCount;
+        /** two chunks closer than this (in either direction) never run at the same time: twice the reach of the work */
+        private final int gap;
 
-        Schedule(Long2ObjectLinkedOpenHashMap<List<T>> byChunk) {
+        Schedule(Long2ObjectLinkedOpenHashMap<List<T>> byChunk, int gap) {
+            this.gap = gap;
             this.size = byChunk.size();
             this.x = new int[size];
             this.z = new int[size];
@@ -273,7 +284,7 @@ public final class IntraRegion {
                 }
                 for (int r = 0; r < runningCount; r++) {
                     int j = running[r];
-                    if (Math.abs(x[i] - x[j]) <= 2 && Math.abs(z[i] - z[j]) <= 2) {
+                    if (Math.abs(x[i] - x[j]) <= gap && Math.abs(z[i] - z[j]) <= gap) {
                         continue outer;   // what the two touch (their chunk and the ring around it) would overlap
                     }
                 }

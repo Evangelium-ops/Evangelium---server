@@ -173,7 +173,8 @@
              if (canSpawn) {
 +                final long evangeliumStart = io.evangelium.server.spawn.SpawnStats.ON ? System.nanoTime() : 0L; // Evangelium - dev counters
                  spawnCategoryForChunk(mobCategory, level, chunk, spawnState::canSpawn, spawnState::afterSpawn,
-                     maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMap : null);
+-                    maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMap : null);
++                    maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMapAtomic : null); // Evangelium - atomic: regions and helpers spawn at the same time
                  // Paper end - Optional per player mob spawns
 +                if (io.evangelium.server.spawn.SpawnStats.ON) io.evangelium.server.spawn.SpawnStats.add(mobCategory, io.evangelium.server.spawn.SpawnStats.NANOS, System.nanoTime() - evangeliumStart); // Evangelium - dev counters
              }
@@ -328,7 +329,7 @@
              && SpawnPlacements.checkSpawnRules(entityType, level, EntitySpawnReason.NATURAL, pos, level.random)
              && level.noCollision(entityType.getSpawnAABB(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5));
          return success ? PreSpawnStatus.SUCCESS : PreSpawnStatus.FAIL; // Paper - PreCreatureSpawnEvent
-@@ -574,6 +_,20 @@
+@@ -574,14 +_,49 @@
      }
  
      public static class SpawnState {
@@ -349,3 +350,102 @@
          private final int spawnableChunkCount;
          private final Object2IntOpenHashMap<MobCategory> mobCategoryCounts;
          private final PotentialCalculator spawnPotential;
+         private final Object2IntMap<MobCategory> unmodifiableMobCategoryCounts;
+         private final LocalMobCapCalculator localMobCapCalculator;
+-        private @Nullable BlockPos lastCheckedPos;
+-        private @Nullable EntityType<?> lastCheckedType;
+-        private double lastCharge;
++        // Evangelium start - one spawn state is shared by every region thread and, with parallel spawning, by helpers inside a region: the
++        // check-then-spawn scratch is per thread (it was three shared fields), the potential and the caps are read under a read lock and
++        // changed under the write lock (an unlocked ArrayList add / hash map update from several threads could lose counts or throw)
++        private static final class Checked { @Nullable BlockPos pos; @Nullable EntityType<?> type; double charge; }
++        private final ThreadLocal<Checked> checked = ThreadLocal.withInitial(Checked::new);
++        /** a read of the potential or the caps: optimistic first (spawns are rare next to checks), under the read lock when one raced it */
++        private <R> R evangeliumRead(java.util.function.Supplier<R> read) {
++            long stamp = this.evangeliumLock.tryOptimisticRead();
++            if (stamp != 0L) {
++                try {
++                    R r = read.get();
++                    if (this.evangeliumLock.validate(stamp)) return r;
++                } catch (RuntimeException raced) { // an append resized the list under the read: read again, locked
++                }
++            }
++            stamp = this.evangeliumLock.readLock();
++            try {
++                return read.get();
++            } finally {
++                this.evangeliumLock.unlockRead(stamp);
++            }
++        }
++        private final java.util.concurrent.locks.StampedLock evangeliumLock = new java.util.concurrent.locks.StampedLock(); // optimistic reads: no shared write per check
++        // Evangelium end
+ 
+         SpawnState(
+             int spawnableChunkCount,
+@@ -597,16 +_,18 @@
+         }
+ 
+         private boolean canSpawn(EntityType<?> entityType, BlockPos pos, ChunkAccess chunk) {
+-            this.lastCheckedPos = pos;
+-            this.lastCheckedType = entityType;
++            final Checked last = this.checked.get(); // Evangelium - per thread
++            last.pos = pos;
++            last.type = entityType;
+             MobSpawnSettings.MobSpawnCost mobSpawnCost = NaturalSpawner.getRoughBiome(pos, chunk).getMobSettings().getMobSpawnCost(entityType);
+             if (mobSpawnCost == null) {
+-                this.lastCharge = 0.0;
++                last.charge = 0.0;
+                 return true;
+             } else {
+                 double charge = mobSpawnCost.charge();
+-                this.lastCharge = charge;
+-                double potentialEnergyChange = this.spawnPotential.getPotentialEnergyChange(pos, charge);
++                last.charge = charge;
++                final double potentialEnergyChange;
++                potentialEnergyChange = this.evangeliumRead(() -> this.spawnPotential.getPotentialEnergyChange(pos, charge)); // Evangelium
+                 return potentialEnergyChange <= mobSpawnCost.energyBudget();
+             }
+         }
+@@ -615,8 +_,9 @@
+             EntityType<?> type = mob.getType();
+             BlockPos blockPos = mob.blockPosition();
+             double d;
+-            if (blockPos.equals(this.lastCheckedPos) && type == this.lastCheckedType) {
+-                d = this.lastCharge;
++            final Checked last = this.checked.get(); // Evangelium - per thread
++            if (blockPos.equals(last.pos) && type == last.type) {
++                d = last.charge;
+             } else {
+                 MobSpawnSettings.MobSpawnCost mobSpawnCost = NaturalSpawner.getRoughBiome(blockPos, chunk).getMobSettings().getMobSpawnCost(type);
+                 if (mobSpawnCost != null) {
+@@ -626,10 +_,15 @@
+                 }
+             }
+ 
+-            this.spawnPotential.addCharge(blockPos, d);
+             MobCategory category = type.getCategory();
++            final long evangeliumStamp = this.evangeliumLock.writeLock(); // Evangelium
++            try {
++            this.spawnPotential.addCharge(blockPos, d);
+             this.mobCategoryCounts.addTo(category, 1);
+             if (this.localMobCapCalculator != null) this.localMobCapCalculator.addMob(new ChunkPos(blockPos), category); // Paper - Optional per player mob spawns
++            } finally {
++                this.evangeliumLock.unlockWrite(evangeliumStamp); // Evangelium
++            }
+         }
+ 
+         public int getSpawnableChunkCount() {
+@@ -644,11 +_,11 @@
+         boolean canSpawnForCategoryGlobal(MobCategory category, int limit) {
+             int i = limit * this.spawnableChunkCount / NaturalSpawner.MAGIC_NUMBER;
+             // CraftBukkit end
+-            return this.mobCategoryCounts.getInt(category) < i;
++            return this.evangeliumRead(() -> this.mobCategoryCounts.getInt(category) < i); // Evangelium
+         }
+ 
+         boolean canSpawnForCategoryLocal(MobCategory category, ChunkPos chunkPos) {
+-            return this.localMobCapCalculator.canSpawn(category, chunkPos) || SharedConstants.DEBUG_IGNORE_LOCAL_MOB_CAP;
++            return this.evangeliumRead(() -> this.localMobCapCalculator.canSpawn(category, chunkPos) || SharedConstants.DEBUG_IGNORE_LOCAL_MOB_CAP); // Evangelium
+         }
+     }
+ }
